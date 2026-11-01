@@ -1,0 +1,6 @@
+{
+  "model": {
+    "type": "minecraft:model",
+    "model": "liquidphase:item/liquid_water"
+  }
+}

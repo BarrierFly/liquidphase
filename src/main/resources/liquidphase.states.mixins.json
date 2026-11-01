@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "package": "org.liquidphase.mixin.state",
+  "compatibilityLevel": "JAVA_17",
+  "minVersion": "0.8",
+  "mixins": [
+    "StateManagerMixin",
+    "StateHolderMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

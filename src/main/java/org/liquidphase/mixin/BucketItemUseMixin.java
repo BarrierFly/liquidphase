@@ -1,0 +1,126 @@
+package org.liquidphase.mixin;
+
+import net.minecraft.core.BlockPos;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.BucketItem;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.LiquidBlockContainer;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.material.Fluid;
+import net.minecraft.world.level.material.Fluids;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
+import org.liquidphase.LiquidPhaseConfig;
+import org.liquidphase.phase.Phase;
+import org.liquidphase.phase.PhaseHelper;
+import org.spongepowered.asm.mixin.Final;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+
+/**
+ * 功能三（规划 §5）：手持"液体物品"（水/熔岩，沿用桶的物品 id）右键 = 像放方块一样放液体
+ * （消耗 1 个、不返还空桶；对相容宿主写入相/含水；下界水蒸发照旧）；
+ * 空桶右键装/倒全部拒绝（收取只走左键挖掘）。
+ * 功能三关闭时不拦截，回到原版桶 + PhaseCapable 的熔岩相路径。
+ */
+@Mixin(BucketItem.class)
+public abstract class BucketItemUseMixin {
+
+    @Shadow
+    @Final
+    private Fluid content;
+
+    @Inject(method = "use", at = @At("HEAD"), cancellable = true)
+    private void liquidphase$use(Level level, Player player, InteractionHand hand, CallbackInfoReturnable<InteractionResult> cir) {
+        if (!LiquidPhaseConfig.get().liquidInteraction) {
+            return;
+        }
+        if (this.content == Fluids.EMPTY) {
+            // 空桶：原版"装液体"拒绝（§5.2）。
+            cir.setReturnValue(InteractionResult.PASS);
+            return;
+        }
+        if (this.content != Fluids.WATER && this.content != Fluids.LAVA) {
+            return;
+        }
+
+        // 放置：像放方块一样（射线口径对齐原版 Item.getPlayerPOVHitResult：OUTLINE + 交互距离）。
+        net.minecraft.world.phys.Vec3 eye = player.getEyePosition();
+        double range = liquidphase$pickRange(player);
+        BlockHitResult hit = level.clip(new ClipContext(eye,
+            eye.add(player.getViewVector(1.0F).scale(range)),
+            ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player));
+        if (hit.getType() != HitResult.Type.BLOCK) {
+            return;
+        }
+        BlockPos hitPos = hit.getBlockPos();
+        BlockState hitState = level.getBlockState(hitPos);
+        boolean isLava = this.content == Fluids.LAVA;
+
+        // 目标是容器方块 → 写入相/含水（拿液体物品指向可 log 方块，规划 §3.0.2）。
+        if (hitState.getBlock() instanceof LiquidBlockContainer container) {
+            boolean filled = isLava
+                ? PhaseHelper.fillWithPhase(level, hitPos, hitState, Phase.LAVA)
+                : container.placeLiquid(level, hitPos, hitState, Fluids.WATER.getSource(false));
+            if (filled) {
+                playEmptySound(level, placePos(hit, hitState), isLava);
+                consume(player, hand);
+                cir.setReturnValue(InteractionResult.SUCCESS);
+                return;
+            }
+        }
+
+        // 否则像方块一样放进可容纳的格（空气/可替换）。
+        BlockPos placePos = placePos(hit, hitState);
+        BlockState placeState = level.getBlockState(placePos);
+        if (!placeState.isAir() && !placeState.canBeReplaced()) {
+            return;
+        }
+        if (!isLava && PhaseHelper.waterEvaporates(level, placePos)) {
+            // 下界蒸发（对齐原版 emptyContents 的 WATER_EVAPORATES 行为）。
+            level.playSound(null, placePos, SoundEvents.FIRE_EXTINGUISH, SoundSource.BLOCKS, 0.5F, 2.6F);
+            consume(player, hand);
+            cir.setReturnValue(InteractionResult.SUCCESS);
+            return;
+        }
+        level.setBlock(placePos, this.content.defaultFluidState().createLegacyBlock(), Block.UPDATE_ALL);
+        playEmptySound(level, placePos, isLava);
+        consume(player, hand);
+        cir.setReturnValue(InteractionResult.SUCCESS);
+    }
+
+    private static BlockPos placePos(BlockHitResult hit, BlockState hitState) {
+        return hitState.canBeReplaced() ? hit.getBlockPos() : hit.getBlockPos().relative(hit.getDirection());
+    }
+
+    private static void playEmptySound(Level level, BlockPos pos, boolean lava) {
+        level.playSound(null, pos, lava ? SoundEvents.BUCKET_EMPTY_LAVA : SoundEvents.BUCKET_EMPTY, SoundSource.BLOCKS, 1.0F, 1.0F);
+    }
+
+    private static void consume(Player player, InteractionHand hand) {
+        //? if 1.21.10 || 1.21.11 || 26.3 {
+        player.getItemInHand(hand).consume(1, player);
+        //?} else {
+        /*if (!player.getAbilities().instabuild) {
+            player.getItemInHand(hand).shrink(1);
+        }
+         *///?}
+    }
+
+    private static double liquidphase$pickRange(Player player) {
+        //? if 1.21.1 || 1.21.10 || 1.21.11 || 26.3 {
+        return player.blockInteractionRange();
+        //?} else {
+        /*return 5.0D;
+         *///?}
+    }
+}
