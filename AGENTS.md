@@ -55,6 +55,8 @@ bash tools/regen_all.sh
 python tools/gen_item_textures.py src/main/resources/assets/liquidphase/textures/item
 ```
 
+`CompositeFactories.java` 目前是**手写**文件（生成器仍在完善），`regen_all.sh` 不会覆盖它。
+
 `tools/phase-blocks/<版本>.ids` 是相容方块 id 清单；`<版本>.closure.txt` 是"直接实现 SimpleWaterloggedBlock 的类 + 继承闭包"。
 
 ## 4. mixin 目标核对流程
@@ -91,3 +93,12 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 2. 启动服务端冒烟（`./gradlew :<版本>:runServer`）；
 3. 收集 `versions/*/build/libs/liquidphase-*.jar`（不含 sources）到 `dist/`；
 4. 更新 `README.md` 的版本支持与已知限制，然后提交。
+
+## 7. 已知限制（待办）
+
+1. **1.21.1 不注册红石相组合方块**：组合方块（有 `power` 无 `phase`）在 1.21.1 的宿主形状表里仍会返回 null，
+   `Cache` 构造时 NPE。已在 `LiquidPhase` 用 `//? if !(1.21.1)` 跳过注册；修好形状兜底后去掉该守卫即可。
+2. **组合方块覆盖面**：当前仅楼梯/台阶/墙/栅栏共 41 个宿主（手写 `CompositeFactories`）。
+   `tools/gen_redstone_composites.py` 的批量生成还有版本守卫/构造参数问题，稳定后再切生成物。
+3. **§3.5 元件相**（中继器/比较器/侦测器）未实现，方案见 `docs/milestone-2.5-repeater-proposal.md`。
+4. 行为层只做了服务端冒烟（初始化 + 世界生成）；游戏内逐条手测（冻结、凝固、破坏保留、桶挖、炼药锅转化）仍待做。

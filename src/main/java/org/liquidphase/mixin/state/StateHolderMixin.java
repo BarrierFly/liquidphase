@@ -50,19 +50,8 @@ public abstract class StateHolderMixin<O, S extends StateHolder<O, S>> implement
     @Mutable
     private Map<Property<?>, S[]> neighbours;
     //?} else {
-    /*@Shadow
-    @Final
-    @Mutable
-    private Property<?>[] propertyKeys;
-
-    @Shadow
-    @Final
-    @Mutable
-    private Comparable<?>[] propertyValues;
-
-    @Shadow
-    private S[][] neighbors;
-    *///?}
+    /*// 26.3：并行数组 + 邻居矩阵，全部通过反射访问（无 @Shadow）。
+     *///?}
 
     @Override
     public void liquidphase$addValue(Property<?> property, Comparable<?> value) {
@@ -73,14 +62,25 @@ public abstract class StateHolderMixin<O, S extends StateHolder<O, S>> implement
         replaced.put(property, value);
         this.values = replaced;
         //?} else {
-        /*Property<?>[] newKeys = new Property<?>[this.propertyKeys.length + 1];
-        System.arraycopy(this.propertyKeys, 0, newKeys, 0, this.propertyKeys.length);
-        newKeys[this.propertyKeys.length] = property;
-        Comparable<?>[] newValues = new Comparable<?>[this.propertyValues.length + 1];
-        System.arraycopy(this.propertyValues, 0, newValues, 0, this.propertyValues.length);
-        newValues[this.propertyValues.length] = value;
-        this.propertyKeys = newKeys;
-        this.propertyValues = newValues;
+        /*// 26.3：反射写回并行数组（propertyKeys / propertyValues）
+        try {
+            java.lang.reflect.Field keysF = StateHolder.class.getDeclaredField("propertyKeys");
+            java.lang.reflect.Field valsF = StateHolder.class.getDeclaredField("propertyValues");
+            keysF.setAccessible(true);
+            valsF.setAccessible(true);
+            Property<?>[] keys = (Property<?>[]) keysF.get(this);
+            Comparable<?>[] vals = (Comparable<?>[]) valsF.get(this);
+            Property<?>[] newKeys = new Property<?>[keys.length + 1];
+            System.arraycopy(keys, 0, newKeys, 0, keys.length);
+            newKeys[keys.length] = property;
+            Comparable<?>[] newVals = new Comparable<?>[vals.length + 1];
+            System.arraycopy(vals, 0, newVals, 0, vals.length);
+            newVals[vals.length] = value;
+            keysF.set(this, newKeys);
+            valsF.set(this, newVals);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("liquidphase: cannot extend 26.3 state", e);
+        }
          *///?}
     }
 
@@ -91,12 +91,22 @@ public abstract class StateHolderMixin<O, S extends StateHolder<O, S>> implement
         snapshot.putAll(this.values);
         return snapshot;
         //?} else {
-        /*Reference2ObjectArrayMap<Property<?>, Comparable<?>> snapshot =
-            new Reference2ObjectArrayMap<>(this.propertyKeys.length);
-        for (int i = 0; i < this.propertyKeys.length; i++) {
-            snapshot.put(this.propertyKeys[i], this.propertyValues[i]);
+        /*// 26.3：反射读并行数组
+        try {
+            java.lang.reflect.Field keysF = StateHolder.class.getDeclaredField("propertyKeys");
+            java.lang.reflect.Field valsF = StateHolder.class.getDeclaredField("propertyValues");
+            keysF.setAccessible(true);
+            valsF.setAccessible(true);
+            Property<?>[] keys = (Property<?>[]) keysF.get(this);
+            Comparable<?>[] vals = (Comparable<?>[]) valsF.get(this);
+            Reference2ObjectArrayMap<Property<?>, Comparable<?>> snapshot = new Reference2ObjectArrayMap<>(keys.length);
+            for (int i = 0; i < keys.length; i++) {
+                snapshot.put(keys[i], vals[i]);
+            }
+            return snapshot;
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("liquidphase: cannot read 26.3 state", e);
         }
-        return snapshot;
          *///?}
     }
 
@@ -110,22 +120,34 @@ public abstract class StateHolderMixin<O, S extends StateHolder<O, S>> implement
         /*this.neighbours = null;
         this.populateNeighbours(states);
          *///?} else {
-        /*Property<?>[] keys = this.propertyKeys;
-        S[][] matrix = (S[][])(new StateHolder[keys.length][]);
-        for (int i = 0; i < keys.length; i++) {
-            List<?> possibleValues = keys[i].getPossibleValues();
-            S[] row = (S[])(new StateHolder[possibleValues.size()]);
-            for (int j = 0; j < possibleValues.size(); j++) {
-                Comparable<?> pivot = (Comparable<?>) possibleValues.get(j);
-                Reference2ObjectArrayMap<Property<?>, Comparable<?>> query = new Reference2ObjectArrayMap<>(keys.length);
-                for (int k = 0; k < keys.length; k++) {
-                    query.put(keys[k], k == i ? pivot : this.propertyValues[k]);
+        /*// 26.3：反射重建邻居矩阵 neighbors[propertyIndex][valueIndex]
+        try {
+            java.lang.reflect.Field keysF = StateHolder.class.getDeclaredField("propertyKeys");
+            java.lang.reflect.Field valsF = StateHolder.class.getDeclaredField("propertyValues");
+            java.lang.reflect.Field neighF = StateHolder.class.getDeclaredField("neighbors");
+            keysF.setAccessible(true);
+            valsF.setAccessible(true);
+            neighF.setAccessible(true);
+            Property<?>[] keys = (Property<?>[]) keysF.get(this);
+            Comparable<?>[] vals = (Comparable<?>[]) valsF.get(this);
+            S[][] matrix = (S[][]) java.lang.reflect.Array.newInstance(StateHolder.class, keys.length, 0);
+            for (int i = 0; i < keys.length; i++) {
+                List<?> possible = keys[i].getPossibleValues();
+                S[] row = (S[]) java.lang.reflect.Array.newInstance(StateHolder.class, possible.size());
+                for (int j = 0; j < possible.size(); j++) {
+                    Comparable<?> pivot = (Comparable<?>) possible.get(j);
+                    Reference2ObjectArrayMap<Property<?>, Comparable<?>> query = new Reference2ObjectArrayMap<>(keys.length);
+                    for (int k = 0; k < keys.length; k++) {
+                        query.put(keys[k], k == i ? pivot : vals[k]);
+                    }
+                    row[j] = states.get(query);
                 }
-                row[j] = states.get(query);
+                matrix[i] = row;
             }
-            matrix[i] = row;
+            neighF.set(this, matrix);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("liquidphase: cannot rebuild 26.3 neighbours", e);
         }
-        this.neighbors = matrix;
          *///?}
     }
 

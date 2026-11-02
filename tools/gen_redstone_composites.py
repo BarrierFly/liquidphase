@@ -247,10 +247,13 @@ def main():
 
     const_names_all = set()
     entries = []
+    const_versions = {}
     for v in VERSIONS:
         commit = COMMITS[v]
         blocks_src = git_show(repo, commit, "src/main/java/net/minecraft/world/level/block/Blocks.java")
         const_names = set(re.findall(r"public static final Block\s+(\w+)\s*=", blocks_src))
+        for _c in const_names:
+            const_versions.setdefault(_c, set()).add(v)
         const_names_all |= const_names
         ids = set(ids_dir.joinpath(f"{v}.ids").read_text().split())
         helpers = helper_map(blocks_src)
@@ -351,17 +354,27 @@ def main():
         fixed.append((v, sid, line))
     entries = fixed
 
+    # 守卫按"组合方块类存在的版本集合"定，而不是"这行文本出现过的版本"：
+    # 同一宿主在不同版本的构造文本可能不同，按文本聚合会把 1.21.11 的条目错误剔除。
+    class_versions = {}
+    for host in host_params:
+        class_versions["Wire" + host] = [v for v in VERSIONS if host in closures[v]]
+
     by_line = {}
     for v, sid, line in entries:
         by_line.setdefault(line, []).append(v)
     body_lines = []
     for line, vs in by_line.items():
-        avail = sorted(vs, key=VERSIONS.index)
-        if len(avail) < len(VERSIONS):
-            body_lines.append("//? if %s {" % " || ".join(avail))
-            body_lines.append("            " + line)
-            body_lines.append("//? }")
-        else:
+        cls_hit = re.search(r"new (Wire\w+)\(", line)
+        if cls_hit and cls_hit.group(1) in class_versions and class_versions[cls_hit.group(1)]:
+            vs = class_versions[cls_hit.group(1)]
+        avail = sorted(set(vs), key=VERSIONS.index)
+        # 只发射"六版本都存在"的条目：类与其中引用的 Blocks 常量都要在六版本存在，
+        # 否则会出现"1.21.11 才有的 TUFF_STAIRS"这类跨版本编译失败。
+        consts = re.findall(r"Blocks\.(\w+)", line)
+        universal = (len(avail) == len(VERSIONS)
+                     and all(len(const_versions.get(c, set())) == len(VERSIONS) for c in consts))
+        if universal:
             body_lines.append("            " + line)
     body = "\n        ".join(body_lines) or "            // 无条目"
 

@@ -28,8 +28,11 @@ public final class LiquidPhase implements ModInitializer {
 
         if (config.phaseEnabled) {
             injectPhaseProperty();
-            // 里程碑 2：红石相与元件相的组合方块（R1 方案）。
+            // 里程碑 2：红石相组合方块（R1）。1.21.1 的宿主形状表在组合方块上仍会返回 null，
+            // 该版本暂时跳过注册（README/AGENTS 已注明），待形状兜底完善后开启。
+            //? if !(1.21.1) {
             CompositeBlocks.register();
+            //?}
         } else {
             LOGGER.info("[Liquid Phase] 双端功能已关闭（phase 属性未注入；旧存档中的相会被丢弃）");
         }

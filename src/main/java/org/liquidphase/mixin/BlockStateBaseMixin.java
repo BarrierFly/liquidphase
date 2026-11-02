@@ -192,25 +192,26 @@ public abstract class BlockStateBaseMixin {
     // 邻居变化：熔岩相遇水凝固（原版 shouldSpreadLiquid 等价检查）+ 霜冰相邻融化
     // ------------------------------------------------------------------
 
-    //? if 1.19.4 || 1.20.1 || 1.21.1 {
+    //? if 1.19.4 || 1.20.1 {
     /*@Inject(method = "neighborChanged", at = @At("HEAD"))
     private void liquidphase$neighborChanged(Level level, BlockPos pos, Block neighborBlock, BlockPos fromPos, boolean movedByPiston, CallbackInfo ci) {
-        BlockState self = (BlockState) (Object) this;
-        if (level instanceof ServerLevel serverLevel) {
-            if (PhaseHelper.isLava(self)) {
-                PhaseHelper.solidifyIfWaterNearby(serverLevel, pos, self);
-            }
-            PhaseHelper.frostedNeighborChanged(level, pos, self, neighborBlock);
-            if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {
-                org.liquidphase.redstone.RedstoneBlocks.neighborChanged(serverLevel, pos, self);
-            }
-            org.liquidphase.cauldron.CauldronBehaviors.handleNeighborChanged(serverLevel, pos, self);
-        }
+        liquidphase$onNeighbor(level, pos, neighborBlock);
+    }
+     *///?} elif 1.21.1 {
+    /*@Inject(method = "handleNeighborChanged", at = @At("HEAD"))
+    private void liquidphase$handleNeighborChanged(Level level, BlockPos pos, Block neighborBlock, BlockPos fromPos, boolean movedByPiston, CallbackInfo ci) {
+        liquidphase$onNeighbor(level, pos, neighborBlock);
     }
      *///?} else {
     @Inject(method = "handleNeighborChanged", at = @At("HEAD"))
     private void liquidphase$handleNeighborChanged(Level level, BlockPos pos, Block neighborBlock,
                                                    net.minecraft.world.level.redstone.Orientation orientation, boolean movedByPiston, CallbackInfo ci) {
+        liquidphase$onNeighbor(level, pos, neighborBlock);
+    }
+    //?}
+
+    /** 邻居变化的三件事（相凝固/霜冰相邻/红石相重算/炼药锅）——签名差异只在上面的注入。 */
+    private void liquidphase$onNeighbor(Level level, BlockPos pos, Block neighborBlock) {
         BlockState self = (BlockState) (Object) this;
         if (level instanceof ServerLevel serverLevel) {
             if (PhaseHelper.isLava(self)) {
@@ -223,5 +224,4 @@ public abstract class BlockStateBaseMixin {
             org.liquidphase.cauldron.CauldronBehaviors.handleNeighborChanged(serverLevel, pos, self);
         }
     }
-    //?}
 }

@@ -79,6 +79,8 @@
 - 本 mod 独占"相"语义，**不与 Fluidlogged 这类通用 fluidlogged mod 互通**（共存不崩，但互相看不见对方的数据）。
 - 相位渲染用 blockstate JSON 覆盖（multipart + 内缩模型），与其他**重写过原版 blockstate JSON 的资源包/模组**会冲突。
 - 26.x 的实验性红石评估器（`REDSTONE_EXPERIMENTS`）下，含红石相方块**不保证**与原版红石线行为一致。
+- **1.21.1 暂不注册红石相组合方块**（该版本宿主形状表对组合状态仍返回 null，形状兜底完善后开启）；
+  其余 5 个版本的红石相在楼梯/台阶/墙/栅栏共 41 种宿主上可用。
 - 状态数会随宿主数量增长（每宿主 ×7 相状态，红石相组合方块再 ×16 功率）；已在各版本实测编译与加载，
   1.19.4 这类低内存环境请留意内存占用。
 - 1.19.4/1.20.1 的状态注入使用 **Statement** 依赖（会自动随 mod 提供）。
@@ -155,6 +157,8 @@ Existing phases in old worlds are then **lost permanently** (vanilla drops unkno
 Removing this mod loses every phase. It does not interoperate with generic fluidlogged mods (coexistence is crash-free, data is not shared).
 Phase rendering overrides vanilla blockstate JSONs, so resource packs/mods that rewrite those files conflict.
 Under the 26.x experimental redstone evaluator (`REDSTONE_EXPERIMENTS`) redstone-phase blocks are not guaranteed to match vanilla wire behaviour.
+Redstone-phase composites are **not registered on 1.21.1 yet** (host shape tables still return null for composite states there); the other five
+versions provide them for 41 stair/slab/wall/fence hosts.
 1.19.4/1.20.1 use **Statement** for state injection (shipped as a dependency).
 
 ### Licence

@@ -23,13 +23,19 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin({
         Block.class,
         AmethystClusterBlock.class,
+        //? if 1.21.1 || 1.21.10 || 1.21.11 || 26.3 {
         BarrierBlock.class,
+        //?}
+
         BaseCoralPlantTypeBlock.class,
         BaseCoralWallFanBlock.class,
         BaseRailBlock.class,
         BigDripleafBlock.class,
         //? if 1.20.1 || 1.21.1 || 1.21.10 || 1.21.11 || 26.3 {
+        //? if 1.20.1 || 1.21.1 || 1.21.10 || 1.21.11 || 26.3 {
         CalibratedSculkSensorBlock.class,
+        //?}
+
         //?}
         CampfireBlock.class,
         CandleBlock.class,
@@ -38,9 +44,18 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
         ChestBlock.class,
         ConduitBlock.class,
         //? if 1.21.10 || 1.21.11 || 26.3 {
+        //? if 1.21.10 || 1.21.11 || 26.3 {
         CopperChestBlock.class,
+        //?}
+
+        //? if 1.21.10 || 1.21.11 || 26.3 {
         CopperGolemStatueBlock.class,
+        //?}
+
+        //? if 1.21.10 || 1.21.11 || 26.3 {
         DriedGhastBlock.class,
+        //?}
+
         //?}
         //? if 1.20.1 || 1.21.1 || 1.21.10 || 1.21.11 || 26.3 {
         DecoratedPotBlock.class,
@@ -59,7 +74,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
         MangrovePropaguleBlock.class,
         MangroveRootsBlock.class,
         //? if 1.21.10 || 1.21.11 || 26.3 {
+        //? if 1.21.10 || 1.21.11 || 26.3 {
         MultifaceBlock.class,
+        //?}
+
         //?}
         //? if 1.19.4 || 1.20.1 || 1.21.1 || 1.21.10 || 1.21.11 {
         PointedDripstoneBlock.class,
@@ -71,7 +89,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
         SculkShriekerBlock.class,
         SeaPickleBlock.class,
         //? if 1.21.10 || 1.21.11 || 26.3 {
+        //? if 1.21.10 || 1.21.11 || 26.3 {
         ShelfBlock.class,
+        //?}
+
         //?}
         SlabBlock.class,
         SmallDripleafBlock.class,
@@ -82,7 +103,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
         WallHangingSignBlock.class,
         WallSignBlock.class,
         //? if 1.21.1 || 1.21.10 || 1.21.11 || 26.3 {
+        //? if 1.21.1 || 1.21.10 || 1.21.11 || 26.3 {
         WaterloggedTransparentBlock.class,
+        //?}
+
         //?}
 })
 public class PlacementMixin {

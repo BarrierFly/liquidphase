@@ -32,8 +32,13 @@ public abstract class ServerPlayerGameModeMixin {
     @Shadow
     public ServerPlayer player;
 
+    /** 目标类里的实际字段名是 level（没有 getLevel() 方法）。 */
     @Shadow
-    public abstract Level getLevel();
+    private net.minecraft.server.level.ServerLevel level;
+
+    private Level liquidphase$level() {
+        return this.level;
+    }
 
     @Inject(method = "handleBlockBreakAction", at = @At("HEAD"), cancellable = true)
     private void liquidphase$mineLiquid(BlockPos pos, ServerboundPlayerActionPacket.Action action, Direction direction, int maxY, int sequence, CallbackInfo ci) {
@@ -42,7 +47,7 @@ public abstract class ServerPlayerGameModeMixin {
             || !PhaseTargeting.holdingEmptyBucket(this.player)) {
             return;
         }
-        Level level = this.getLevel();
+        Level level = this.liquidphase$level();
         if (!PhaseTargeting.withinRange(this.player, pos) || !PhaseTargeting.isLiquidMineTarget(level, pos)) {
             return;
         }
@@ -55,14 +60,14 @@ public abstract class ServerPlayerGameModeMixin {
 
     @Inject(method = "destroyBlock", at = @At("HEAD"), cancellable = true)
     private void liquidphase$minePhase(BlockPos pos, CallbackInfoReturnable<Boolean> cir) {
-        BlockState state = this.getLevel().getBlockState(pos);
+        BlockState state = this.liquidphase$level().getBlockState(pos);
         if (!PhaseHelper.isSolidPhase(state)) {
             return;
         }
-        if (!PhaseTargeting.isPhaseTarget(this.player, this.getLevel(), pos)) {
+        if (!PhaseTargeting.isPhaseTarget(this.player, this.liquidphase$level(), pos)) {
             return;
         }
-        PhaseTargeting.minePhase(this.player, this.getLevel(), pos, state);
+        PhaseTargeting.minePhase(this.player, this.liquidphase$level(), pos, state);
         cir.setReturnValue(true);
     }
 }

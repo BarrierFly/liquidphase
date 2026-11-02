@@ -36,7 +36,7 @@ public final class CompositeBlocks {
             String path = "redstone_" + BuiltInRegistries.BLOCK.getKey(host).getPath();
             Block composite;
 
-            //? if 1.19.4 || 1.20.1 || 1.21.1 || 1.21.10 {
+            //? if 1.19.4 || 1.20.1 || 1.21.1 {
             /*ResourceLocation id = resource(path);
             if (BuiltInRegistries.BLOCK.containsKey(id)) {
                 continue;
@@ -47,6 +47,19 @@ public final class CompositeBlocks {
             }
             Registry.register(BuiltInRegistries.BLOCK, id, composite);
             Registry.register(BuiltInRegistries.ITEM, id, new BlockItem(composite, new Item.Properties()));
+             *///?} elif 1.21.10 {
+            /*// 1.21.10：仍是 ResourceLocation，但 Properties 已要求 setId
+            ResourceLocation id = resource(path);
+            if (BuiltInRegistries.BLOCK.containsKey(id)) {
+                continue;
+            }
+            composite = CompositeFactories.create(host, ResourceKey.create(Registries.BLOCK, id));
+            if (composite == null) {
+                continue;
+            }
+            Registry.register(BuiltInRegistries.BLOCK, id, composite);
+            Registry.register(BuiltInRegistries.ITEM, id, new BlockItem(composite,
+                new Item.Properties().setId(ResourceKey.create(Registries.ITEM, id))));
              *///?} else {
             Identifier id = resource(path);
             if (BuiltInRegistries.BLOCK.containsKey(id)) {

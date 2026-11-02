@@ -19,11 +19,11 @@
     "MultifaceShapeMixin",
     "PhaseCapableMixin",
     "PlacementMixin",
-    "RedStoneWireBlockMixin",
     "ServerLevelMixin",
     "ServerPlayerGameModeMixin",
     "UseOnContextInvoker",
-    "WallBlockShapeMixin"
+    "WallBlockShapeMixin",
+    "ShapeFallbackMixin"
   ],
   "client": [
     "EntityPickMixin"

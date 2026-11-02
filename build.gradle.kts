@@ -60,6 +60,7 @@ tasks.named<ProcessResources>("processResources") {
     val statementDepends = if (statementEra) ",\"statement\": \"*\"" else ""
     val extraMixins = if (!statementEra) ",\"liquidphase.states.mixins.json\"" else ""
     val extraMixins26 = if (unobfuscatedEra) ",\"liquidphase.26.mixins.json\"" else ""
+    val extraMixinsWire = if (unobfuscatedEra) "" else ",\"liquidphase.wire.mixins.json\""
     filesMatching("fabric.mod.json") {
         filter { line -> line
             .replace("\${version}", modVersion)
@@ -73,6 +74,7 @@ tasks.named<ProcessResources>("processResources") {
             .replace("\${statement_depends}", statementDepends)
             .replace("\${extra_mixins}", extraMixins)
             .replace("\${extra_mixins_26}", extraMixins26)
+            .replace("\${extra_mixins_wire}", extraMixinsWire)
         }
     }
 }

@@ -16,7 +16,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(Item.class)
 public abstract class ItemMixin {
 
+    //? if 1.19.4 || 1.20.1 || 1.21.1 {
+    /*@Inject(method = "getCraftingRemainingItem", at = @At("HEAD"), cancellable = true)
+     *///?} else {
     @Inject(method = "getCraftingRemainder", at = @At("HEAD"), cancellable = true)
+    //?}
     private void liquidphase$noBucketRemainder(CallbackInfoReturnable<Object> cir) {
         if (LiquidPhaseConfig.get().liquidInteraction
             && ((Object) this == Items.WATER_BUCKET || (Object) this == Items.LAVA_BUCKET)) {
