@@ -85,7 +85,13 @@ public final class PhaseStateRefresher {
         }
         for (BlockState state : newStates) {
             ((StateHolderDuck<Block, BlockState>) state).liquidphase$setCodec(codec);
-            state.initCache();
+            try {
+                state.initCache();
+            } catch (RuntimeException e) {
+                // 单个宿主初始化缓存失败不应让整个游戏起不来：记录方块名并继续。
+                org.liquidphase.LiquidPhase.LOGGER.error(
+                    "[Liquid Phase] failed to init cache for {} ({})", block, state, e);
+            }
         }
 
         ImmutableList.Builder<BlockState> allStates = ImmutableList.builder();

@@ -96,6 +96,12 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 
 ## 7. 已知限制（待办）
 
+0. **启动崩溃已修**：宿主类覆写了块级 `getCollisionShape` / 状态级两参版本时，`BlockStateBase$Cache`
+   构造器会拿到 null 形状并 NPE。现在有三道防线：
+   ① `CacheShapeGuardMixin`（`Cache.<init>` 里把 null 换成空形状，`require = 0`）；
+   ② `ShapeFallbackMixin`（状态级 outline/collision/occlusion/support/visual 兜底）；
+   ③ `BlockBehaviourMixin`（块级兜底，带"仅带相状态/组合方块才兜底"的递归保护）。
+   另 `PhaseStateRefresher` 对 `initCache()` 加了 try/catch，单个宿主异常只记日志不中断启动。
 1. **1.21.1 不注册红石相组合方块**：组合方块（有 `power` 无 `phase`）在 1.21.1 的宿主形状表里仍会返回 null，
    `Cache` 构造时 NPE。已在 `LiquidPhase` 用 `//? if !(1.21.1)` 跳过注册；修好形状兜底后去掉该守卫即可。
 2. **组合方块覆盖面**：当前仅楼梯/台阶/墙/栅栏共 41 个宿主（手写 `CompositeFactories`）。

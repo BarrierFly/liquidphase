@@ -23,7 +23,8 @@
     "ServerPlayerGameModeMixin",
     "UseOnContextInvoker",
     "WallBlockShapeMixin",
-    "ShapeFallbackMixin"
+    "ShapeFallbackMixin",
+    "CacheShapeGuardMixin"
   ],
   "client": [
     "EntityPickMixin"
