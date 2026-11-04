@@ -53,6 +53,10 @@ bash tools/regen_all.sh
 
 # 4) 液体物品贴图
 python tools/gen_item_textures.py src/main/resources/assets/liquidphase/textures/item
+
+# 5) 红石相组合方块资源（贴图 + 完整方块模型 + 41 个 blockstate + 中英文名）
+python tools/gen_redstone_assets.py src/main/java/org/liquidphase/redstone/composites/CompositeFactories.java \
+    src/main/resources/assets/liquidphase
 ```
 
 `CompositeFactories.java` 目前是**手写**文件（生成器仍在完善），`regen_all.sh` 不会覆盖它。
@@ -106,5 +110,10 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    `Cache` 构造时 NPE。已在 `LiquidPhase` 用 `//? if !(1.21.1)` 跳过注册；修好形状兜底后去掉该守卫即可。
 2. **组合方块覆盖面**：当前仅楼梯/台阶/墙/栅栏共 41 个宿主（手写 `CompositeFactories`）。
    `tools/gen_redstone_composites.py` 的批量生成还有版本守卫/构造参数问题，稳定后再切生成物。
+   41 个宿主的资源（blockstate + 完整 16³ 方块模型 + 疏松红石线贴图）已由 `tools/gen_redstone_assets.py`
+   补齐；组合方块**不注册 BlockItem**，只能由红石粉/液相方块交互生成。透明底走 cutout：
+   1.19.4/1.20.1/1.21.1 用旧版 `BlockRenderLayerMap.INSTANCE`，1.21.10/1.21.11 用新版
+   `client.rendering.v1.BlockRenderLayerMap` + `ChunkSectionLayer.CUTOUT`，26.3 按贴图透明度自动推导。
+   注意 1.21.11 的原版 blockstate/模型 JSON **不支持** `render_type`，不要试图只靠资源声明图层。
 3. **§3.5 元件相**（中继器/比较器/侦测器）未实现，方案见 `docs/milestone-2.5-repeater-proposal.md`。
 4. 行为层只做了服务端冒烟（初始化 + 世界生成）；游戏内逐条手测（冻结、凝固、破坏保留、桶挖、炼药锅转化）仍待做。

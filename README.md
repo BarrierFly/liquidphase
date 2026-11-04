@@ -68,8 +68,9 @@
 3. 雨天放一个含水楼梯（水桶点楼梯）→ 低温会冻成含冰楼梯；光照够了会化回水相。
 4. 空桶左键水源 → 掉落"水"物品；拿着它右键空气 → 放一个水源，物品消失、没有桶。
 5. 熔岩锅旁边倒水 → 掉黑曜石；水锅上倒熔岩 → 按水位掉石头/圆石/圆石台阶。
-6. 拿红石粉点楼梯 → 变成"含红石线的楼梯"：红石线铺满整格、按红石线规则衰减传递信号，
-   被宿主遮住的面不输出；破坏它 → 留下对应功率的红石线。
+6. 拿红石粉点楼梯 → 变成"含红石线的楼梯"：整格渲染为完整 16³ 立方体几何，六面贴疏松红石线
+   （透明底 cutout，接近原版红石粉尘观感），按红石线规则衰减传递信号，被宿主遮住的面不输出；
+   破坏它 → 留下对应功率的红石线。组合方块**没有物品形态**，只能靠红石粉/液相方块交互生成。
 
 ---
 
@@ -84,6 +85,15 @@
 - 状态数会随宿主数量增长（每宿主 ×7 相状态，红石相组合方块再 ×16 功率）；已在各版本实测编译与加载，
   1.19.4 这类低内存环境请留意内存占用。
 - 1.19.4/1.20.1 的状态注入使用 **Statement** 依赖（会自动随 mod 提供）。
+
+---
+
+## 变更记录
+
+- **0.1.1**：补齐 41 个红石相组合方块的 blockstate、完整方块模型与疏松红石线贴图（透明底 cutout，
+  1.19.4/1.20.1/1.21.1/1.21.10/1.21.11 显式注册渲染层，26.3 按贴图透明度自动推导）；
+  中英文名称补全；组合方块不再注册物品形态（玩法不变，仍由红石粉/液相方块交互生成）；
+  消除方块缺模型产生的 missing model 警告。版本号 0.1.0 → 0.1.1。
 
 ---
 
@@ -158,7 +168,8 @@ Removing this mod loses every phase. It does not interoperate with generic fluid
 Phase rendering overrides vanilla blockstate JSONs, so resource packs/mods that rewrite those files conflict.
 Under the 26.x experimental redstone evaluator (`REDSTONE_EXPERIMENTS`) redstone-phase blocks are not guaranteed to match vanilla wire behaviour.
 Redstone-phase composites are **not registered on 1.21.1 yet** (host shape tables still return null for composite states there); the other five
-versions provide them for 41 stair/slab/wall/fence hosts.
+versions provide them for 41 stair/slab/wall/fence hosts. Composites render as a full 16³ cube textured with sparse, transparent-background
+redstone lines (cutout) and have **no item form**; they are only created through redstone-dust/phase-block interactions.
 1.19.4/1.20.1 use **Statement** for state injection (shipped as a dependency).
 
 ### Licence
