@@ -1,1 +1,1 @@
-{"variants":{"":{"model":"liquidphase:block/redstone_phase"}}}
+{"multipart":[{"apply":{"model":"minecraft:block/purpur_slab"},"when":{"type":"bottom"}},{"apply":{"model":"minecraft:block/purpur_block"},"when":{"type":"double"}},{"apply":{"model":"minecraft:block/purpur_slab_top"},"when":{"type":"top"}},{"apply":{"model":"liquidphase:block/redstone_phase"}}]}

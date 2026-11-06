@@ -29,7 +29,7 @@
 | 相枚举 | `phase/Phase.java` |
 | 相行为总控（充入/实体化/凝固/冻结/融化/霜裂/火蔓延） | `phase/PhaseHelper.java` |
 | 相容宿主标记接口 + 桶/流体默认方法 | `phase/PhaseCapable.java` |
-| 瞄准与直接挖相 | `phase/PhaseTargeting.java` |
+| 瞄准与直接挖相（含整格宿主/形状表宿主的命中判定） | `phase/PhaseTargeting.java` |
 | 状态级核心 mixin（流体态/光照/随机刻/破坏保留/邻居） | `mixin/BlockStateBaseMixin.java` |
 | 自带状态注入器（1.21.1+） | `state/PhaseStateRefresher.java` + `mixin/state/*` + `state/*Duck` |
 | 桶/放置/交互 mixin | `mixin/BucketItem*Mixin.java`、`mixin/BucketUseMixin.java`、`mixin/PlacementMixin.java`、`mixin/BlockItemMixin.java` |
@@ -54,14 +54,30 @@ bash tools/regen_all.sh
 # 4) 液体物品贴图
 python tools/gen_item_textures.py src/main/resources/assets/liquidphase/textures/item
 
-# 5) 红石相组合方块资源（贴图 + 完整方块模型 + 41 个 blockstate + 中英文名）
+# 5) 红石相组合方块资源（贴图 + 宿主几何 + 粉尘外壳 + 41 个 blockstate + 中英文名）
+#    第 3 个参数是客户端 jar（宿主原版 blockstate 与 redstone_dust_dot.png 都从里面取）
 python tools/gen_redstone_assets.py src/main/java/org/liquidphase/redstone/composites/CompositeFactories.java \
-    src/main/resources/assets/liquidphase
+    src/main/resources/assets/liquidphase "<GRADLE_USER_HOME>/caches/fabric-loom/1.21.11/minecraft-client.jar"
 ```
 
 `CompositeFactories.java` 目前是**手写**文件（生成器仍在完善），`regen_all.sh` 不会覆盖它。
 
 `tools/phase-blocks/<版本>.ids` 是相容方块 id 清单；`<版本>.closure.txt` 是"直接实现 SimpleWaterloggedBlock 的类 + 继承闭包"。
+
+### 3.1 相覆盖层的两类宿主
+
+`tools/gen_phase_blockstates.py` 的 `FULL_CUBE_HOSTS` 列出"原版模型本来就填满整格"的宿主
+（树叶、铜格栅、红树根）：它们含固相时**整格换成相材质**，宿主原版 part 的 when 合并
+`phase: none|lava`；其余宿主保持"原版模型 + 内缩 0.25px 覆盖层"。
+新增整格型宿主时把 id 加进这个集合，并确认 `phase_*_full.json` 六个模型存在。
+
+### 3.2 红石组合方块的渲染
+
+`gen_redstone_assets.py` 从客户端 jar 提取宿主原版 blockstate，生成
+"宿主原版 multipart part + 一整层 16³ 粉尘外壳（外扩 0.01px 避免共面闪烁）"。
+外壳贴图 = 原版 `redstone_dust_dot` 按满功率 RGB(255,51,0) 逐像素染色，透明底 cutout；
+透明像素后面直接是宿主模型，所以"原版贴图 + 透出宿主"两者都成立。
+`power` 不出现在 when 里 → 16 个功率共用一套模型。
 
 ## 4. mixin 目标核对流程
 
@@ -78,16 +94,20 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 
 | 用例 | 期望 |
 | --- | --- |
-| 启动服务端 | 日志出现 `injected phase property into … blocks`，无 mixin 报错 |
+| 启动服务端 | 日志出现 `injected phase property into … blocks` 与 `registered … redstone-phase composite blocks`，无 mixin 报错 |
 | 熔岩桶 → 楼梯 | 出现含熔岩相；整格发光 15；可流出/被流入 |
 | 水 → 含熔岩 | 变为含黑曜石相 + 嘶声 |
-| 破坏含冰楼梯 | 掉楼梯 + 原地留冰 |
+| 破坏含冰楼梯 | 掉楼梯 + 原地留冰；准星瞄楼梯就按楼梯速度挖，瞄相才按冰算 |
+| 破坏含黑曜石楼梯 | 瞄露出的黑曜石部分需钻石镐；瞄楼梯本体正常速度；破坏后留黑曜石 |
+| 树叶含水/含冰 | 冰相整格显示冰；相=none 时显示树叶原貌 |
 | 含水楼梯 + 低温降水 | 冻结成含冰相；光照够时融回水相 |
 | 空桶左键水源 | 掉"水"物品；右键放流体；无桶返还 |
+| 空桶左键水锅/熔岩锅 | 整锅拆空、掉 1 个液体物品；右键锅不再取水、桶不消失 |
+| 液体物品倒空锅 / 未满水锅 | 照常填锅，消耗 1 个、不返还空桶 |
 | 熔岩锅 + 水 / 水锅 + 熔岩 | 掉黑曜石 / 石头·圆石·台阶 |
 | 混凝土粉末 + 水锅 | 混泥土 + 水位 -1 |
 | 发射器/漏斗 | 填锅、抽锅、液体物品进出 |
-| 红石粉点楼梯 | 变含红石相组合方块；线按规则衰减；破坏留红石线 |
+| 红石粉点楼梯 | 变含红石相组合方块；宿主模型可见、粉尘外壳透明处透出宿主；线按规则衰减；破坏留红石线 |
 | 存档保存/重载 | 相保持 |
 | 关闭 `phaseEnabled` | 旧存档的相丢失（预期，README 已写明） |
 
@@ -108,12 +128,16 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    另 `PhaseStateRefresher` 对 `initCache()` 加了 try/catch，单个宿主异常只记日志不中断启动。
 1. **1.21.1 不注册红石相组合方块**：组合方块（有 `power` 无 `phase`）在 1.21.1 的宿主形状表里仍会返回 null，
    `Cache` 构造时 NPE。已在 `LiquidPhase` 用 `//? if !(1.21.1)` 跳过注册；修好形状兜底后去掉该守卫即可。
-2. **组合方块覆盖面**：当前仅楼梯/台阶/墙/栅栏共 41 个宿主（手写 `CompositeFactories`）。
+3. **组合方块覆盖面**：当前仅楼梯/台阶/墙/栅栏共 41 个宿主（手写 `CompositeFactories`）。
    `tools/gen_redstone_composites.py` 的批量生成还有版本守卫/构造参数问题，稳定后再切生成物。
-   41 个宿主的资源（blockstate + 完整 16³ 方块模型 + 疏松红石线贴图）已由 `tools/gen_redstone_assets.py`
+   41 个宿主的资源（blockstate + 宿主原版几何 + 整格粉尘外壳 + 满功率染色贴图）已由 `tools/gen_redstone_assets.py`
    补齐；组合方块**不注册 BlockItem**，只能由红石粉/液相方块交互生成。透明底走 cutout：
    1.19.4/1.20.1/1.21.1 用旧版 `BlockRenderLayerMap.INSTANCE`，1.21.10/1.21.11 用新版
    `client.rendering.v1.BlockRenderLayerMap` + `ChunkSectionLayer.CUTOUT`，26.3 按贴图透明度自动推导。
    注意 1.21.11 的原版 blockstate/模型 JSON **不支持** `render_type`，不要试图只靠资源声明图层。
 3. **§3.5 元件相**（中继器/比较器/侦测器）未实现，方案见 `docs/milestone-2.5-repeater-proposal.md`。
-4. 行为层只做了服务端冒烟（初始化 + 世界生成）；游戏内逐条手测（冻结、凝固、破坏保留、桶挖、炼药锅转化）仍待做。
+4. 行为层只做了服务端冒烟（初始化 + 世界生成）与 6 版本编译；游戏内逐条手测（冻结、凝固、破坏保留、桶挖、炼药锅转化、
+   树叶相渲染、红石外壳）仍待做。
+5. **相瞄准的判定口径不能改成"合并轮廓 vs 相区域"**：相区域的外表面就落在方块边界上，与合并轮廓（=整格）的命中点重合，
+   比较恒成立 → 任何瞄准都算挖相（历史 bug：含固相方块"怎么都挖不掉"）。现在用宿主轮廓（`phase=none` 兄弟状态）
+   与相区域比距离，并保证形状表型宿主不会因查不到含相状态而退化成空形状。

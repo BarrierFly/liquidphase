@@ -1,1 +1,1 @@
-{"variants":{"":{"model":"liquidphase:block/redstone_phase"}}}
+{"multipart":[{"apply":{"model":"minecraft:block/cobblestone_slab"},"when":{"type":"bottom"}},{"apply":{"model":"minecraft:block/cobblestone"},"when":{"type":"double"}},{"apply":{"model":"minecraft:block/cobblestone_slab_top"},"when":{"type":"top"}},{"apply":{"model":"liquidphase:block/redstone_phase"}}]}

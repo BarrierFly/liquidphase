@@ -48,9 +48,17 @@ public final class PhaseTargeting {
     /** {@return 相可见区域 = 整格减宿主轮廓（按状态缓存；状态为单例，键安全）} */
     public static VoxelShape phaseVisibleShape(BlockState state) {
         return PHASE_VISIBLE_CACHE.computeIfAbsent(state,
-            s -> Shapes.joinUnoptimized(Shapes.block(),
-                s.getShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO, CollisionContext.empty()),
-                BooleanOp.ONLY_FIRST).optimize());
+            s -> Shapes.joinUnoptimized(Shapes.block(), hostOutline(s), BooleanOp.ONLY_FIRST).optimize());
+    }
+
+    /**
+     * {@return 宿主轮廓（相=none 的同一状态）}
+     * 形状表型的宿主（栅栏/墙/玻璃板等）按"构造时的状态集合"建表，含相状态查不到会返回 null；
+     * 一律用 phase=none 的兄弟状态查询，既避开 null 也保证相区域 = 宿主真正留出的空隙。
+     */
+    public static VoxelShape hostOutline(BlockState state) {
+        BlockState host = PhaseHelper.withPhase(state, Phase.NONE);
+        return host.getShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO, CollisionContext.empty());
     }
 
     /** {@return 合并瞄准形状 = 宿主轮廓 ∪ 相可见区域；无相时返回 null（调用方直接用原形状）} */
@@ -62,12 +70,21 @@ public final class PhaseTargeting {
         if (phase.isEmpty()) {
             return null;
         }
-        return Shapes.or(vanilla, phase);
+        // vanilla 可能来自含相状态（形状表查不到 → null/空），此时用宿主轮廓兜底。
+        VoxelShape host = (vanilla == null || vanilla.isEmpty()) ? hostOutline(state) : vanilla;
+        return Shapes.or(host, phase);
     }
 
     /**
      * {@return 玩家是否正瞄准该格的"相区域"（而不是宿主本体）}
-     * 以与客户端准星相同的射线口径（OUTLINE + 交互距离）做合并命中与相区域命中，比较距离。
+     * <p>
+     * 判定口径 = 分别对**宿主轮廓**与**相区域**做射线命中，比较谁更近。
+     * 不能用合并轮廓（宿主∪相 = 整格）来比：相区域的外表面本就落在方块边界上，
+     * 与合并轮廓的命中点重合，那样比较会恒成立，导致任何瞄准都算挖相，
+     * 挖掘速度永远按相材质（黑曜石没有钻石镐几乎挖不动）。
+     * <p>
+     * 宿主轮廓用 phase=none 兄弟状态查询：形状表型宿主对含相状态返回 null/空，
+     * 直接用会把宿主当成"没有实体"，同样退化成恒选中相。
      */
     public static boolean isPhaseTarget(Player player, Level level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
@@ -88,7 +105,14 @@ public final class PhaseTargeting {
         if (phaseHit.getType() != BlockHitResult.Type.BLOCK) {
             return false;
         }
-        return merged.getLocation().distanceToSqr(eye) >= phaseHit.getLocation().distanceToSqr(eye) - 1.0E-7;
+        VoxelShape host = hostOutline(state);
+        BlockHitResult hostHit = host.isEmpty() ? null : host.clip(eye, end, pos);
+        if (hostHit == null || hostHit.getType() != BlockHitResult.Type.BLOCK) {
+            // 射线根本没碰到宿主本体（只可能碰到相）→ 相目标。
+            return true;
+        }
+        // 相命中必须严格更早（留 1e-7 容差处理共面命中）才算瞄准相。
+        return phaseHit.getLocation().distanceToSqr(eye) < hostHit.getLocation().distanceToSqr(eye) - 1.0E-7;
     }
 
     /** {@return 固相（枚举相或红石相组合方块）是否可被直接瞄准挖掘（D8）} */
@@ -171,21 +195,44 @@ public final class PhaseTargeting {
         return player.getEyePosition().distanceToSqr(Vec3.atCenterOf(pos)) <= d * d;
     }
 
-    /** {@return 该格是否为"可用空桶挖掘的液体目标"：真实水/熔岩源，或熔岩相宿主} */
+    /**
+     * {@return 该格是否为"可用空桶挖掘的液体目标"：真实水/熔岩源、熔岩相宿主，或装了流体的炼药锅}
+     * 炼药锅按方块显式判定（锅的 FluidState 为空）；细雪锅不算液体目标。
+     */
     public static boolean isLiquidMineTarget(Level level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
         if (PhaseHelper.isLava(state)) {
+            return true;
+        }
+        if (isFilledCauldron(state)) {
             return true;
         }
         FluidState fluid = level.getFluidState(pos);
         return fluid.isSource() && (fluid.is(Fluids.WATER) || fluid.is(Fluids.LAVA)) && state.getBlock() instanceof LiquidBlock;
     }
 
-    /** 空桶挖掘液体目标：移除液体/熔岩相并掉落液体物品（功能三，§5.1）。 */
+    /** {@return 是否装了水/熔岩的炼药锅（水锅任意水位、熔岩锅）} */
+    private static boolean isFilledCauldron(BlockState state) {
+        if (state.getBlock() == net.minecraft.world.level.block.Blocks.WATER_CAULDRON) {
+            return state.getValue(net.minecraft.world.level.block.LayeredCauldronBlock.LEVEL) >= 1;
+        }
+        return state.getBlock() == net.minecraft.world.level.block.Blocks.LAVA_CAULDRON;
+    }
+
+    /**
+     * 空桶挖掘液体目标：移除液体/熔岩相/锅中流体并掉落液体物品（功能三，§5.1）。
+     * 炼药锅整锅一次拆空（与锅的装/倒粒度一致）。
+     */
     public static void mineLiquid(Player player, Level level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
-        boolean lava = PhaseHelper.isLava(state) || level.getFluidState(pos).is(Fluids.LAVA);
-        if (PhaseHelper.isLava(state)) {
+        boolean cauldron = isFilledCauldron(state);
+        boolean lava = PhaseHelper.isLava(state)
+            || level.getFluidState(pos).is(Fluids.LAVA)
+            || state.getBlock() == net.minecraft.world.level.block.Blocks.LAVA_CAULDRON;
+        if (cauldron) {
+            // 锅：整锅拆空，「锅本身」保留为外观的一部分，等价于把里面的流体挖走。
+            level.setBlock(pos, net.minecraft.world.level.block.Blocks.CAULDRON.defaultBlockState(), Block.UPDATE_ALL);
+        } else if (PhaseHelper.isLava(state)) {
             level.setBlock(pos, PhaseHelper.withPhase(state, Phase.NONE), Block.UPDATE_ALL);
         } else {
             level.removeBlock(pos, false);

@@ -21,10 +21,14 @@
   冰相在光照足够时融化回水相；下界/水蒸发维度融化时直接消失。
   霜冰相按原版 AGE 0–3 的裂纹推进与相邻融化规则演化（`frosted_0`…`frosted_3`）。
 - **破坏保留**：破坏含相方块 → 掉落固相战利品，该格留成真实熔岩源 / 黑曜石 / 冰 / 霜冰。
+  **含相方块本身可以像原版方块一样正常破坏**：准星落在宿主露出的部分就按宿主材质挖，落在相露出的部分才按相材质挖
+  （`phase=none` 的兄弟状态参与命中判定，形状表型宿主也不会误判）。
 - **收走相**：功能三开启时空桶左键；关闭时空桶右键。固体相（冰/霜冰/黑曜石）不响应右键收取。
 - **放置吸收**：拿冰/黑曜石物品指向可含水方块 → 写入该格；把可含水方块放进冰/黑曜石/熔岩源所在的格子 → 吸收该相。
 - **碰撞**：冰/黑曜石相按整格实心（与"相填满宿主空隙"的视觉一致）；熔岩相不额外加碰撞。
 - **直接挖相**：准星指向相露出的部分时，挖掘速度与掉落按相材质计算（黑曜石需钻石镐；冰/霜冰不精准采集则化水，霜冰无物品）。
+- **整格宿主的相**：树叶、铜格栅、红树根这类"模型就是完整 16³ 立方体"的宿主，含相时整格替换为相材质
+  （否则覆盖层藏在完整宿主模型内部，玩家看不到相）；`phase=none`/`lava` 仍显示宿主本体。
 
 ### 功能二：炼药锅（仅服务端，原版方块可表达的部分）
 
@@ -34,6 +38,9 @@
 - 混凝土粉末 + 水锅 → 消耗 1 水位，1 个粉末换成对应颜色的混凝土（16 色）。
 - 细雪锅遇水/熔岩 → 满水锅。
 - 发射器：液体物品填锅、空桶抽锅/抽液体、玻璃瓶从水锅装水瓶；漏斗：流体锅 ↔ 液体物品。
+- **桶与锅**（功能三开启时）：手持空桶**左键**水锅/熔岩锅 → 整锅一次拆空并掉落对应液体物品；
+  右键取水被禁用（桶不再被换成液体物品，也不再凭空消失）；拿液体物品往空锅/未满水锅倾倒照常填锅，
+  消耗 1 个且不返还空桶。功能三关闭时全部回到原版桶语义。
 - **没有**药水锅、染色锅、装黑曜石的锅——这些需要方块实体，本版不做。
 
 ### 功能三：玩家与液体互动（**强制双端**）
@@ -68,9 +75,11 @@
 3. 雨天放一个含水楼梯（水桶点楼梯）→ 低温会冻成含冰楼梯；光照够了会化回水相。
 4. 空桶左键水源 → 掉落"水"物品；拿着它右键空气 → 放一个水源，物品消失、没有桶。
 5. 熔岩锅旁边倒水 → 掉黑曜石；水锅上倒熔岩 → 按水位掉石头/圆石/圆石台阶。
-6. 拿红石粉点楼梯 → 变成"含红石线的楼梯"：整格渲染为完整 16³ 立方体几何，六面贴疏松红石线
-   （透明底 cutout，接近原版红石粉尘观感），按红石线规则衰减传递信号，被宿主遮住的面不输出；
+6. 拿红石粉点楼梯 → 变成"含红石线的楼梯"：宿主模型照旧渲染，外面罩一层完整 16³ 的红石粉尘外壳
+   （透明底 cutout，贴图就是原版 `redstone_dust_dot` 按满功率染色，透明像素后面直接透出宿主材质），
+   按红石线规则衰减传递信号，被宿主遮住的面不输出；
    破坏它 → 留下对应功率的红石线。组合方块**没有物品形态**，只能靠红石粉/液相方块交互生成。
+7. 拿空桶**左键**水锅/熔岩锅 → 整锅拆空、掉落"水"/"熔岩"物品；右键对着锅不再取水。
 
 ---
 
@@ -82,6 +91,10 @@
 - 26.x 的实验性红石评估器（`REDSTONE_EXPERIMENTS`）下，含红石相方块**不保证**与原版红石线行为一致。
 - **1.21.1 暂不注册红石相组合方块**（该版本宿主形状表对组合状态仍返回 null，形状兜底完善后开启）；
   其余 5 个版本的红石相在楼梯/台阶/墙/栅栏共 41 种宿主上可用。
+- 含固相方块的**相覆盖层会让方块看起来像整格黑曜石/冰**（内缩 0.25px 的立方体），但碰撞与挖掘仍按宿主：
+  准星落在宿主露出的部分就挖宿主，落在相露出的部分就挖相。黑曜石相需要钻石镐才能挖动相本身
+  （没有钻石镐时按黑曜石速度计算，非常慢——这是有意的设计，不是卡死）。
+- 整格宿主（树叶/铜格栅/红树根）含黑曜石/冰相时整格显示相材质，不再显示宿主贴图。
 - 状态数会随宿主数量增长（每宿主 ×7 相状态，红石相组合方块再 ×16 功率）；已在各版本实测编译与加载，
   1.19.4 这类低内存环境请留意内存占用。
 - 1.19.4/1.20.1 的状态注入使用 **Statement** 依赖（会自动随 mod 提供）。
@@ -90,6 +103,17 @@
 
 ## 变更记录
 
+- **0.1.2**：修复四个实机问题——
+  ① 含固相（黑曜石/冰）的整格宿主（树叶、铜格栅、红树根）看不到相：改为整格渲染相材质，
+     `phase=none`/`lava` 仍显示宿主；
+  ② 含固相方块"怎么都挖不掉"：瞄准判定原先用"合并轮廓（=整格）"与相区域比距离，两者外表面重合导致**恒判为相目标**
+     （挖掘速度永远按黑曜石/冰算），且形状表型宿主对含相状态返回 null 进一步放大误判。现在改用**宿主轮廓**与相区域比距离，
+     并用 `phase=none` 兄弟状态查询宿主形状——瞄准宿主就按宿主挖，瞄准相才按相挖；
+  ③ 炼药锅桶交互：功能三开启时空桶左键整锅拆空并掉落液体物品；右键取水禁用（桶不再凭空消失）；
+     液体物品往锅倾倒消耗 1 个且不返还空桶；
+  ④ 红石相组合方块贴图与红石线不符、且遮挡宿主：贴图换成原版 `redstone_dust_dot` 按满功率染色，
+     模型改为"宿主原版模型 + 完整 16³ 粉尘外壳"（cutout，透明像素透出宿主）。
+  版本号 0.1.1 → 0.1.2。
 - **0.1.1**：补齐 41 个红石相组合方块的 blockstate、完整方块模型与疏松红石线贴图（透明底 cutout，
   1.19.4/1.20.1/1.21.1/1.21.10/1.21.11 显式注册渲染层，26.3 按贴图透明度自动推导）；
   中英文名称补全；组合方块不再注册物品形态（玩法不变，仍由红石粉/液相方块交互生成）；
@@ -127,12 +151,16 @@ lava, obsidian, ice, frosted ice, and redstone wire. One block = solid phase (th
   this mod extends the check to hosts). Ice melts back to water when lit; in water-evaporating dimensions it simply disappears.
   Frosted ice follows the vanilla AGE 0–3 crack progression and neighbour rules (`frosted_0`…`frosted_3`).
 - **Breaking keeps the phase**: breaking a phased block drops the host loot and leaves the real lava/obsidian/ice/frosted ice block behind.
+  The phased block itself breaks like a vanilla block: aim at a part where the host is exposed and it mines at host speed,
+  aim at an exposed phase and it mines as the phase material.
 - **Removing the phase**: empty bucket with left-click when feature 3 is on (right-click when it is off). Solid phases cannot be collected.
 - **Placement absorption**: point an ice/obsidian item at a waterloggable block to fill it; place a waterloggable block into a tile holding
   ice/obsidian/a lava source to absorb that phase.
 - **Collision**: ice and obsidian phases are full-cube (matching the "phase fills the host's gaps" visuals); lava adds no collision.
 - **Mining the phase directly**: when the crosshair points at an exposed phase, mining speed and drops follow the phase material
   (obsidian needs a diamond pickaxe; ice melts to water without silk touch; frosted ice has no item).
+- **Full-cube hosts**: leaves, copper grates and mangrove roots (whose vanilla model already fills the whole 16³ cube) render as
+  the phase material when phased — otherwise the overlay would be hidden inside the host model. `phase=none`/`lava` still show the host.
 
 ### Feature 2 — cauldron behaviour (server-side only, vanilla-representable part)
 
@@ -140,6 +168,10 @@ Lava cauldron + water drops one obsidian and empties; water cauldron + lava drop
 empty cauldrons collect only **directly adjacent** source fluid; concrete powder + water cauldron hardens into 16 coloured concretes
 (one level each); powder-snow cauldron + water/lava becomes a water cauldron; dispensers fill/empty cauldrons and bottles;
 hoppers move liquid items in and out of fluid cauldrons.
+
+With feature 3 on, buckets interact with cauldrons the "liquid item" way: **left-click** a water/lava cauldron with an empty bucket
+to empty the whole cauldron and drop the matching liquid item; right-click filling is disabled (the bucket is never swapped away);
+pouring a liquid item into an empty/partially filled cauldron still fills it but consumes one item with no bucket returned.
 **Not** included: potion cauldrons, dyed-water cauldrons, obsidian-block cauldrons — all need block entities.
 
 ### Feature 3 — player ↔ liquid interaction (**required on both sides**)
@@ -168,8 +200,12 @@ Removing this mod loses every phase. It does not interoperate with generic fluid
 Phase rendering overrides vanilla blockstate JSONs, so resource packs/mods that rewrite those files conflict.
 Under the 26.x experimental redstone evaluator (`REDSTONE_EXPERIMENTS`) redstone-phase blocks are not guaranteed to match vanilla wire behaviour.
 Redstone-phase composites are **not registered on 1.21.1 yet** (host shape tables still return null for composite states there); the other five
-versions provide them for 41 stair/slab/wall/fence hosts. Composites render as a full 16³ cube textured with sparse, transparent-background
-redstone lines (cutout) and have **no item form**; they are only created through redstone-dust/phase-block interactions.
+versions provide them for 41 stair/slab/wall/fence hosts. Composites render as **the vanilla host model with a full-cube redstone-dust shell on top**:
+the shell uses the real vanilla `redstone_dust_dot` texture tinted at power 15, transparent pixels let the host show through (cutout), and they have
+**no item form**; they are only created through redstone-dust/phase-block interactions.
+Phased blocks with a solid phase look like a full cube of that material, but collision and mining still follow the host: aim at the exposed host and
+it mines at host speed, aim at the exposed phase and it mines as the phase material (obsidian still needs a diamond pickaxe — that slowness is intended).
+Full-cube hosts (leaves, copper grates, mangrove roots) show the phase material instead of the host texture while phased.
 1.19.4/1.20.1 use **Statement** for state injection (shipped as a dependency).
 
 ### Licence
