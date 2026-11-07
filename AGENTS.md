@@ -141,3 +141,6 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 5. **相瞄准的判定口径不能改成"合并轮廓 vs 相区域"**：相区域的外表面就落在方块边界上，与合并轮廓（=整格）的命中点重合，
    比较恒成立 → 任何瞄准都算挖相（历史 bug：含固相方块"怎么都挖不掉"）。现在用宿主轮廓（`phase=none` 兄弟状态）
    与相区域比距离，并保证形状表型宿主不会因查不到含相状态而退化成空形状。
+6. **红石相组合方块没有 `phase` 属性**（宿主子类 + `POWER`）。`PhaseHelper.withPhase` 对没有该属性的状态原样返回
+   （直接 `setValue` 会抛 `IllegalArgumentException`）；需要宿主轮廓时走 `RedstoneBlocks.hostStateOf` 换回宿主状态。
+   `PhaseTargeting.isPhaseMineable` 同时涵盖固相与红石相，两条路径都必须能安全取到宿主形状。

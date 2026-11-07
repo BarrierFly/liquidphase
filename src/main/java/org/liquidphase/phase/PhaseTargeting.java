@@ -55,9 +55,20 @@ public final class PhaseTargeting {
      * {@return 宿主轮廓（相=none 的同一状态）}
      * 形状表型的宿主（栅栏/墙/玻璃板等）按"构造时的状态集合"建表，含相状态查不到会返回 null；
      * 一律用 phase=none 的兄弟状态查询，既避开 null 也保证相区域 = 宿主真正留出的空隙。
+     * <p>
+     * 红石相组合方块没有 phase 属性：换回宿主方块的对应状态（属性逐名拷贝）再取形状。
      */
     public static VoxelShape hostOutline(BlockState state) {
-        BlockState host = PhaseHelper.withPhase(state, Phase.NONE);
+        BlockState host;
+        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(state)) {
+            host = org.liquidphase.redstone.RedstoneBlocks.hostStateOf(state);
+            // 未登记的组合方块（hostStateOf 返回空气）→ 用自身形状，避免把整格都算成相区域。
+            if (host.isAir()) {
+                host = state;
+            }
+        } else {
+            host = PhaseHelper.withPhase(state, Phase.NONE);
+        }
         return host.getShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO, CollisionContext.empty());
     }
 

@@ -67,8 +67,16 @@ public final class PhaseHelper {
         return getPhase(state).isSolid();
     }
 
-    /** 带相写入；水相相属性互斥（waterlogged=true ⟺ phase=none）。 */
+    /**
+     * 带相写入；水相相属性互斥（waterlogged=true ⟺ phase=none）。
+     * <p>
+     * 没有 phase 属性的状态（红石相组合方块是宿主子类 + POWER，不带 phase）原样返回：
+     * 直接 setValue 会抛 IllegalArgumentException。
+     */
     public static BlockState withPhase(BlockState state, Phase phase) {
+        if (!state.hasProperty(PHASE)) {
+            return state;
+        }
         BlockState result = state.setValue(PHASE, phase);
         if (result.hasProperty(BlockStateProperties.WATERLOGGED)) {
             result = result.setValue(BlockStateProperties.WATERLOGGED, phase == Phase.NONE && result.getValue(BlockStateProperties.WATERLOGGED));
