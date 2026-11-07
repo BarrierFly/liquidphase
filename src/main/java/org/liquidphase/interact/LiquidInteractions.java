@@ -189,7 +189,8 @@ public final class LiquidInteractions {
         boolean liquidInteraction = LiquidPhaseConfig.get().liquidInteraction;
 
         if (LiquidPhaseConfig.get().cauldronAutomation && frontState.getBlock() instanceof AbstractCauldronBlock) {
-            if (frontState.getBlock() == Blocks.WATER_CAULDRON && frontState.getValue(LayeredCauldronBlock.LEVEL) >= 3) {
+            if (frontState.getBlock() == Blocks.WATER_CAULDRON
+                && frontState.getValue(LayeredCauldronBlock.LEVEL) >= LayeredCauldronBlock.MAX_FILL_LEVEL) {
                 level.setBlock(front, Blocks.CAULDRON.defaultBlockState(), Block.UPDATE_ALL);
                 level.playSound(null, front, SoundEvents.BUCKET_FILL, SoundSource.BLOCKS, 1.0F, 1.0F);
                 return consumeWithRemainderHelper(source, stack, new ItemStack(Items.WATER_BUCKET));

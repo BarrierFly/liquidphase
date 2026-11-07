@@ -39,7 +39,7 @@ public final class CompositeBlocks {
             if (BuiltInRegistries.BLOCK.containsKey(id)) {
                 continue;
             }
-            composite = CompositeFactories.create(host, null);
+            composite = create(host, null);
             if (composite == null) {
                 continue;
             }
@@ -50,7 +50,7 @@ public final class CompositeBlocks {
             if (BuiltInRegistries.BLOCK.containsKey(id)) {
                 continue;
             }
-            composite = CompositeFactories.create(host, ResourceKey.create(Registries.BLOCK, id));
+            composite = create(host, ResourceKey.create(Registries.BLOCK, id));
             if (composite == null) {
                 continue;
             }
@@ -60,7 +60,7 @@ public final class CompositeBlocks {
             if (BuiltInRegistries.BLOCK.containsKey(id)) {
                 continue;
             }
-            composite = CompositeFactories.create(host, ResourceKey.create(Registries.BLOCK, id));
+            composite = create(host, ResourceKey.create(Registries.BLOCK, id));
             if (composite == null) {
                 continue;
             }
@@ -73,6 +73,17 @@ public final class CompositeBlocks {
         }
         LiquidPhase.LOGGER.info("[Liquid Phase] registered {} redstone-phase composite blocks (states: {})",
             registered, Block.BLOCK_STATE_REGISTRY.size());
+    }
+
+    // 组合方块构造 + 注册（构造期给形状查询一个宿主上下文；initCache 在注册之后才跑，
+    // 那时 COMPOSITE_TO_HOST 已填好）。
+    private static Block create(Block host, ResourceKey<Block> id) {
+        RedstoneBlocks.beginBuilding(host);
+        try {
+            return CompositeFactories.create(host, id);
+        } finally {
+            RedstoneBlocks.endBuilding();
+        }
     }
 
     //? if 1.19.4 || 1.20.1 {

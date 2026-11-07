@@ -28,17 +28,32 @@ public final class LiquidPhase implements ModInitializer {
 
         if (config.phaseEnabled) {
             injectPhaseProperty();
-            // 里程碑 2：红石相组合方块（R1）。1.21.1 的宿主形状表在组合方块上仍会返回 null，
-            // 该版本暂时跳过注册（README/AGENTS 已注明），待形状兜底完善后开启。
-            //? if !(1.21.1) {
+            // 里程碑 2：红石相组合方块（R1）。
+            // 1.21.1 曾因宿主形状表对组合状态返回 null 而跳过注册；现在组合方块的选择框/碰撞/
+            // 支撑面/遮挡形状都显式按宿主回答，六个版本统一注册。
             CompositeBlocks.register();
-            //?}
         } else {
             LOGGER.info("[Liquid Phase] 双端功能已关闭（phase 属性未注入；旧存档中的相会被丢弃）");
         }
         LiquidInteractions.registerDispenserBehaviors();
         org.liquidphase.cauldron.CauldronBehaviorRegistration.register();
+        liquidphase$registerSelfTest();
         LOGGER.info("[Liquid Phase] initialized");
+    }
+
+    /**
+     * 自检接线（默认不生效）：JVM 属性 {@code -Dliquidphase.selftest=true} 或环境变量
+     * {@code LIQUIDPHASE_SELFTEST=true} 时，服务端启动完成后跑一次 {@code PhaseSelfTest}，
+     * 把 PASS/FAIL 写进日志。
+     */
+    private static void liquidphase$registerSelfTest() {
+        boolean enabled = Boolean.getBoolean("liquidphase.selftest")
+            || "true".equalsIgnoreCase(System.getenv("LIQUIDPHASE_SELFTEST"));
+        if (!enabled) {
+            return;
+        }
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STARTED.register(
+            org.liquidphase.selftest.PhaseSelfTest::run);
     }
 
     /**

@@ -7,6 +7,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.Level;
@@ -23,6 +24,7 @@ import net.minecraft.world.level.block.state.properties.IntegerProperty;
 import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import org.liquidphase.phase.PhaseCapable;
 
 /**
  * 红石相（§3.4，决策点 D10/R1 组合方块）的信号语义：
@@ -50,6 +52,42 @@ public final class RedstoneBlocks {
     private RedstoneBlocks() {
     }
 
+    /** {@return 组合方块对应的宿主方块（注册前尚未填表时用构造期 ThreadLocal 兜底）} */
+    public static Block hostBlockOf(Block composite) {
+        Block host = COMPOSITE_TO_HOST.get(composite);
+        if (host == null) {
+            host = BUILDING_HOST.get();
+        }
+        return host;
+    }
+
+    /** 构造期（组合方块实例还没注册进映射表）的宿主，见 {@code CompositeFactories.create}。 */
+    private static final ThreadLocal<Block> BUILDING_HOST = new ThreadLocal<>();
+
+    /** 组合方块实例构造前设置宿主，构造后清除（供形状查询在 initCache 期间使用）。 */
+    public static void beginBuilding(Block host) {
+        BUILDING_HOST.set(host);
+    }
+
+    public static void endBuilding() {
+        BUILDING_HOST.remove();
+    }
+
+    public static boolean isPhaseHostItem(ItemStack stack) {
+        return stack.getItem() instanceof BlockItem blockItem
+            && blockItem.getBlock() instanceof PhaseCapable
+            && HOST_TO_COMPOSITE.containsKey(blockItem.getBlock());
+    }
+
+    /** {@return 该状态是不是原版红石线} */
+    public static boolean isWire(BlockState state) {
+        //? if 26.3 {
+        /*return state.getBlock() instanceof RedstoneWireBlock;
+         *///?} else {
+        return state.getBlock() instanceof RedStoneWireBlock;
+        //?}
+    }
+
     // ------------------------------------------------------------------
     // 查询
     // ------------------------------------------------------------------
@@ -64,8 +102,26 @@ public final class RedstoneBlocks {
 
     /** {@return 宿主在该方向是否露出红石相（用宿主碰撞形状判定，§3.4）} */
     public static boolean exposed(BlockState state, Direction direction) {
-        VoxelShape host = state.getCollisionShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO, CollisionContext.empty());
+        VoxelShape host = hostOutline(state);
         return !Block.isFaceFull(host, direction);
+    }
+
+    /**
+     * {@return 宿主轮廓（phase=none 的兄弟状态；组合方块换回宿主方块）}
+     * <p>
+     * 不用含相/组合状态的形状：组合状态的 {@code getShape} 已被改成整格选择框（§3.4 交互箱），
+     * 用它判断"露出"会恒为 true。优先用宿主碰撞形状（固相真正挡住的面），查不到再退回视觉形状。
+     */
+    public static VoxelShape hostOutline(BlockState state) {
+        BlockState host = isRedstonePhase(state) ? hostStateOf(state) : state;
+        VoxelShape shape = host.getCollisionShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO, CollisionContext.empty());
+        if (shape == null || shape.isEmpty()) {
+            VoxelShape visual = host.getShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO, CollisionContext.empty());
+            if (visual != null && !visual.isEmpty()) {
+                shape = visual;
+            }
+        }
+        return shape == null ? net.minecraft.world.phys.shapes.Shapes.empty() : shape;
     }
 
     // ------------------------------------------------------------------
@@ -76,7 +132,17 @@ public final class RedstoneBlocks {
         if (direction == Direction.DOWN || !exposed(state, direction.getOpposite())) {
             return 0;
         }
-        return getPower(state);
+        int power = getPower(state);
+        if (power <= 0) {
+            return 0;
+        }
+        // 红石线互相之间每格 -1（原版规则）。direction 是"接收方 → 本方块"的方向
+        //（对齐 SignalGetter.getSignal 的语义），所以接收方在 direction.getOpposite()。
+        // 只有接收方是原版红石线时才衰减，灯/活塞/比较器等元件读到的仍是满功率。
+        if (isWire(level.getBlockState(pos.relative(direction.getOpposite())))) {
+            return power - 1;
+        }
+        return power;
     }
 
     public static int getDirectSignal(BlockState state, BlockGetter level, BlockPos pos, Direction direction) {
@@ -102,24 +168,20 @@ public final class RedstoneBlocks {
         }
     }
 
-    private static boolean isWire(BlockState state) {
-        //? if 26.3 {
-        /*return state.getBlock() instanceof RedstoneWireBlock;
-         *///?} else {
-        return state.getBlock() instanceof RedStoneWireBlock;
-        //?}
-    }
-
     private static int computeTargetPower(ServerLevel level, BlockPos pos, BlockState state) {
         int power = 0;
         for (Direction direction : Direction.values()) {
             BlockPos neighbourPos = pos.relative(direction);
             BlockState neighbour = level.getBlockState(neighbourPos);
             if (isWire(neighbour)) {
-                // 线→线直读，-1 衰减（原版规则）。
-                power = Math.max(power, neighbour.getValue(BlockStateProperties.POWER) - 1);
+                // 线→线直读，-1 衰减（原版规则）；被宿主覆盖的面不连接（§3.4）。
+                if (exposed(state, direction)) {
+                    power = Math.max(power, neighbour.getValue(BlockStateProperties.POWER) - 1);
+                }
             } else if (neighbour.getBlock() instanceof RedstonePhaseBlock) {
-                power = Math.max(power, getPower(neighbour) - 1);
+                if (exposed(state, direction)) {
+                    power = Math.max(power, getPower(neighbour) - 1);
+                }
             } else if (exposed(state, direction)) {
                 // 原版电源指向暴露面时供电（§3.4）。
                 power = Math.max(power, level.getSignal(neighbourPos, direction));
@@ -152,8 +214,8 @@ public final class RedstoneBlocks {
     /** {@return 宿主方块上与组合状态同名属性拷贝出的状态} */
     @SuppressWarnings({"unchecked", "rawtypes"})
     public static BlockState hostStateOf(BlockState composite) {
-        Block hostBlock = COMPOSITE_TO_HOST.get(composite.getBlock());
-        if (hostBlock == null) {
+        Block hostBlock = hostBlockOf(composite.getBlock());
+        if (hostBlock == null || hostBlock == Blocks.AIR) {
             return Blocks.AIR.defaultBlockState();
         }
         BlockState host = hostBlock.defaultBlockState();

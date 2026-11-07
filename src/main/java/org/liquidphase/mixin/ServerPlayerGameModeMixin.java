@@ -8,7 +8,6 @@ import net.minecraft.server.level.ServerPlayerGameMode;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import org.liquidphase.LiquidPhaseConfig;
-import org.liquidphase.phase.PhaseHelper;
 import org.liquidphase.phase.PhaseTargeting;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -52,16 +51,18 @@ public abstract class ServerPlayerGameModeMixin {
             return;
         }
         PhaseTargeting.mineLiquid(this.player, level, pos);
-        // 同步该格新状态给客户端并应答挖掘序列。
+        // 同步该格新状态给客户端（锅还在，只是内部液体被取走）。
+        // 注意：不能用 destroyAndAck —— 它会再调一次 destroyBlock，把刚恢复的空锅连锅砸掉。
+        // 序列应答由 ServerGamePacketListenerImpl.handlePlayerAction 在返回后统一处理（ackBlockChangesUpTo）。
         this.player.connection.send(new net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket(level, pos));
-        ((ServerPlayerGameMode) (Object) this).destroyAndAck(pos, sequence, "liquidphase liquid mined");
+        level.destroyBlockProgress(this.player.getId(), pos, -1);
         ci.cancel();
     }
 
     @Inject(method = "destroyBlock", at = @At("HEAD"), cancellable = true)
     private void liquidphase$minePhase(BlockPos pos, CallbackInfoReturnable<Boolean> cir) {
         BlockState state = this.liquidphase$level().getBlockState(pos);
-        if (!PhaseHelper.isSolidPhase(state)) {
+        if (!PhaseTargeting.isPhaseMineable(state)) {
             return;
         }
         if (!PhaseTargeting.isPhaseTarget(this.player, this.liquidphase$level(), pos)) {

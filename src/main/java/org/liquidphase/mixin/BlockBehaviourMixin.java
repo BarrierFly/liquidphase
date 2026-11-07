@@ -2,8 +2,9 @@ package org.liquidphase.mixin;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.BlockGetter;
-import net.minecraft.world.level.block.state.BlockBehaviour;
-import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.EmptyBlockGetter;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockBehaviour;import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
@@ -82,6 +83,50 @@ public abstract class BlockBehaviourMixin {
         if (cir.getReturnValue() == null && liquidphase$needsFallback(state)) {
             VoxelShape fallback = liquidphase$sibling(state).getOcclusionShape();
             cir.setReturnValue(fallback == null ? net.minecraft.world.phys.shapes.Shapes.empty() : fallback);
+        }
+    }
+    //?}
+
+    /**
+     * 红石相组合方块的遮挡形状 / 透光按宿主：组合状态的 {@code getShape} 已改成整格选择框（§3.4），
+     * 默认的 {@code getOcclusionShape = getShape} 与"整格 ⇒ 不透光"会让整格挡住邻面渲染、吃掉天光。
+     * <p>
+     * 这里用组合状态自己的**碰撞形状**（= 宿主的，红石相不加碰撞）代替宿主状态查询：
+     * {@code initCache} 在注册时就会跑，那时 {@code COMPOSITE_TO_HOST} 还没填，查表会拿到空气。
+     */
+    //? if 1.19.4 || 1.20.1 || 1.21.1 {
+    /*@Inject(method = "getOcclusionShape", at = @At("HEAD"), cancellable = true)
+    private void liquidphase$compositeOcclusion(BlockState state, BlockGetter level, BlockPos pos, CallbackInfoReturnable<VoxelShape> cir) {
+        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(state)) {
+            VoxelShape collision = state.getCollisionShape(level, pos);
+            cir.setReturnValue(collision == null ? Shapes.empty() : collision);
+        }
+    }
+     *///?} else {
+    @Inject(method = "getOcclusionShape", at = @At("HEAD"), cancellable = true)
+    private void liquidphase$compositeOcclusion(BlockState state, CallbackInfoReturnable<VoxelShape> cir) {
+        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(state)) {
+            VoxelShape collision = state.getCollisionShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
+            cir.setReturnValue(collision == null ? Shapes.empty() : collision);
+        }
+    }
+    //?}
+
+    // 透光判断：1.19.4/1.20.1 声明在 Block 上（另见 BlockSkylightMixin），1.21.1 起在 BlockBehaviour 上。
+    //? if 1.21.1 {
+    /*@Inject(method = "propagatesSkylightDown", at = @At("HEAD"), cancellable = true)
+    private void liquidphase$compositeSkylight(BlockState state, BlockGetter level, BlockPos pos, CallbackInfoReturnable<Boolean> cir) {
+        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(state)) {
+            VoxelShape collision = state.getCollisionShape(level, pos);
+            cir.setReturnValue((collision == null || !Block.isShapeFullBlock(collision)) && state.getFluidState().isEmpty());
+        }
+    }
+     *///?} else if 1.21.10 || 1.21.11 || 26.3 {
+    @Inject(method = "propagatesSkylightDown", at = @At("HEAD"), cancellable = true)
+    private void liquidphase$compositeSkylight(BlockState state, CallbackInfoReturnable<Boolean> cir) {
+        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(state)) {
+            VoxelShape collision = state.getCollisionShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
+            cir.setReturnValue((collision == null || !Block.isShapeFullBlock(collision)) && state.getFluidState().isEmpty());
         }
     }
     //?}

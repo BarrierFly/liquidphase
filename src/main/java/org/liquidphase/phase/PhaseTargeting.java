@@ -223,10 +223,12 @@ public final class PhaseTargeting {
         return fluid.isSource() && (fluid.is(Fluids.WATER) || fluid.is(Fluids.LAVA)) && state.getBlock() instanceof LiquidBlock;
     }
 
-    /** {@return 是否装了水/熔岩的炼药锅（水锅任意水位、熔岩锅）} */
+    /** {@return 是否装了水/熔岩的炼药锅（水锅要求满锅、熔岩锅总是满的）} */
     private static boolean isFilledCauldron(BlockState state) {
         if (state.getBlock() == net.minecraft.world.level.block.Blocks.WATER_CAULDRON) {
-            return state.getValue(net.minecraft.world.level.block.LayeredCauldronBlock.LEVEL) >= 1;
+            // 满锅才能取（与桶装水一致）：未满的锅用空桶左键不再有反应。
+            return state.getValue(net.minecraft.world.level.block.LayeredCauldronBlock.LEVEL)
+                >= net.minecraft.world.level.block.LayeredCauldronBlock.MAX_FILL_LEVEL;
         }
         return state.getBlock() == net.minecraft.world.level.block.Blocks.LAVA_CAULDRON;
     }

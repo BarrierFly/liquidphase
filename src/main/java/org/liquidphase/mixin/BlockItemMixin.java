@@ -74,14 +74,27 @@ public abstract class BlockItemMixin {
         if (hitState.is(net.minecraft.world.level.block.Blocks.REDSTONE_WIRE) && held instanceof PhaseCapable) {
             Block composite = org.liquidphase.redstone.RedstoneBlocks.HOST_TO_COMPOSITE.get(held);
             if (composite != null) {
-                BlockState cs = composite.defaultBlockState();
-                cs = cs.setValue(org.liquidphase.redstone.RedstoneBlocks.POWER,
-                    hitState.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.POWER));
-                if (cs.canSurvive(level, hitPos)) {
-                    level.setBlock(hitPos, cs, Block.UPDATE_ALL);
-                    liquidphase$consume(stack, player);
-                    cir.setReturnValue(liquidphase$success(level));
-                    return;
+                // 红石线不是可替换方块，原 context 的 getClickedPos() 会是线旁边那格；
+                // 用"强制替换点击格"的 context 让宿主按线所在格算出放置状态（朝向/半砖/连接态）。
+                BlockPlaceContext wireContext = new org.liquidphase.redstone.WirePlaceContext(level, player, context.getHand(), stack, hit);
+                BlockState hostState = held.getStateForPlacement(wireContext);
+                if (hostState != null) {
+                    BlockState cs = composite.defaultBlockState();
+                    for (net.minecraft.world.level.block.state.properties.Property<?> property : hostState.getProperties()) {
+                        if (cs.hasProperty(property)
+                            && property != net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED) {
+                            cs = org.liquidphase.redstone.RedstoneBlocks.copyValue(cs, property,
+                                org.liquidphase.redstone.RedstoneBlocks.valueOf(hostState, property));
+                        }
+                    }
+                    cs = cs.setValue(org.liquidphase.redstone.RedstoneBlocks.POWER,
+                        hitState.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.POWER));
+                    if (cs.canSurvive(level, hitPos)) {
+                        level.setBlock(hitPos, cs, Block.UPDATE_ALL);
+                        liquidphase$consume(stack, player);
+                        cir.setReturnValue(liquidphase$success(level));
+                        return;
+                    }
                 }
             }
         }

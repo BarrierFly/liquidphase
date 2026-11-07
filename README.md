@@ -38,9 +38,10 @@
 - 混凝土粉末 + 水锅 → 消耗 1 水位，1 个粉末换成对应颜色的混凝土（16 色）。
 - 细雪锅遇水/熔岩 → 满水锅。
 - 发射器：液体物品填锅、空桶抽锅/抽液体、玻璃瓶从水锅装水瓶；漏斗：流体锅 ↔ 液体物品。
-- **桶与锅**（功能三开启时）：手持空桶**左键**水锅/熔岩锅 → 整锅一次拆空并掉落对应液体物品；
-  右键取水被禁用（桶不再被换成液体物品，也不再凭空消失）；拿液体物品往空锅/未满水锅倾倒照常填锅，
-  消耗 1 个且不返还空桶。功能三关闭时全部回到原版桶语义。
+- **桶与锅**（功能三开启时）：手持空桶**左键**水锅/熔岩锅 → 整锅一次拆空并掉落对应液体物品，
+  **锅本身保留**；只有满锅才能取（水锅要求 3 级水位）。右键取水被禁用（桶不再被换成液体物品，
+  也不再凭空消失）；拿液体物品往空锅/未满水锅倾倒照常填锅，消耗 1 个且不返还空桶。
+  发射器空桶抽锅、漏斗抽锅同样按满锅口径。功能三关闭时全部回到原版桶语义。
 - **没有**药水锅、染色锅、装黑曜石的锅——这些需要方块实体，本版不做。
 
 ### 功能三：玩家与液体互动（**强制双端**）
@@ -76,10 +77,13 @@
 4. 空桶左键水源 → 掉落"水"物品；拿着它右键空气 → 放一个水源，物品消失、没有桶。
 5. 熔岩锅旁边倒水 → 掉黑曜石；水锅上倒熔岩 → 按水位掉石头/圆石/圆石台阶。
 6. 拿红石粉点楼梯 → 变成"含红石线的楼梯"：宿主模型照旧渲染，外面罩一层完整 16³ 的红石粉尘外壳
-   （透明底 cutout，贴图就是原版 `redstone_dust_dot` 按满功率染色，透明像素后面直接透出宿主材质），
-   按红石线规则衰减传递信号，被宿主遮住的面不输出；
-   破坏它 → 留下对应功率的红石线。组合方块**没有物品形态**，只能靠红石粉/液相方块交互生成。
-7. 拿空桶**左键**水锅/熔岩锅 → 整锅拆空、掉落"水"/"熔岩"物品；右键对着锅不再取水。
+   （透明底 cutout，贴图是铺满整面的疏松红石线纹理，透明像素后面直接透出宿主材质），
+   准星选择框覆盖整格；按红石线规则衰减传递信号（对相邻红石线 -1，对灯/活塞等元件满功率），
+   被宿主遮住的面不输出；破坏它 → 留下对应功率的红石线。
+   也可以反过来：拿楼梯/台阶等可含水方块**右键点红石线所在格**，直接变成红石相组合方块。
+   组合方块**没有物品形态**，只能靠红石粉/液相方块交互生成。
+7. 拿空桶**左键**水锅/熔岩锅 → 整锅拆空、掉落"水"/"熔岩"物品；**锅本身保留**。
+   只有满锅才能取（水锅必须是 3 级）；右键对着锅不再取水。
 
 ---
 
@@ -89,8 +93,9 @@
 - 本 mod 独占"相"语义，**不与 Fluidlogged 这类通用 fluidlogged mod 互通**（共存不崩，但互相看不见对方的数据）。
 - 相位渲染用 blockstate JSON 覆盖（multipart + 内缩模型），与其他**重写过原版 blockstate JSON 的资源包/模组**会冲突。
 - 26.x 的实验性红石评估器（`REDSTONE_EXPERIMENTS`）下，含红石相方块**不保证**与原版红石线行为一致。
-- **1.21.1 暂不注册红石相组合方块**（该版本宿主形状表对组合状态仍返回 null，形状兜底完善后开启）；
-  其余 5 个版本的红石相在楼梯/台阶/墙/栅栏共 41 种宿主上可用。
+- 红石相组合方块在**全部 6 个版本**都可用（楼梯/台阶/墙/栅栏共 41 种宿主）。
+  1.21.1 曾经因宿主形状表对组合状态返回 null 而跳过注册；现在组合方块的
+  选择框/碰撞/支撑面/遮挡形状都显式按宿主回答，六个版本启动与自检均通过。
 - 含固相方块的**相覆盖层会让方块看起来像整格黑曜石/冰**（内缩 0.25px 的立方体），但碰撞与挖掘仍按宿主：
   准星落在宿主露出的部分就挖宿主，落在相露出的部分就挖相。黑曜石相需要钻石镐才能挖动相本身
   （没有钻石镐时按黑曜石速度计算，非常慢——这是有意的设计，不是卡死）。
@@ -103,6 +108,25 @@
 
 ## 变更记录
 
+- **0.1.3**：修复五个实机问题——
+  ① 红石相组合方块的**准星选择框只有宿主形状**（楼梯/台阶上点不中"红石外壳"）：选择框改为完整 16³，
+     碰撞仍按宿主、不额外加碰撞；遮挡/透光同步按宿主（不会挡邻面渲染、不吃天光）；
+  ② 红石相贴图只有正中一点：恢复 0.1.1 的**疏松红石线图案铺满正脸**（16×16、透明底、三档红色、
+     四边接缝对称可拼贴），不再使用原版 `redstone_dust_dot`；
+  ③ 红石相向四周**红石线输出未衰减**：组合方块 → 相邻原版红石线/其他组合方块按线规则 -1，
+     指向灯/活塞/比较器等元件时仍输出满功率；被宿主覆盖的面既不输出也不连接；
+  ④ **无法向红石线所在格放置可含水方块**：红石线自身的右键（点/十字切换）会先吃掉交互，
+     现在手持可组合宿主时放过右键，并按线所在格计算宿主放置状态（朝向/半砖/连接态），功率沿用原线；
+  ⑤ 炼药锅取水：空桶左键取水后**锅不再被一起破坏**（只取走水、留下空锅），
+     且**只有满锅（水锅 LEVEL=3）才能取**；漏斗/发射器抽锅统一按满锅口径。
+  一并修复：**瞄准红石外壳挖掘**走不到 `mineRedstonePhase`（服务端守卫只认固相）——
+  现在瞄准红石外壳掉红石粉、原地留宿主；瞄准宿主露出部分则正常破坏宿主并留下对应功率红石线。
+  组合方块的战利品表显式指向宿主（否则 `liquidphase:blocks/redstone_*` 不存在 → 破坏不掉落）。
+  **1.21.1 重新启用红石相组合方块**（形状改为显式按宿主回答），六个版本现在都可用。
+  新增**自动化自检**：`-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端，
+  会在启动完成后跑 25 项断言（注册表、选择框/碰撞/遮挡、信号衰减与覆盖面、炼药锅取水门槛）并打 `PASS/FAIL`；
+  六个版本实测 25/25 通过。
+  版本号 0.1.2 → 0.1.3。
 - **0.1.2**：修复四个实机问题——
   ① 含固相（黑曜石/冰）的整格宿主（树叶、铜格栅、红树根）看不到相：改为整格渲染相材质，
      `phase=none`/`lava` 仍显示宿主；
@@ -172,7 +196,8 @@ empty cauldrons collect only **directly adjacent** source fluid; concrete powder
 hoppers move liquid items in and out of fluid cauldrons.
 
 With feature 3 on, buckets interact with cauldrons the "liquid item" way: **left-click** a water/lava cauldron with an empty bucket
-to empty the whole cauldron and drop the matching liquid item; right-click filling is disabled (the bucket is never swapped away);
+to empty the whole cauldron and drop the matching liquid item **without breaking the cauldron itself**; only a full cauldron
+(water cauldron at level 3) can be emptied. Right-click filling is disabled (the bucket is never swapped away);
 pouring a liquid item into an empty/partially filled cauldron still fills it but consumes one item with no bucket returned.
 **Not** included: potion cauldrons, dyed-water cauldrons, obsidian-block cauldrons — all need block entities.
 
@@ -201,10 +226,14 @@ Existing phases in old worlds are then **lost permanently** (vanilla drops unkno
 Removing this mod loses every phase. It does not interoperate with generic fluidlogged mods (coexistence is crash-free, data is not shared).
 Phase rendering overrides vanilla blockstate JSONs, so resource packs/mods that rewrite those files conflict.
 Under the 26.x experimental redstone evaluator (`REDSTONE_EXPERIMENTS`) redstone-phase blocks are not guaranteed to match vanilla wire behaviour.
-Redstone-phase composites are **not registered on 1.21.1 yet** (host shape tables still return null for composite states there); the other five
-versions provide them for 41 stair/slab/wall/fence hosts. Composites render as **the vanilla host model with a full-cube redstone-dust shell on top**:
-the shell uses the real vanilla `redstone_dust_dot` texture tinted at power 15, transparent pixels let the host show through (cutout), and they have
-**no item form**; they are only created through redstone-dust/phase-block interactions.
+Redstone-phase composites are available on **all six versions** (41 stair/slab/wall/fence hosts). 1.21.1 used to skip
+them because host shape tables returned null for composite states; the composite now answers outline/collision/support/
+occlusion explicitly from its host, and all six versions pass startup + self-test. Composites render as **the vanilla host
+model with a full-cube redstone-dust shell on top**:
+the shell uses a porous redstone-wire texture that fills each face, transparent pixels let the host show through (cutout), the crosshair outline
+covers the whole cube (collision stays with the host), and they have **no item form**; they are only created through redstone-dust/phase-block
+interactions (either dust on a host, or a host item right-clicked onto a redstone wire). Signals decay by 1 into neighbouring wires/composites
+but stay at full power for lamps, pistons and other components.
 Phased blocks with a solid phase look like a full cube of that material, but collision and mining still follow the host: aim at the exposed host and
 it mines at host speed, aim at the exposed phase and it mines as the phase material (obsidian still needs a diamond pickaxe — that slowness is intended).
 Full-cube hosts (leaves, copper grates, mangrove roots) show the phase material instead of the host texture while phased.

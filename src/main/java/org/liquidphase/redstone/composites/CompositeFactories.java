@@ -21,12 +21,15 @@ public final class CompositeFactories {
 
     private static BlockBehaviour.Properties properties(Block host, ResourceKey<Block> id) {
         //? if 1.19.4 || 1.20.1 {
-        /*return BlockBehaviour.Properties.copy(host);
+        /*return BlockBehaviour.Properties.copy(host).dropsLike(host);
          *///?} elif 1.21.1 {
-        /*return BlockBehaviour.Properties.ofFullCopy(host);
+        /*return BlockBehaviour.Properties.ofFullCopy(host).dropsLike(host);
          *///?} else {
-        // 1.21.11+/26.3：Properties 必须带注册键，否则构造时 effectiveDrops 抛 "Block id not set"
-        return BlockBehaviour.Properties.ofFullCopy(host).setId(id);
+        // 1.21.11+/26.3：Properties 必须带注册键，否则构造时 effectiveDrops 抛 "Block id not set"；
+        // 战利品表显式指向宿主（默认会查 liquidphase:blocks/redstone_xxx，那个表不存在 → 破坏不掉落）。
+        return BlockBehaviour.Properties.ofFullCopy(host)
+            .setId(id)
+            .overrideLootTable(host.getLootTable());
         //?}
     }
 

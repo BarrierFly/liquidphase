@@ -53,14 +53,81 @@ public abstract class BlockStateBaseMixin {
         }
     }
 
-    // ------------------------------------------------------------------
-    // 碰撞（决策点 D7）：固体相 = 整格实心（相填满宿主空隙，与视觉一致）
-    // ------------------------------------------------------------------
+    /**
+     * 红石相组合方块的"交互箱"（准星选择框）= 完整 16³（§3.4：红石相模型为完整 1×1×1）。
+     * 只改 outline（getShape）；碰撞仍按宿主（getCollisionShape），红石相不加碰撞。
+     * <p>
+     * 注意：父类默认 {@code getCollisionShape = getShape}、{@code getBlockSupportShape = getCollisionShape}，
+     * 而楼梯/台阶/墙/栅栏都没覆写它们，所以只改 getShape 会连带把碰撞/支撑面变成整格。
+     * 这里把碰撞与支撑面（含缓存用的两参版本）都换回宿主形状；遮挡/透光在块级修正。
+     */
+    @Inject(method = "getShape(Lnet/minecraft/world/level/BlockGetter;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/phys/shapes/CollisionContext;)Lnet/minecraft/world/phys/shapes/VoxelShape;",
+            at = @At("HEAD"), cancellable = true)
+    private void liquidphase$redstonePhaseOutline(net.minecraft.world.level.BlockGetter level, BlockPos pos,
+                                                  net.minecraft.world.phys.shapes.CollisionContext context,
+                                                  CallbackInfoReturnable<net.minecraft.world.phys.shapes.VoxelShape> cir) {
+        BlockState self = (BlockState) (Object) this;
+        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {
+            cir.setReturnValue(net.minecraft.world.phys.shapes.Shapes.block());
+        }
+    }
+
+    @Inject(method = "getCollisionShape(Lnet/minecraft/world/level/BlockGetter;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/phys/shapes/CollisionContext;)Lnet/minecraft/world/phys/shapes/VoxelShape;",
+            at = @At("HEAD"), cancellable = true)
+    private void liquidphase$redstonePhaseCollision(net.minecraft.world.level.BlockGetter level, BlockPos pos,
+                                                    net.minecraft.world.phys.shapes.CollisionContext context,
+                                                    CallbackInfoReturnable<net.minecraft.world.phys.shapes.VoxelShape> cir) {
+        BlockState self = (BlockState) (Object) this;
+        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {
+            cir.setReturnValue(shapeOfHost(self, level, pos, false));
+        }
+    }
 
     @Inject(method = "getCollisionShape(Lnet/minecraft/world/level/BlockGetter;Lnet/minecraft/core/BlockPos;)Lnet/minecraft/world/phys/shapes/VoxelShape;",
+            at = @At("HEAD"), cancellable = true)
+    private void liquidphase$redstonePhaseCollisionCached(net.minecraft.world.level.BlockGetter level, BlockPos pos,
+                                                          CallbackInfoReturnable<net.minecraft.world.phys.shapes.VoxelShape> cir) {
+        BlockState self = (BlockState) (Object) this;
+        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {
+            cir.setReturnValue(shapeOfHost(self, level, pos, false));
+        }
+    }
+
+    @Inject(method = "getBlockSupportShape(Lnet/minecraft/world/level/BlockGetter;Lnet/minecraft/core/BlockPos;)Lnet/minecraft/world/phys/shapes/VoxelShape;",
+            at = @At("HEAD"), cancellable = true)
+    private void liquidphase$redstonePhaseSupport(net.minecraft.world.level.BlockGetter level, BlockPos pos,
+                                                  CallbackInfoReturnable<net.minecraft.world.phys.shapes.VoxelShape> cir) {
+        BlockState self = (BlockState) (Object) this;
+        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {
+            cir.setReturnValue(shapeOfHost(self, level, pos, false));
+        }
+    }
+
+    /**
+     * 组合方块 → 宿主形状。{@code collision=false} 取碰撞形状，{@code collision=true} 取视觉形状。
+     * 宿主查不到时返回空形状（绝不返回整格），避免支撑面被误判成整格。
+     */
+    private static net.minecraft.world.phys.shapes.VoxelShape shapeOfHost(BlockState composite,
+                                                                          net.minecraft.world.level.BlockGetter level,
+                                                                          BlockPos pos,
+                                                                          boolean collision) {
+        BlockState host = org.liquidphase.redstone.RedstoneBlocks.hostStateOf(composite);
+        if (host.isAir()) {
+            return net.minecraft.world.phys.shapes.Shapes.empty();
+        }
+        net.minecraft.world.phys.shapes.VoxelShape shape =
+            host.getCollisionShape(level, pos, net.minecraft.world.phys.shapes.CollisionContext.empty());
+        if (!collision && (shape == null || shape.isEmpty())) {
+            shape = host.getShape(level, pos, net.minecraft.world.phys.shapes.CollisionContext.empty());
+        }
+        return shape == null ? net.minecraft.world.phys.shapes.Shapes.empty() : shape;
+    }
+
+    /** 决策点 D7：固体相（冰/霜冰/黑曜石）= 整格实心（与"相填满宿主空隙"的视觉一致）。 */
+    @Inject(method = "getCollisionShape(Lnet/minecraft/world/level/BlockGetter;Lnet/minecraft/core/BlockPos;)Lnet/minecraft/world/phys/shapes/VoxelShape;",
             at = @At("RETURN"), cancellable = true)
-    private void liquidphase$getCollisionShape(net.minecraft.world.level.BlockGetter level, BlockPos pos,
-                                               CallbackInfoReturnable<net.minecraft.world.phys.shapes.VoxelShape> cir) {
+    private void liquidphase$solidPhaseCollision(net.minecraft.world.level.BlockGetter level, BlockPos pos,
+                                                 CallbackInfoReturnable<net.minecraft.world.phys.shapes.VoxelShape> cir) {
         BlockState self = (BlockState) (Object) this;
         if (PhaseHelper.isSolidPhase(self) && !self.hasOffsetFunction()) {
             cir.setReturnValue(net.minecraft.world.phys.shapes.Shapes.block());
@@ -75,7 +142,7 @@ public abstract class BlockStateBaseMixin {
     private void liquidphase$getDestroyProgress(Player player, net.minecraft.world.level.BlockGetter level, BlockPos pos,
                                                 CallbackInfoReturnable<Float> cir) {
         BlockState self = (BlockState) (Object) this;
-        if (PhaseHelper.isSolidPhase(self) && level instanceof net.minecraft.world.level.Level actualLevel
+        if (PhaseTargeting.isPhaseMineable(self) && level instanceof net.minecraft.world.level.Level actualLevel
             && PhaseTargeting.isPhaseTarget(player, actualLevel, pos)) {
             cir.setReturnValue(PhaseTargeting.pseudoState(self).getDestroyProgress(player, level, pos));
         }

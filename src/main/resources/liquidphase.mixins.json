@@ -5,6 +5,7 @@
   "minVersion": "0.8",
   "mixins": [
     "BlockBehaviourMixin",
+    "BlockSkylightMixin",
     "BlockStateBaseMixin",
     "BlockItemMixin",
     "BucketItemMixin",
@@ -27,6 +28,7 @@
     "CacheShapeGuardMixin"
   ],
   "client": [
+    "ClientLiquidMineMixin",
     "EntityPickMixin"
   ],
   "injectors": {

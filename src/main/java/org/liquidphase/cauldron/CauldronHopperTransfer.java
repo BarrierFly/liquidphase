@@ -34,29 +34,25 @@ public final class CauldronHopperTransfer {
             return false;
         }
 
-        // 抽出：上方是流体锅。
+        // 抽出：上方是流体锅（满锅才抽，与玩家用桶取水口径一致）。
         BlockPos above = pos.above();
         BlockState aboveState = level.getBlockState(above);
         ItemStack extracted = null;
-        if (aboveState.getBlock() == Blocks.WATER_CAULDRON && aboveState.getValue(LayeredCauldronBlock.LEVEL) >= 1) {
-            int newLevel = aboveState.getValue(LayeredCauldronBlock.LEVEL) - 1;
-            level.setBlock(above, newLevel == 0
-                ? Blocks.CAULDRON.defaultBlockState()
-                : aboveState.setValue(LayeredCauldronBlock.LEVEL, newLevel), Block.UPDATE_ALL);
+        if (aboveState.getBlock() == Blocks.WATER_CAULDRON
+            && aboveState.getValue(LayeredCauldronBlock.LEVEL) >= LayeredCauldronBlock.MAX_FILL_LEVEL) {
             extracted = new ItemStack(Items.WATER_BUCKET);
-            level.playSound(null, above, SoundEvents.BUCKET_FILL, SoundSource.BLOCKS, 1.0F, 1.0F);
         } else if (aboveState.getBlock() == Blocks.LAVA_CAULDRON) {
-            level.setBlock(above, Blocks.CAULDRON.defaultBlockState(), Block.UPDATE_ALL);
             extracted = new ItemStack(Items.LAVA_BUCKET);
-            level.playSound(null, above, SoundEvents.BUCKET_FILL_LAVA, SoundSource.BLOCKS, 1.0F, 1.0F);
         }
         if (extracted != null) {
-            if (insertIntoHopper(hopper, extracted)) {
-                return true;
+            // 先确认漏斗有位置再动锅，避免"抽空了却放不进去"。
+            if (!insertIntoHopper(hopper, extracted)) {
+                return false;
             }
-            // 放不进漏斗：不抽取（保持原状），返回 false 让原版继续。
-            restoreCauldron(level, above);
-            return false;
+            level.setBlock(above, Blocks.CAULDRON.defaultBlockState(), Block.UPDATE_ALL);
+            level.playSound(null, above, extracted.is(Items.LAVA_BUCKET) ? SoundEvents.BUCKET_FILL_LAVA : SoundEvents.BUCKET_FILL,
+                SoundSource.BLOCKS, 1.0F, 1.0F);
+            return true;
         }
 
         // 插入：指向的下方是流体锅，漏斗里有液体物品。
@@ -72,13 +68,6 @@ public final class CauldronHopperTransfer {
             }
         }
         return false;
-    }
-
-    private static void restoreCauldron(Level level, BlockPos pos) {
-        BlockState state = level.getBlockState(pos);
-        if (state.getBlock() == Blocks.CAULDRON) {
-            // 回滚到"至少 1 格水"的状态没有记录，直接恢复为原样由调用方避免：此处为安全空实现。
-        }
     }
 
     /** {@return 产物是否成功放进漏斗物品栏} */
