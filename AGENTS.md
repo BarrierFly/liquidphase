@@ -118,6 +118,19 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 3. 收集 `versions/*/build/libs/liquidphase-*.jar`（不含 sources）到 `dist/`；
 4. 更新 `README.md` 的版本支持与已知限制，然后提交。
 
+> ⚠️ **发布前必须核对 jar 里真的是新代码**。踩过的坑：`versions/<版本>/build/libs/` 下可能残留旧版本的
+> jar（同名同版本号、时间戳更早），Gradle 增量判定会因为输入未变而跳过 `jar`/`remapJar`，结果新 dist 拷的
+> 还是旧包——表现为"装了新 jar 但 bug 依旧"。核对方法（以 1.21.11 为例）：
+>
+> ```bash
+> ls -la --time-style=+%H:%M versions/1.21.11/build/libs/*.jar   # 看时间戳
+> python -c "import zipfile;print(len(zipfile.ZipFile('dist/liquidphase-X+1.21.11.jar').read('org/liquidphase/phase/PhaseHelper.class')))"
+> # 或直接反编译确认改动在：javap -p -c <解包后的 PhaseHelper.class> | less
+> ```
+>
+> 必要时先 `rm` 掉 `build/libs/liquidphase-<版本>.jar` 再 `./gradlew :<版本>:build`。
+> `build/devlibs/` 里的是**未 remap 的开发包**，不能作为发布物。
+
 ## 7. 已知限制（待办）
 
 0. **启动崩溃已修**：宿主类覆写了块级 `getCollisionShape` / 状态级两参版本时，`BlockStateBase$Cache`
