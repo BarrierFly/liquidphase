@@ -47,6 +47,8 @@ public final class PhaseSelfTest {
             checkRegistry();
             checkShape(level, base);
             checkSignal(level, base);
+            checkInstantUpdate(level, base);
+            checkPlaceIntoWire(level, base);
             checkCauldron(level, base);
         } catch (Throwable t) {
             failed++;
@@ -122,7 +124,7 @@ public final class PhaseSelfTest {
             return;
         }
         BlockPos pos = base.offset(0, 1, 0);
-        level.setBlock(pos, composite.defaultBlockState().setValue(RedstoneBlocks.POWER, 15), Block.UPDATE_ALL);
+        level.setBlock(pos, composite.defaultBlockState(), Block.UPDATE_ALL);
 
         // 默认橡木楼梯朝北：北面被台阶踏面盖满（按设计不输出），南面才是露出的。
         assertTrue("stair host hides NORTH face when facing north", !RedstoneBlocks.exposed(
@@ -130,12 +132,22 @@ public final class PhaseSelfTest {
         assertTrue("stair host exposes SOUTH face when facing north", RedstoneBlocks.exposed(
             level.getBlockState(pos), Direction.SOUTH));
 
-        // 南侧放红石线 → 以 NORTH 查询（接收方在南）→ 15 - 1 = 14
-        // 红石线需要下方有支撑，否则放置后立刻掉落。
+        // 信号现在是即时结算的：手动 setValue(POWER,15) 会被立刻重算回真实值，
+        // 所以必须放真实电源，而且只能放在**露出的**南面。
         level.setBlock(pos.south().below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
-        level.setBlock(pos.south(), Blocks.REDSTONE_WIRE.defaultBlockState()
-            .setValue(BlockStateProperties.POWER, 14), Block.UPDATE_ALL);
+        level.setBlock(pos.south(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        assertTrue("composite powered to 15 by redstone block on exposed face (got "
+                + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
+            RedstoneBlocks.getPower(level.getBlockState(pos)) == 15);
+
+        // 南侧换成红石线 → 以 NORTH 查询（接收方在南）→ 15 - 1 = 14
+        // 红石线本身不供电；组合方块仍有北侧之外的电源吗？没有 —— 所以这里改为
+        // 让线自己由红石块充能，再验证"组合方块 → 线"的 -1。
+        level.setBlock(pos.south(), Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
         assertTrue("wire placed south", level.getBlockState(pos.south()).is(Blocks.REDSTONE_WIRE));
+        // 给组合方块重新供上电（南面现在是线，改放一个暴露的电源在下方？不行：DOWN 不输出）。
+        // 用"上方"作为暴露面：楼梯 UP 面是露出的。
+        level.setBlock(pos.above(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
         int toWire = level.getSignal(pos, Direction.NORTH);
         assertTrue("signal into wire is power-1 (got " + toWire + ")", toWire == 14);
 
@@ -150,10 +162,62 @@ public final class PhaseSelfTest {
         if (slabComposite != null) {
             BlockPos slabPos = base.offset(2, 1, 0);
             level.setBlock(slabPos, slabComposite.defaultBlockState()
-                .setValue(SlabBlock.TYPE, SlabType.DOUBLE)
-                .setValue(RedstoneBlocks.POWER, 15), Block.UPDATE_ALL);
+                .setValue(SlabBlock.TYPE, SlabType.DOUBLE), Block.UPDATE_ALL);
+            level.setBlock(slabPos.south().below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+            level.setBlock(slabPos.south(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
             assertTrue("covered face does not output", level.getSignal(slabPos, Direction.NORTH) == 0);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 供电即时性：邻居变化后同一 tick 内功率就已更新（不走计划刻）
+    // ------------------------------------------------------------------
+
+    private static void checkInstantUpdate(ServerLevel level, BlockPos base) {
+        Block composite = RedstoneBlocks.HOST_TO_COMPOSITE.get(Blocks.OAK_STAIRS);
+        if (composite == null) {
+            return;
+        }
+        BlockPos pos = base.offset(4, 1, 0);
+        level.setBlock(pos, composite.defaultBlockState(), Block.UPDATE_ALL);
+        // 南面放一个能供电的方块（红石块，满功率 15，不依赖方向）
+        BlockPos source = pos.south();
+        level.setBlock(source, Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        assertTrue("power updates immediately on neighbor change (got "
+                + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
+            RedstoneBlocks.getPower(level.getBlockState(pos)) == 15);
+        // 移走电源后同样立即归零
+        level.setBlock(source, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        assertTrue("power drops immediately when source removed (got "
+                + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
+            RedstoneBlocks.getPower(level.getBlockState(pos)) == 0);
+    }
+
+    // ------------------------------------------------------------------
+    // 向红石线所在格放置宿主方块
+    // ------------------------------------------------------------------
+
+    private static void checkPlaceIntoWire(ServerLevel level, BlockPos base) {
+        BlockPos pos = base.offset(6, 1, 0);
+        level.setBlock(pos.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(pos, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
+        // 电源放南侧：默认楼梯朝北，北面被盖住（按设计不供电），南面才是露出的。
+        level.setBlock(pos.south().below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(pos.south(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        assertTrue("wire placed for placement test", level.getBlockState(pos).is(Blocks.REDSTONE_WIRE));
+        int wirePower = level.getBlockState(pos).getValue(BlockStateProperties.POWER);
+        assertTrue("wire powered by redstone block (got " + wirePower + ")", wirePower == 15);
+
+        // 走与 RedstoneWireUseMixin 相同的实现（这里用一个固定的宿主状态代替放置上下文）。
+        ItemStack stack = new ItemStack(Blocks.OAK_STAIRS);
+        boolean placed = RedstoneBlocks.placeHostIntoWire(level, pos, stack,
+            () -> Blocks.OAK_STAIRS.defaultBlockState());
+        assertTrue("host item placed into wire tile", placed);
+        assertTrue("tile became a redstone composite",
+            RedstoneBlocks.isRedstonePhase(level.getBlockState(pos)));
+        assertTrue("composite kept the wire power (wire=" + wirePower + ", got "
+                + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
+            RedstoneBlocks.getPower(level.getBlockState(pos)) == wirePower);
     }
 
     // ------------------------------------------------------------------
@@ -198,7 +262,7 @@ public final class PhaseSelfTest {
     }
 
     private static void clearArea(ServerLevel level, BlockPos base) {
-        for (int x = -1; x <= 3; x++) {
+        for (int x = -1; x <= 8; x++) {
             for (int y = 0; y <= 2; y++) {
                 for (int z = -1; z <= 9; z++) {
                     level.setBlock(base.offset(x, y, z), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);

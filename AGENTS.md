@@ -75,9 +75,9 @@ python tools/gen_redstone_assets.py src/main/java/org/liquidphase/redstone/compo
 
 `gen_redstone_assets.py` 从客户端 jar 提取宿主原版 blockstate，生成
 "宿主原版 multipart part + 一整层 16³ 粉尘外壳（外扩 0.01px 避免共面闪烁）"。
-外壳贴图 = 内置的**疏松红石线图案**（16×16 透明底、三档红色、四边接缝对称可拼贴），
-透明像素后面直接是宿主模型，所以"满面红石纹理 + 透出宿主"两者都成立；不再使用原版
-`redstone_dust_dot`（那张图只有正中一点，铺整面时看起来只覆盖一点红石大小）。
+外壳贴图 = 内置的**疏松红石线图案**：16×16 透明底，短碎屑均匀撒满整面（约 29% 覆盖），
+三档红色、方向各异、跨格取模可无缝拼贴。贴到任何一面都是"疏松红石铺满正面"，
+透明像素后面直接是宿主模型；不再使用原版 `redstone_dust_dot`（那张图只有正中一点）。
 `power` 不出现在 when 里 → 16 个功率共用一套模型。
 
 **选择框（交互箱）**：红石相组合方块的 `getShape` 返回完整 16³（`BlockStateBaseMixin`）。
@@ -101,18 +101,27 @@ python tools/gen_redstone_assets.py src/main/java/org/liquidphase/redstone/compo
 ### 3.3 红石相的两向生成
 
 - 红石粉点宿主 → 组合方块（`BlockItemMixin` 分支 a0）。
-- 宿主方块右键点红石线格 → 组合方块（`BlockItemMixin` 分支 b0 + `RedstoneWireUseMixin`）。
-  红石线自己的 `useWithoutItem`（点/十字切换）会先吃掉右键，所以 `RedstoneWireUseMixin` 在
-  手持可组合宿主时返回 `PASS`；位置换算走 `WirePlaceContext`（`replaceClicked = true`，
-  否则 `getClickedPos()` 会是线旁边那格）。
+- 宿主方块右键点红石线格 → 组合方块（`RedstoneWireUseMixin` + `RedstoneBlocks.placeHostIntoWire`）。
+  **必须挂在红石线自己的右键入口上**：红石线的"点/十字切换"会先吃掉交互，`BlockItem.place`
+  那条分支根本走不到（踩过的坑）。位置换算走 `WirePlaceContext`（`replaceClicked = true`，
+  否则 `getClickedPos()` 会是线旁边那格）；功率沿用原线。
+
+### 3.3.1 信号结算时机
+
+`RedstoneBlocks.neighborChanged` 是**即时**重算（`updatePower`），不再排 2 tick 计划刻——
+排计划刻会让开关/拆线延迟两刻才反应。防递归靠"只有功率真的变了才 `setBlock`"，
+与原版 `DefaultRedstoneWireEvaluator` 同一手法。
 
 ### 3.4 自动化自检
 
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
-`ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，25 项断言覆盖：
+`ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，33 项断言覆盖：
 组合方块注册/反向表/属性、选择框整格、碰撞=宿主（含缓存）、遮挡非整格、面露出判定、
-向红石线 -1 / 向固相满功率 / DOWN 不输出 / 被覆盖面不输出、炼药锅满锅取水门槛。
+向红石线 -1 / 向固相满功率 / DOWN 不输出 / 被覆盖面不输出、供电即时性（邻居变化同 tick 生效）、
+向红石线格放置宿主、炼药锅满锅取水门槛。
 默认关闭，不进正式玩法路径。**改动红石相形状或信号语义后请先跑它。**
+
+> 自检场地要放真实电源：信号即时化之后，手动 `setValue(POWER, 15)` 会被立刻重算回真实值。
 
 ## 4. mixin 目标核对流程
 
@@ -142,9 +151,10 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 | 熔岩锅 + 水 / 水锅 + 熔岩 | 掉黑曜石 / 石头·圆石·台阶 |
 | 混凝土粉末 + 水锅 | 混泥土 + 水位 -1 |
 | 发射器/漏斗 | 填锅、抽锅（水锅满锅才抽）、液体物品进出 |
-| 红石粉点楼梯 | 变含红石相组合方块；宿主模型可见、疏松红石外壳铺满整面、透明处透出宿主；准星选择框为整格；破坏留红石线 |
+| 红石粉点楼梯 | 变含红石相组合方块；宿主模型可见、疏松红石碎屑铺满整面、透明处透出宿主；准星选择框为整格；破坏留红石线 |
 | 楼梯右键红石线格 | 同样变组合方块，朝向/半砖跟随点击面、功率沿用原线 |
 | 红石相输出 | 指向相邻红石线时 -1；指向灯/活塞时满功率；被宿主覆盖的面不输出 |
+| 红石相信号延迟 | 开关/拆线后**同一 tick** 就更新（不走计划刻） |
 | 瞄准红石外壳挖掘 | 掉红石粉、原地留宿主；瞄准宿主露出部分则正常破坏并留下对应功率红石线 |
 | 存档保存/重载 | 相保持 |
 | 关闭 `phaseEnabled` | 旧存档的相丢失（预期，README 已写明） |

@@ -5,9 +5,12 @@ import java.util.Map;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.Level;
@@ -24,6 +27,7 @@ import net.minecraft.world.level.block.state.properties.IntegerProperty;
 import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import net.minecraft.world.phys.BlockHitResult;
 import org.liquidphase.phase.PhaseCapable;
 
 /**
@@ -77,6 +81,58 @@ public final class RedstoneBlocks {
         return stack.getItem() instanceof BlockItem blockItem
             && blockItem.getBlock() instanceof PhaseCapable
             && HOST_TO_COMPOSITE.containsKey(blockItem.getBlock());
+    }
+
+    /**
+     * 手持宿主方块右击红石线 → 该格变成红石相组合方块（§3.0.2 两向吸收）。
+     * <p>
+     * 不依赖物品放置流程：红石线自己的右键会先吃掉交互，方块物品那条分支根本走不到。
+     * 这里直接在红石线的右键入口里完成替换，返回值表示"是否已处理"。
+     * 宿主状态按线所在格计算（朝向/半砖/连接态都是放置状态），功率沿用原线。
+     */
+    public static boolean placeHostIntoWire(Level level, BlockPos pos, Player player, InteractionHand hand,
+                                            BlockHitResult hit) {
+        ItemStack stack = player.getItemInHand(hand);
+        if (!isPhaseHostItem(stack)) {
+            return false;
+        }
+        // 红石线不是可替换方块，普通 context 的 getClickedPos() 会算成线旁边那格；
+        // WirePlaceContext 强制 replaceClicked，让宿主按线所在格算放置状态。
+        BlockPlaceContext context = new WirePlaceContext(level, player, hand, stack, hit);
+        return placeHostIntoWire(level, pos, stack, () -> ((BlockItem) stack.getItem()).getBlock().getStateForPlacement(context));
+    }
+
+    /** 放置实现（与玩家解耦，自检也走这条路径）。 */
+    public static boolean placeHostIntoWire(Level level, BlockPos pos, ItemStack stack,
+                                            java.util.function.Supplier<BlockState> hostStateSupplier) {
+        if (!isPhaseHostItem(stack)) {
+            return false;
+        }
+        BlockState wire = level.getBlockState(pos);
+        if (!isWire(wire)) {
+            return false;
+        }
+        Block host = ((BlockItem) stack.getItem()).getBlock();
+        Block composite = HOST_TO_COMPOSITE.get(host);
+        if (composite == null) {
+            return false;
+        }
+
+        BlockState hostState = hostStateSupplier.get();
+        BlockState cs = composite.defaultBlockState();
+        if (hostState != null) {
+            for (Property<?> property : hostState.getProperties()) {
+                if (cs.hasProperty(property) && property != POWER) {
+                    cs = copyValue(cs, property, hostState.getValue(property));
+                }
+            }
+        }
+        cs = cs.setValue(POWER, wire.getValue(BlockStateProperties.POWER));
+        if (!cs.canSurvive(level, pos)) {
+            return false;
+        }
+        level.setBlock(pos, cs, Block.UPDATE_ALL);
+        return true;
     }
 
     /** {@return 该状态是不是原版红石线} */
@@ -151,21 +207,36 @@ public final class RedstoneBlocks {
     }
 
     // ------------------------------------------------------------------
-    // 供电重算（计划刻驱动，避免邻居更新递归）
+    // 供电重算（邻居变化即时结算，与原版红石线一致）
     // ------------------------------------------------------------------
 
+    /**
+     * 邻居变化 → 立即重算本格功率；功率变化则立即把邻居的"邻居变化"也走一遍。
+     * <p>
+     * 之前这里排的是 2 tick 计划刻，所以按开关/拆线要等两刻才反应（"信号不是瞬时的"）。
+     * 即时结算需要防递归：只在本格功率真正变化时才继续向外传播（与原版
+     * {@code DefaultRedstoneWireEvaluator.updatePowerStrength} 的做法一致）。
+     */
     public static void neighborChanged(Level level, BlockPos pos, BlockState state) {
-        if (level instanceof ServerLevel serverLevel
-            && !serverLevel.getBlockTicks().hasScheduledTick(pos, state.getBlock())) {
-            serverLevel.scheduleTick(pos, state.getBlock(), 2);
+        if (level instanceof ServerLevel serverLevel) {
+            updatePower(serverLevel, pos, state);
         }
     }
 
-    public static void tick(ServerLevel level, BlockPos pos, BlockState state) {
+    /** 立即结算：返回功率是否变化过。 */
+    public static boolean updatePower(ServerLevel level, BlockPos pos, BlockState state) {
         int newPower = computeTargetPower(level, pos, state);
-        if (newPower != getPower(state)) {
-            level.setBlock(pos, state.setValue(POWER, newPower), Block.UPDATE_ALL);
+        if (newPower == getPower(state)) {
+            return false;
         }
+        level.setBlock(pos, state.setValue(POWER, newPower), Block.UPDATE_ALL);
+        // setBlock(UPDATE_ALL) 已触发邻居更新；组合方块自身的邻居变化又会回流到这里，
+        // 但下一次 newPower == 当前功率，递归自然终止。
+        return true;
+    }
+
+    public static void tick(ServerLevel level, BlockPos pos, BlockState state) {
+        updatePower(level, pos, state);
     }
 
     private static int computeTargetPower(ServerLevel level, BlockPos pos, BlockState state) {
