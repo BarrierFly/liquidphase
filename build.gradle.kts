@@ -46,6 +46,11 @@ dependencies {
 
 tasks.named<ProcessResources>("processResources") {
     inputs.property("version", project.version)
+    // depends 里的 loader 下限与 mixins 列表都会参与 fabric.mod.json 生成，必须声明为输入，
+    // 否则改了这些值 `processResources` 仍会被判为 UP-TO-DATE，jar 里还是旧声明。
+    inputs.property("fabricLoaderMin", project.findProperty("fabric_loader_min") ?: project.property("fabric_loader_version"))
+    inputs.property("statementEra", statementEra)
+    inputs.property("unobfuscatedEra", unobfuscatedEra)
     filteringCharset = "UTF-8"
     // 只做占位符替换。不要用 Gradle expand：它会把 JSON 字符串里的 \n 解释成真实换行，
     // 造成源文件合法、最终 JAR 里的 fabric.mod.json 却损坏。
@@ -56,6 +61,10 @@ tasks.named<ProcessResources>("processResources") {
     val modDescription = project.property("mod_description") as String
     val modLicense = project.property("mod_license") as String
     val loaderVersion = project.property("fabric_loader_version") as String
+    // depends 里声明的是"实测最小可运行 loader"，不是构建用的 loader（构建用 0.20.1 只是工具链）。
+    // 每个版本的下限 = max(Fabric API 自身要求, 0.15.0)：
+    //   0.15.0 起 loader 自带 MixinExtras，CacheShapeGuardMixin 用到 @ModifyExpressionValue。
+    val loaderMin = (project.findProperty("fabric_loader_min") as String?) ?: loaderVersion
     val mcDependency = project.property("mc_dependency") as String
     val statementDepends = if (statementEra) ",\"statement\": \"*\"" else ""
     val extraMixins = if (!statementEra) ",\"liquidphase.states.mixins.json\"" else ""
@@ -69,7 +78,7 @@ tasks.named<ProcessResources>("processResources") {
             .replace("\${mod_author}", modAuthor)
             .replace("\${mod_description}", modDescription)
             .replace("\${mod_license}", modLicense)
-            .replace("\${fabric_loader_version}", loaderVersion)
+            .replace("\${fabric_loader_version}", loaderMin)
             .replace("\${mc_dependency}", mcDependency)
             .replace("\${statement_depends}", statementDepends)
             .replace("\${extra_mixins}", extraMixins)

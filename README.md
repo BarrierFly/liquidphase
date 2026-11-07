@@ -104,11 +104,20 @@
 - 状态数会随宿主数量增长（每宿主 ×23 相取值，其中 16 个 redstone 值编码功率）；
   已在各版本实测编译与加载，1.19.4 这类低内存环境请留意内存占用。
 - 1.19.4/1.20.1 的状态注入使用 **Statement** 依赖（会自动随 mod 提供）。
+- **依赖下限**：`fabricloader` 按各版本实测最小需求声明（1.19.4 ≥0.15.0、1.20.1 ≥0.16.10、
+  1.21.1 ≥0.15.11、1.21.10 ≥0.17.0、1.21.11 ≥0.17.3、26.3 ≥0.19.3），
+  `minecraft` 仍是补丁级匹配（`~x.y.z`），`fabric-api` 与 `statement` 为必需依赖。
+- ⚠️ **旧 loader + 新 JDK 会启动失败**：loader 0.15.x/0.16.x 内置的 Mixin 读不了 JDK 25 的类
+  （`Unsupported class file major version 69`），这不是本 mod 的问题。用 JDK 25 时请把 loader
+  升到较新版本，或改用 JDK 17/21 启动。
 
 ---
 
 ## 变更记录
 
+- **0.1.6**：放宽 `fabric.mod.json` 的依赖声明——`fabricloader` 从构建用的 `>=0.20.1` 改为
+  各版本实测最小需求（`max(Fabric API 要求, 0.15.0)`，0.15.0 起 loader 自带 MixinExtras）；
+  `minecraft`（补丁级）、`fabric-api`、`statement` 经核实都是必需项，保留原样。
 - **0.1.5**：红石相改为**真正的 phase 取值**（按你的要求重做架构）——
   ① 不再注册"组合方块"：`phase` 新增 `redstone_0`…`redstone_15` 共 16 个取值，功率直接编码在取值里；
      楼梯还是原来的楼梯，形状/碰撞/掉落/破坏保留全部沿用宿主逻辑，**没有新方块、没有新物品**；
@@ -255,6 +264,10 @@ Phased blocks with a solid phase look like a full cube of that material, but col
 it mines at host speed, aim at the exposed phase and it mines as the phase material (obsidian still needs a diamond pickaxe — that slowness is intended).
 Full-cube hosts (leaves, copper grates, mangrove roots) show the phase material instead of the host texture while phased.
 1.19.4/1.20.1 use **Statement** for state injection (shipped as a dependency).
+Dependency floors follow each version's real minimum (`fabricloader` 0.15.0 / 0.16.10 / 0.15.11 /
+0.17.0 / 0.17.3 / 0.19.3 respectively), `minecraft` stays patch-level (`~x.y.z`), and `fabric-api` plus
+`statement` remain required. Note: loader 0.15.x/0.16.x bundle an old Mixin that cannot read JDK 25 class
+files (`Unsupported class file major version 69`) — use a newer loader or JDK 17/21 in that case.
 
 ### Licence
 

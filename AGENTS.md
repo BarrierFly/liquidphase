@@ -61,6 +61,11 @@ python tools/gen_redstone_assets.py tools/redstone-hosts.txt \
 
 `tools/redstone-hosts.txt` 是红石外壳覆盖的 41 个宿主清单（生成器与客户端共用）。
 
+`fabric_loader_version`（共享 `gradle.properties`）是**构建用** loader，`depends` 里声明的是
+各版本 `versions/<版本>/gradle.properties` 的 `fabric_loader_min`（= max(Fabric API 自身要求, 0.15.0)，
+0.15.0 起 loader 自带 MixinExtras，`CacheShapeGuardMixin` 依赖它）。两者别混用；
+改 `fabric_loader_min` 时 `processResources` 已把它声明为输入，不会因增量判定漏更新。
+
 `tools/phase-blocks/<版本>.ids` 是相容方块 id 清单；`<版本>.closure.txt` 是"直接实现 SimpleWaterloggedBlock 的类 + 继承闭包"。
 
 ### 3.1 相覆盖层的两类宿主
