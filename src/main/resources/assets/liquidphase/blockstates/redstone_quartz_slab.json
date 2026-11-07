@@ -1,1 +1,0 @@
-{"multipart":[{"apply":{"model":"minecraft:block/quartz_slab"},"when":{"type":"bottom"}},{"apply":{"model":"minecraft:block/quartz_block"},"when":{"type":"double"}},{"apply":{"model":"minecraft:block/quartz_slab_top"},"when":{"type":"top"}},{"apply":{"model":"liquidphase:block/redstone_phase"}}]}

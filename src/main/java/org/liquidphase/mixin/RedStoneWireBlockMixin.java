@@ -13,8 +13,9 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * 红石线连接判定（§3.4）：组合方块是信号源，原版默认"任何信号源都连"会让线连到被覆盖的面——
- * 收窄为"露出的面才连"。26.3 的钩子在 BSB.shouldRedstoneWireConnectTo（见 BlockStateBaseConnectMixin）。
+ * 红石线连接判定（§3.4）：含红石相的宿主是信号源，原版默认"任何信号源都连"
+ * 会让线连到被宿主覆盖的面——收窄为"露出的面才连"。
+ * 26.3 的钩子在 BSB.shouldRedstoneWireConnectTo（见 BlockStateBaseMixin）。
  */
 @Mixin(RedStoneWireBlock.class)
 public abstract class RedStoneWireBlockMixin {

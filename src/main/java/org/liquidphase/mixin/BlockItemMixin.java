@@ -46,56 +46,30 @@ public abstract class BlockItemMixin {
         Player player = context.getPlayer();
         ItemStack stack = context.getItemInHand();
 
-        // (a0) 红石粉指向相容宿主 → 该格替换为红石相组合方块（§3.4；§3.5 元件相待后续里程碑）。
+        // (a0) 红石粉指向相容宿主 → 该格写入红石相（§3.4；§3.5 元件相待后续里程碑）。
         if (held == net.minecraft.world.level.block.Blocks.REDSTONE_WIRE
             && hitState.getBlock() instanceof PhaseCapable
-            && org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(hitState) == false
+            && !org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(hitState)
             && PhaseHelper.getPhase(hitState) == Phase.NONE
             && (!hitState.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)
-                || !hitState.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED))) {
-            Block composite = org.liquidphase.redstone.RedstoneBlocks.HOST_TO_COMPOSITE.get(hitState.getBlock());
-            if (composite != null) {
-                BlockState cs = composite.defaultBlockState();
-                for (net.minecraft.world.level.block.state.properties.Property<?> property : hitState.getProperties()) {
-                    if (cs.hasProperty(property)
-                        && property != net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED) {
-                        cs = org.liquidphase.redstone.RedstoneBlocks.copyValue(cs, property,
-                            org.liquidphase.redstone.RedstoneBlocks.valueOf(hitState, property));
-                    }
-                }
-                level.setBlock(hitPos, cs, Block.UPDATE_ALL);
+                || !hitState.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED))
+            && org.liquidphase.redstone.RedstoneBlocks.setRedstonePhase(level, hitPos, hitState, 15)) {
+            liquidphase$consume(stack, player);
+            cir.setReturnValue(liquidphase$success(level));
+            return;
+        }
+
+        // (b0) 可 log 方块指向纯红石线格 → 该格换成含红石相的宿主，功率随线（§3.0.2 两向吸收）。
+        //      （红石线自己的右键会先吃掉交互，正常玩家路径走的是 RedstoneWireUseMixin；
+        //       这里兜住发射器/命令等不经过红石线 use 的放置路径。）
+        if (hitState.is(net.minecraft.world.level.block.Blocks.REDSTONE_WIRE) && held instanceof PhaseCapable) {
+            BlockState hostState = held.getStateForPlacement(context);
+            if (hostState != null && PhaseHelper.canAcceptPhase(hostState, level, hitPos, Phase.REDSTONE_15)) {
+                int power = hitState.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.POWER);
+                level.setBlock(hitPos, PhaseHelper.withPhase(hostState, Phase.redstone(power)), Block.UPDATE_ALL);
                 liquidphase$consume(stack, player);
                 cir.setReturnValue(liquidphase$success(level));
                 return;
-            }
-        }
-
-        // (b0) 可 log 方块指向纯红石线格 → 红石相组合方块，功率随线（§3.0.2 两向吸收）。
-        if (hitState.is(net.minecraft.world.level.block.Blocks.REDSTONE_WIRE) && held instanceof PhaseCapable) {
-            Block composite = org.liquidphase.redstone.RedstoneBlocks.HOST_TO_COMPOSITE.get(held);
-            if (composite != null) {
-                // 红石线不是可替换方块，原 context 的 getClickedPos() 会是线旁边那格；
-                // 用"强制替换点击格"的 context 让宿主按线所在格算出放置状态（朝向/半砖/连接态）。
-                BlockPlaceContext wireContext = new org.liquidphase.redstone.WirePlaceContext(level, player, context.getHand(), stack, hit);
-                BlockState hostState = held.getStateForPlacement(wireContext);
-                if (hostState != null) {
-                    BlockState cs = composite.defaultBlockState();
-                    for (net.minecraft.world.level.block.state.properties.Property<?> property : hostState.getProperties()) {
-                        if (cs.hasProperty(property)
-                            && property != net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED) {
-                            cs = org.liquidphase.redstone.RedstoneBlocks.copyValue(cs, property,
-                                org.liquidphase.redstone.RedstoneBlocks.valueOf(hostState, property));
-                        }
-                    }
-                    cs = cs.setValue(org.liquidphase.redstone.RedstoneBlocks.POWER,
-                        hitState.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.POWER));
-                    if (cs.canSurvive(level, hitPos)) {
-                        level.setBlock(hitPos, cs, Block.UPDATE_ALL);
-                        liquidphase$consume(stack, player);
-                        cir.setReturnValue(liquidphase$success(level));
-                        return;
-                    }
-                }
             }
         }
 

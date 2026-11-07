@@ -55,20 +55,9 @@ public final class PhaseTargeting {
      * {@return 宿主轮廓（相=none 的同一状态）}
      * 形状表型的宿主（栅栏/墙/玻璃板等）按"构造时的状态集合"建表，含相状态查不到会返回 null；
      * 一律用 phase=none 的兄弟状态查询，既避开 null 也保证相区域 = 宿主真正留出的空隙。
-     * <p>
-     * 红石相组合方块没有 phase 属性：换回宿主方块的对应状态（属性逐名拷贝）再取形状。
      */
     public static VoxelShape hostOutline(BlockState state) {
-        BlockState host;
-        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(state)) {
-            host = org.liquidphase.redstone.RedstoneBlocks.hostStateOf(state);
-            // 未登记的组合方块（hostStateOf 返回空气）→ 用自身形状，避免把整格都算成相区域。
-            if (host.isAir()) {
-                host = state;
-            }
-        } else {
-            host = PhaseHelper.withPhase(state, Phase.NONE);
-        }
+        BlockState host = PhaseHelper.withPhase(state, Phase.NONE);
         return host.getShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO, CollisionContext.empty());
     }
 
@@ -127,17 +116,18 @@ public final class PhaseTargeting {
         return phaseHit.getLocation().distanceToSqr(eye) < hostHit.getLocation().distanceToSqr(eye) - 1.0E-7;
     }
 
-    /** {@return 固相（枚举相或红石相组合方块）是否可被直接瞄准挖掘（D8）} */
+    /** {@return 固相（黑曜石/冰/霜冰）或红石相是否可被直接瞄准挖掘（D8）} */
     public static boolean isPhaseMineable(BlockState state) {
         return PhaseHelper.isSolidPhase(state) || org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(state);
     }
 
     /** {@return 相对应的伪状态（用于挖掘速度与掉落判定）} */
     public static BlockState pseudoState(BlockState state) {
-        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(state)) {
+        Phase phase = PhaseHelper.getPhase(state);
+        if (phase.isRedstone()) {
             return net.minecraft.world.level.block.Blocks.REDSTONE_WIRE.defaultBlockState();
         }
-        return switch (PhaseHelper.getPhase(state)) {
+        return switch (phase) {
             case OBSIDIAN -> Blocks.OBSIDIAN.defaultBlockState();
             case ICE -> Blocks.ICE.defaultBlockState();
             case FROSTED_0 -> Blocks.FROSTED_ICE.defaultBlockState().setValue(BlockStateProperties.AGE_3, 0);

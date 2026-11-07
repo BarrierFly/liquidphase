@@ -45,8 +45,7 @@
 # 1) 相容方块 id 清单（从 guardian 反编译源码解析 Blocks.java）
 python tools/gen_phase_blocks.py "<guardian 仓库路径>" tools/phase-blocks tools/phase-blocks
 
-# 2) 红石相组合方块类 + 实例工厂 + 清理已验证不兼容的类
-bash tools/regen_all.sh
+# 2) （0.1.5 起不再有组合方块生成步骤；红石相走 phase 取值）
 
 # 3) 相覆盖 blockstate（构建时自动执行，也可单独跑）
 ./gradlew :<版本>:convertPhaseBlockstates
@@ -54,13 +53,13 @@ bash tools/regen_all.sh
 # 4) 液体物品贴图
 python tools/gen_item_textures.py src/main/resources/assets/liquidphase/textures/item
 
-# 5) 红石相组合方块资源（贴图 + 宿主几何 + 粉尘外壳 + 41 个 blockstate + 中英文名）
-#    第 3 个参数是客户端 jar（宿主原版 blockstate 与 redstone_dust_dot.png 都从里面取）
-python tools/gen_redstone_assets.py src/main/java/org/liquidphase/redstone/composites/CompositeFactories.java \
+# 5) 红石相外壳资源（贴图 + 16³ 外壳模型 + 41 个宿主的 blockstate + 中英文名）
+#    第 1 个参数是宿主清单 tools/redstone-hosts.txt，第 3 个是客户端 jar
+python tools/gen_redstone_assets.py tools/redstone-hosts.txt \
     src/main/resources/assets/liquidphase "<GRADLE_USER_HOME>/caches/fabric-loom/1.21.11/minecraft-client.jar"
 ```
 
-`CompositeFactories.java` 目前是**手写**文件（生成器仍在完善），`regen_all.sh` 不会覆盖它。
+`tools/redstone-hosts.txt` 是红石外壳覆盖的 41 个宿主清单（生成器与客户端共用）。
 
 `tools/phase-blocks/<版本>.ids` 是相容方块 id 清单；`<版本>.closure.txt` 是"直接实现 SimpleWaterloggedBlock 的类 + 继承闭包"。
 
@@ -71,45 +70,45 @@ python tools/gen_redstone_assets.py src/main/java/org/liquidphase/redstone/compo
 `phase: none|lava`；其余宿主保持"原版模型 + 内缩 0.25px 覆盖层"。
 新增整格型宿主时把 id 加进这个集合，并确认 `phase_*_full.json` 六个模型存在。
 
-### 3.2 红石组合方块的渲染与交互箱
+### 3.2 红石相的表示与渲染
 
-`gen_redstone_assets.py` 从客户端 jar 提取宿主原版 blockstate，生成
-"宿主原版 multipart part + 一整层 16³ 粉尘外壳（外扩 0.01px 避免共面闪烁）"。
-外壳贴图 = 内置的**疏松红石线图案**：16×16 透明底，短碎屑均匀撒满整面（约 29% 覆盖），
-三档红色、方向各异、跨格取模可无缝拼贴。贴到任何一面都是"疏松红石铺满正面"，
-透明像素后面直接是宿主模型；不再使用原版 `redstone_dust_dot`（那张图只有正中一点）。
-`power` 不出现在 when 里 → 16 个功率共用一套模型。
+**红石相 = 宿主方块上的 `phase` 取值**（0.1.5 起）：`redstone_0` … `redstone_15` 共 16 个
+枚举值直接编码功率，**不再注册任何新方块**。楼梯还是 `minecraft:oak_stairs`，只是多了一个
+phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有逻辑。
 
-**选择框（交互箱）**：红石相组合方块的 `getShape` 返回完整 16³（`BlockStateBaseMixin`）。
-父类里 `getCollisionShape = getShape`、`getBlockSupportShape = getCollisionShape`，
-而楼梯/台阶/墙/栅栏都没覆写它们，所以只改 `getShape` 会连带把**碰撞和支撑面**也变成整格
-（1.21.1 会在 `Cache.<init>` → `SupportType.isSupporting` 处直接 NPE 崩服）。
-下表四类派生结果都必须在**状态级**显式按宿主回答：
-
-| 派生 | 取值 |
+| 项目 | 位置 |
 | --- | --- |
-| `getShape`（准星选择框） | 完整 16³（玩家要求的"完整交互箱"） |
-| `getCollisionShape`（两参 + 三参） | 宿主碰撞形状（红石相不加碰撞） |
-| `getBlockSupportShape` | 宿主碰撞形状（否则 1.21.1 启动 NPE） |
-| `getOcclusionShape` / `propagatesSkylightDown` | 宿主对应值（块级，`initCache` 直接调） |
+| 枚举（16 个 redstone 值 + `redstonePower()` / `Phase.redstone(n)`） | `phase/Phase.java` |
+| 信号输出/接收/重算/生成/破坏 | `redstone/RedstoneBlocks.java` |
+| `getSignal`/`getDirectSignal`/`isSignalSource` 状态级注入 | `mixin/RedstoneSignalMixin.java` |
+| 红石线连接判定 | `mixin/RedStoneWireBlockMixin`（≤1.21.11）/ `BlockStateBaseMixin.shouldRedstoneWireConnectTo`（26.3） |
+| 红粉点宿主 / 宿主放进线格 | `mixin/BlockItemMixin` / `mixin/RedstoneWireUseMixin` |
+| cutout 图层的宿主清单 | `redstone/RedstoneRenderBlocks.java` + `tools/redstone-hosts.txt` |
 
-> 1.19.4/1.20.1 的 `propagatesSkylightDown` 声明在 `Block` 上（`BlockSkylightMixin`），
-> 1.21.1+ 在 `BlockBehaviour` 上（`BlockBehaviourMixin`）。
+**代价**：`phase` 从 8 个取值变成 24 个（×3），1.21.11 的状态数从 175,607 涨到 **509,175**，
+启动注入时间相应变长。
 
-`RedstoneBlocks.hostOutline` 用**宿主碰撞形状**判断"面露出"，不要用组合状态形状（已整格 → 恒真）。
+**渲染**：`tools/gen_phase_blockstates.py` 除了相覆盖层，还会对 `tools/redstone-hosts.txt`
+里的 41 个宿主额外追加：
+- 宿主原 part 的 `when.phase` 限制为 `none|lava|obsidian|ice|frosted_0..3`；
+- 16 条 `when{phase: redstone_N}` 的 part，全部指向同一个外壳模型。
+
+外壳模型/贴图由 `tools/gen_redstone_assets.py` 生成（16³ 外壳外扩 0.01px，贴图是
+**短碎屑均匀铺满整面**的疏松红石纹理，16×16 透明底、约 29% 覆盖、跨格可拼贴）。
 
 ### 3.3 红石相的两向生成
 
-- 红石粉点宿主 → 组合方块（`BlockItemMixin` 分支 a0）。
-- 宿主方块右键点红石线格 → 组合方块（`RedstoneWireUseMixin` + `RedstoneBlocks.placeHostIntoWire`）。
-  **必须挂在红石线自己的右键入口上**：红石线的"点/十字切换"会先吃掉交互，`BlockItem.place`
-  那条分支根本走不到（踩过的坑）。位置换算走 `WirePlaceContext`（`replaceClicked = true`，
-  否则 `getClickedPos()` 会是线旁边那格）；功率沿用原线。
+- 红石粉点宿主 → 该格写入 `phase=redstone_15`（`BlockItemMixin` 分支 a0）。
+- 宿主方块右键点红石线格 → 宿主写进该格、功率沿用原线
+  （`RedstoneWireUseMixin` + `RedstoneBlocks.placeHostIntoWire`）。
+  **必须挂在红石线自己的右键入口上**：红石线的“点/十字切换”会先吃掉交互，
+  `BlockItem.place` 那条分支根本走不到（踩过的坑）。位置换算走 `WirePlaceContext`
+  （`replaceClicked = true`，否则 `getClickedPos()` 会是线旁边那格）。
 
 ### 3.3.1 信号结算时机
 
-`RedstoneBlocks.neighborChanged` 是**即时**重算（`updatePower`），不再排 2 tick 计划刻——
-排计划刻会让开关/拆线延迟两刻才反应。防递归靠"只有功率真的变了才 `setBlock`"，
+`RedstoneBlocks.neighborChanged` 是**即时**重算（`updatePower`），不排计划刻——
+排计划刻会让开关/拆线延迟两刻才反应。防递归靠“只有功率真的变了才 `setBlock`”，
 与原版 `DefaultRedstoneWireEvaluator` 同一手法。
 
 ### 3.4 自动化自检
@@ -151,8 +150,8 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 | 熔岩锅 + 水 / 水锅 + 熔岩 | 掉黑曜石 / 石头·圆石·台阶 |
 | 混凝土粉末 + 水锅 | 混泥土 + 水位 -1 |
 | 发射器/漏斗 | 填锅、抽锅（水锅满锅才抽）、液体物品进出 |
-| 红石粉点楼梯 | 变含红石相组合方块；宿主模型可见、疏松红石碎屑铺满整面、透明处透出宿主；准星选择框为整格；破坏留红石线 |
-| 楼梯右键红石线格 | 同样变组合方块，朝向/半砖跟随点击面、功率沿用原线 |
+| 红石粉点楼梯 | 该格写入 `phase=redstone_15`；方块仍是原版楼梯、宿主模型可见、疏松红石碎屑铺满整面；破坏留红石线 |
+| 楼梯右键红石线格 | 该格换成楼梯并带红石相，朝向/半砖跟随点击面、功率沿用原线 |
 | 红石相输出 | 指向相邻红石线时 -1；指向灯/活塞时满功率；被宿主覆盖的面不输出 |
 | 红石相信号延迟 | 开关/拆线后**同一 tick** 就更新（不走计划刻） |
 | 瞄准红石外壳挖掘 | 掉红石粉、原地留宿主；瞄准宿主露出部分则正常破坏并留下对应功率红石线 |
@@ -188,17 +187,14 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    ② `ShapeFallbackMixin`（状态级 outline/collision/occlusion/support/visual 兜底）；
    ③ `BlockBehaviourMixin`（块级兜底，带"仅带相状态/组合方块才兜底"的递归保护）。
    另 `PhaseStateRefresher` 对 `initCache()` 加了 try/catch，单个宿主异常只记日志不中断启动。
-1. **1.21.1 已开启红石相组合方块**：以前因宿主形状表对组合状态返回 null、`Cache` 构造 NPE 而跳过注册。
-   现在组合方块的 `getShape` / `getCollisionShape` / `getBlockSupportShape` 都显式按宿主回答
-   （`SupportType.isSupporting` 走 `getBlockSupportShape`，只改 `getShape` 会在 1.21.1 崩），
-   六个版本启动 + 自检均通过。
-3. **组合方块覆盖面**：当前仅楼梯/台阶/墙/栅栏共 41 个宿主（手写 `CompositeFactories`）。
-   `tools/gen_redstone_composites.py` 的批量生成还有版本守卫/构造参数问题，稳定后再切生成物。
-   41 个宿主的资源（blockstate + 宿主原版几何 + 整格粉尘外壳 + 满功率染色贴图）已由 `tools/gen_redstone_assets.py`
-   补齐；组合方块**不注册 BlockItem**，只能由红石粉/液相方块交互生成。透明底走 cutout：
-   1.19.4/1.20.1/1.21.1 用旧版 `BlockRenderLayerMap.INSTANCE`，1.21.10/1.21.11 用新版
-   `client.rendering.v1.BlockRenderLayerMap` + `ChunkSectionLayer.CUTOUT`，26.3 按贴图透明度自动推导。
-   注意 1.21.11 的原版 blockstate/模型 JSON **不支持** `render_type`，不要试图只靠资源声明图层。
+1. **红石相不再是独立方块**（0.1.5 起）：改成 `phase = redstone_0..15`，宿主方块本身不变。
+   不再有组合方块注册、`COMPOSITE_TO_HOST` 表、`RedstonePhaseBlock` 标记接口。
+   代价是 `phase` 取值 8 → 24，状态数约 ×3（1.21.11：175,607 → 509,175）。
+2. **红石相宿主覆盖面**：渲染外壳只对 `tools/redstone-hosts.txt` 里的 41 个宿主
+   （楼梯/台阶/墙/栅栏）生成；其他宿主也能被写入 `phase=redstone_*`（逻辑正常），但没有外壳贴图。
+   透明底走 cutout：1.19.4/1.20.1/1.21.1 用旧版 `BlockRenderLayerMap.INSTANCE`，
+   1.21.10/1.21.11 用新版 `client.rendering.v1.BlockRenderLayerMap` + `ChunkSectionLayer.CUTOUT`，
+   26.3 按贴图透明度自动推导。注意 1.21.11 的原版 blockstate/模型 JSON **不支持** `render_type`。
 3. **§3.5 元件相**（中继器/比较器/侦测器）未实现，方案见 `docs/milestone-2.5-repeater-proposal.md`。
 4. 行为层已做服务端自检（6 版本 25 项断言全过）+ 启动冒烟 + 6 版本编译；
    游戏内逐条手测（冻结、凝固、破坏保留、桶挖、炼药锅转化、树叶相渲染、红石外壳渲染、
@@ -206,9 +202,8 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 5. **相瞄准的判定口径不能改成"合并轮廓 vs 相区域"**：相区域的外表面就落在方块边界上，与合并轮廓（=整格）的命中点重合，
    比较恒成立 → 任何瞄准都算挖相（历史 bug：含固相方块"怎么都挖不掉"）。现在用宿主轮廓（`phase=none` 兄弟状态）
    与相区域比距离，并保证形状表型宿主不会因查不到含相状态而退化成空形状。
-6. **红石相组合方块没有 `phase` 属性**（宿主子类 + `POWER`）。`PhaseHelper.withPhase` 对没有该属性的状态原样返回
-   （直接 `setValue` 会抛 `IllegalArgumentException`）；需要宿主轮廓时走 `RedstoneBlocks.hostStateOf` 换回宿主状态。
-   `PhaseTargeting.isPhaseMineable` 同时涵盖固相与红石相，两条路径都必须能安全取到宿主形状。
+6. **红石相与固相共用 `phase` 属性**：`isFrosted()` / `isSolid()` / `redstonePower()` 都用显式区间判断，
+   不能再用 `ordinal()` 与 `FROSTED_0` 简单比较（红石取值排在后面）。新增相取值时务必同步这三个方法。
 7. **客户端资源加载会报 `Unknown property 'phase'`（既有问题，未在 0.1.3 处理）**：
    `gen_phase_blockstates.py` 会给 `resin_clump` 这类 `MultifaceBlock` 的 blockstate 追加 `phase` 条件，
    而客户端 `BlockStateModelLoader` 解析 multipart 时读的是**注册时**的属性表——

@@ -1,1 +1,0 @@
-{"multipart":[{"apply":{"model":"minecraft:block/smooth_stone_slab"},"when":{"type":"bottom"}},{"apply":{"model":"minecraft:block/smooth_stone_slab_double"},"when":{"type":"double"}},{"apply":{"model":"minecraft:block/smooth_stone_slab_top"},"when":{"type":"top"}},{"apply":{"model":"liquidphase:block/redstone_phase"}}]}

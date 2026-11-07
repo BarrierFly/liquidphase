@@ -7,7 +7,6 @@ import org.liquidphase.interact.LiquidInteractions;
 import org.liquidphase.phase.Phase;
 import org.liquidphase.phase.PhaseCapable;
 import org.liquidphase.phase.PhaseHelper;
-import org.liquidphase.redstone.CompositeBlocks;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,10 +27,7 @@ public final class LiquidPhase implements ModInitializer {
 
         if (config.phaseEnabled) {
             injectPhaseProperty();
-            // 里程碑 2：红石相组合方块（R1）。
-            // 1.21.1 曾因宿主形状表对组合状态返回 null 而跳过注册；现在组合方块的选择框/碰撞/
-            // 支撑面/遮挡形状都显式按宿主回答，六个版本统一注册。
-            CompositeBlocks.register();
+            LOGGER.info("[Liquid Phase] redstone phase uses phase=redstone_0..15 (no extra blocks registered)");
         } else {
             LOGGER.info("[Liquid Phase] 双端功能已关闭（phase 属性未注入；旧存档中的相会被丢弃）");
         }

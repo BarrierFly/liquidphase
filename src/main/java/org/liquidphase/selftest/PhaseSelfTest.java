@@ -16,6 +16,7 @@ import net.minecraft.world.level.block.state.properties.SlabType;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.liquidphase.LiquidPhase;
+import org.liquidphase.phase.Phase;
 import org.liquidphase.phase.PhaseHelper;
 import org.liquidphase.phase.PhaseTargeting;
 import org.liquidphase.redstone.RedstoneBlocks;
@@ -25,8 +26,8 @@ import org.liquidphase.redstone.RedstoneBlocks;
  * <p>
  * 用 {@code -Dliquidphase.selftest=true} 启动服务端时，等服务器启动完成后在出生点附近
  * 造一小块测试场地逐项断言，把 {@code PASS}/{@code FAIL} 打进日志，最后清理场地。
- * 覆盖的是"无玩家参与"的确定性行为：组合方块注册、选择框/碰撞/遮挡、信号衰减、
- * 炼药锅取水门槛。玩家驱动的路径（挖掘/放置/物品消耗）仍需游戏内手测。
+ * 覆盖的是"无玩家参与"的确定性行为：红石相 = phase 取值、宿主形状不变、信号衰减、
+ * 供电即时性、向红石线格放置、炼药锅取水门槛。
  */
 public final class PhaseSelfTest {
 
@@ -44,8 +45,8 @@ public final class PhaseSelfTest {
         failed = 0;
         LiquidPhase.LOGGER.info("[Liquid Phase][selftest] begin at {}", base);
         try {
-            checkRegistry();
-            checkShape(level, base);
+            checkPhaseEnum();
+            checkShapeAndBlockIdentity(level, base);
             checkSignal(level, base);
             checkInstantUpdate(level, base);
             checkPlaceIntoWire(level, base);
@@ -60,58 +61,56 @@ public final class PhaseSelfTest {
     }
 
     // ------------------------------------------------------------------
-    // 组合方块注册 / 属性
+    // 枚举语义
     // ------------------------------------------------------------------
 
-    private static void checkRegistry() {
-        Block composite = RedstoneBlocks.HOST_TO_COMPOSITE.get(Blocks.OAK_STAIRS);
-        assertTrue("composite registered for oak_stairs", composite != null);
-        if (composite == null) {
-            return;
-        }
-        assertTrue("composite -> host reverse map",
-            RedstoneBlocks.COMPOSITE_TO_HOST.get(composite) == Blocks.OAK_STAIRS);
-        BlockState state = composite.defaultBlockState();
-        assertTrue("composite has POWER", state.hasProperty(RedstoneBlocks.POWER));
-        assertTrue("composite has no phase property", !state.hasProperty(PhaseHelper.PHASE));
-        assertTrue("composite is redstone phase", RedstoneBlocks.isRedstonePhase(state));
-        assertTrue("host item recognised", RedstoneBlocks.isPhaseHostItem(new ItemStack(Blocks.OAK_STAIRS)));
-        assertTrue("non-host item rejected", !RedstoneBlocks.isPhaseHostItem(new ItemStack(Items.STONE)));
+    private static void checkPhaseEnum() {
+        assertTrue("phase count = 1 + 7 + 16", Phase.values().length == 24);
+        assertTrue("FILLED excludes NONE", Phase.FILLED.length == 23);
+        assertTrue("redstone_0 is redstone", Phase.REDSTONE_0.isRedstone());
+        assertTrue("redstone power roundtrip", Phase.redstone(7).redstonePower() == 7);
+        assertTrue("redstone power clamped", Phase.redstone(99).redstonePower() == 15
+            && Phase.redstone(-5).redstonePower() == 0);
+        assertTrue("frosted stays frosted", Phase.FROSTED_3.isFrosted() && !Phase.FROSTED_3.isRedstone());
+        assertTrue("frosted age works", Phase.FROSTED_2.frostedAge() == 2);
+        assertTrue("redstone is not solid", !Phase.REDSTONE_15.isSolid());
+        assertTrue("obsidian is solid", Phase.OBSIDIAN.isSolid());
+        assertTrue("none is neither", !Phase.NONE.isSolid() && !Phase.NONE.isRedstone());
     }
 
     // ------------------------------------------------------------------
-    // 选择框（交互箱）整格 / 碰撞与遮挡仍按宿主
+    // 红石相 = 宿主方块 + phase 取值（不再有新方块）
     // ------------------------------------------------------------------
 
-    private static void checkShape(ServerLevel level, BlockPos base) {
-        Block composite = RedstoneBlocks.HOST_TO_COMPOSITE.get(Blocks.OAK_STAIRS);
-        if (composite == null) {
-            return;
-        }
-        CollisionContext context = CollisionContext.empty();
-        BlockState state = composite.defaultBlockState();
+    private static void checkShapeAndBlockIdentity(ServerLevel level, BlockPos base) {
+        BlockPos pos = base.offset(0, 1, 0);
         BlockState host = Blocks.OAK_STAIRS.defaultBlockState();
+        BlockState redstone = PhaseHelper.withPhase(host, Phase.REDSTONE_15);
+        level.setBlock(pos, redstone, Block.UPDATE_ALL);
 
-        assertTrue("outline is full cube",
-            Block.isShapeFullBlock(state.getShape(level, base, context)));
-        assertTrue("collision follows host (not full cube)",
-            !Block.isShapeFullBlock(state.getCollisionShape(level, base, context)));
-        assertTrue("collision equals host collision",
-            state.getCollisionShape(level, base, context).bounds()
-                .equals(host.getCollisionShape(level, base, context).bounds()));
-        // 实体碰撞读的是 Cache 里缓存的 collisionShape（initCache 走块级方法），必须一起按宿主。
-        assertTrue("cached collision shape is not full cube", !state.isCollisionShapeFullBlock(level, base));
-        assertTrue("solidRender (occlusion cache) is false", !solidRender(state, level, base));
-        assertTrue("occlusion is not full cube", !Block.isShapeFullBlock(occlusionOf(state, level, base)));
-        assertTrue("stair host exposes UP face", RedstoneBlocks.exposed(state, Direction.UP));
+        BlockState actual = level.getBlockState(pos);
+        assertTrue("redstone phase is the same block as host",
+            actual.getBlock() == Blocks.OAK_STAIRS);
+        assertTrue("redstone phase carried by phase property",
+            PhaseHelper.getPhase(actual) == Phase.REDSTONE_15);
+        assertTrue("no extra liquidphase redstone blocks registered",
+            net.minecraft.core.registries.BuiltInRegistries.BLOCK.keySet().stream()
+                .noneMatch(id -> id.getNamespace().equals("liquidphase") && id.getPath().startsWith("redstone_")));
+        assertTrue("host outline unchanged (stairs are not a full cube)",
+            !Block.isShapeFullBlock(actual.getShape(level, pos, CollisionContext.empty())));
+        assertTrue("collision unchanged (not a solid phase)",
+            !Block.isShapeFullBlock(actual.getCollisionShape(level, pos, CollisionContext.empty())));
+        assertTrue("redstone power readable", RedstoneBlocks.getPower(actual) == 15);
+        assertTrue("stair UP face exposed", RedstoneBlocks.exposed(actual, Direction.UP));
 
-        Block slabComposite = RedstoneBlocks.HOST_TO_COMPOSITE.get(Blocks.STONE_SLAB);
-        if (slabComposite != null) {
-            BlockState doubleSlab = slabComposite.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.DOUBLE);
-            assertTrue("double slab hides every face",
-                !RedstoneBlocks.exposed(doubleSlab, Direction.UP)
-                    && !RedstoneBlocks.exposed(doubleSlab, Direction.NORTH));
-        }
+        BlockState doubleSlab = PhaseHelper.withPhase(
+            Blocks.STONE_SLAB.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.DOUBLE),
+            Phase.REDSTONE_15);
+        assertTrue("double slab hides every face",
+            !RedstoneBlocks.exposed(doubleSlab, Direction.UP)
+                && !RedstoneBlocks.exposed(doubleSlab, Direction.NORTH));
+
+        level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
     }
 
     // ------------------------------------------------------------------
@@ -119,34 +118,23 @@ public final class PhaseSelfTest {
     // ------------------------------------------------------------------
 
     private static void checkSignal(ServerLevel level, BlockPos base) {
-        Block composite = RedstoneBlocks.HOST_TO_COMPOSITE.get(Blocks.OAK_STAIRS);
-        if (composite == null) {
-            return;
-        }
         BlockPos pos = base.offset(0, 1, 0);
-        level.setBlock(pos, composite.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(pos, PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.REDSTONE_15),
+            Block.UPDATE_ALL);
 
         // 默认橡木楼梯朝北：北面被台阶踏面盖满（按设计不输出），南面才是露出的。
-        assertTrue("stair host hides NORTH face when facing north", !RedstoneBlocks.exposed(
-            level.getBlockState(pos), Direction.NORTH));
-        assertTrue("stair host exposes SOUTH face when facing north", RedstoneBlocks.exposed(
-            level.getBlockState(pos), Direction.SOUTH));
+        BlockState stairs = level.getBlockState(pos);
+        assertTrue("stair host hides NORTH face when facing north", !RedstoneBlocks.exposed(stairs, Direction.NORTH));
+        assertTrue("stair host exposes SOUTH face when facing north", RedstoneBlocks.exposed(stairs, Direction.SOUTH));
 
-        // 信号现在是即时结算的：手动 setValue(POWER,15) 会被立刻重算回真实值，
-        // 所以必须放真实电源，而且只能放在**露出的**南面。
+        // 信号是即时结算的：必须放真实电源，且只能放在露出的南面。
         level.setBlock(pos.south().below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(pos.south(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
-        assertTrue("composite powered to 15 by redstone block on exposed face (got "
-                + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
+        assertTrue("redstone phase keeps power 15 (got " + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
             RedstoneBlocks.getPower(level.getBlockState(pos)) == 15);
 
         // 南侧换成红石线 → 以 NORTH 查询（接收方在南）→ 15 - 1 = 14
-        // 红石线本身不供电；组合方块仍有北侧之外的电源吗？没有 —— 所以这里改为
-        // 让线自己由红石块充能，再验证"组合方块 → 线"的 -1。
         level.setBlock(pos.south(), Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
-        assertTrue("wire placed south", level.getBlockState(pos.south()).is(Blocks.REDSTONE_WIRE));
-        // 给组合方块重新供上电（南面现在是线，改放一个暴露的电源在下方？不行：DOWN 不输出）。
-        // 用"上方"作为暴露面：楼梯 UP 面是露出的。
         level.setBlock(pos.above(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
         int toWire = level.getSignal(pos, Direction.NORTH);
         assertTrue("signal into wire is power-1 (got " + toWire + ")", toWire == 14);
@@ -158,15 +146,14 @@ public final class PhaseSelfTest {
 
         assertTrue("signal DOWN is 0", level.getSignal(pos, Direction.DOWN) == 0);
 
-        Block slabComposite = RedstoneBlocks.HOST_TO_COMPOSITE.get(Blocks.STONE_SLAB);
-        if (slabComposite != null) {
-            BlockPos slabPos = base.offset(2, 1, 0);
-            level.setBlock(slabPos, slabComposite.defaultBlockState()
-                .setValue(SlabBlock.TYPE, SlabType.DOUBLE), Block.UPDATE_ALL);
-            level.setBlock(slabPos.south().below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
-            level.setBlock(slabPos.south(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
-            assertTrue("covered face does not output", level.getSignal(slabPos, Direction.NORTH) == 0);
-        }
+        // 双台阶（整格宿主）被完全覆盖 → 不输出
+        BlockPos slabPos = base.offset(2, 1, 0);
+        level.setBlock(slabPos, PhaseHelper.withPhase(
+            Blocks.STONE_SLAB.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.DOUBLE),
+            Phase.REDSTONE_15), Block.UPDATE_ALL);
+        level.setBlock(slabPos.south().below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(slabPos.south(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        assertTrue("covered face does not output", level.getSignal(slabPos, Direction.NORTH) == 0);
     }
 
     // ------------------------------------------------------------------
@@ -174,19 +161,14 @@ public final class PhaseSelfTest {
     // ------------------------------------------------------------------
 
     private static void checkInstantUpdate(ServerLevel level, BlockPos base) {
-        Block composite = RedstoneBlocks.HOST_TO_COMPOSITE.get(Blocks.OAK_STAIRS);
-        if (composite == null) {
-            return;
-        }
         BlockPos pos = base.offset(4, 1, 0);
-        level.setBlock(pos, composite.defaultBlockState(), Block.UPDATE_ALL);
-        // 南面放一个能供电的方块（红石块，满功率 15，不依赖方向）
+        level.setBlock(pos, PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.REDSTONE_0),
+            Block.UPDATE_ALL);
         BlockPos source = pos.south();
         level.setBlock(source, Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
-        assertTrue("power updates immediately on neighbor change (got "
+        assertTrue("power updates immediately on neighbour change (got "
                 + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
             RedstoneBlocks.getPower(level.getBlockState(pos)) == 15);
-        // 移走电源后同样立即归零
         level.setBlock(source, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         assertTrue("power drops immediately when source removed (got "
                 + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
@@ -208,16 +190,15 @@ public final class PhaseSelfTest {
         int wirePower = level.getBlockState(pos).getValue(BlockStateProperties.POWER);
         assertTrue("wire powered by redstone block (got " + wirePower + ")", wirePower == 15);
 
-        // 走与 RedstoneWireUseMixin 相同的实现（这里用一个固定的宿主状态代替放置上下文）。
-        ItemStack stack = new ItemStack(Blocks.OAK_STAIRS);
-        boolean placed = RedstoneBlocks.placeHostIntoWire(level, pos, stack,
-            () -> Blocks.OAK_STAIRS.defaultBlockState());
-        assertTrue("host item placed into wire tile", placed);
-        assertTrue("tile became a redstone composite",
-            RedstoneBlocks.isRedstonePhase(level.getBlockState(pos)));
-        assertTrue("composite kept the wire power (wire=" + wirePower + ", got "
-                + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
-            RedstoneBlocks.getPower(level.getBlockState(pos)) == wirePower);
+        boolean placed = RedstoneBlocks.placeHostIntoWire(level, pos,
+            Blocks.OAK_STAIRS.defaultBlockState(), wirePower);
+        assertTrue("host placed into wire tile", placed);
+        BlockState actual = level.getBlockState(pos);
+        assertTrue("tile became the host block with redstone phase",
+            actual.is(Blocks.OAK_STAIRS) && RedstoneBlocks.isRedstonePhase(actual));
+        assertTrue("carried the wire power (wire=" + wirePower + ", got "
+                + RedstoneBlocks.getPower(actual) + ")",
+            RedstoneBlocks.getPower(actual) == wirePower);
     }
 
     // ------------------------------------------------------------------
@@ -244,22 +225,6 @@ public final class PhaseSelfTest {
     // ------------------------------------------------------------------
     // 工具
     // ------------------------------------------------------------------
-
-    private static VoxelShape occlusionOf(BlockState state, ServerLevel level, BlockPos pos) {
-        //? if 1.19.4 || 1.20.1 || 1.21.1 {
-        /*return state.getOcclusionShape(level, pos);
-         *///?} else {
-        return state.getOcclusionShape();
-        //?}
-    }
-
-    private static boolean solidRender(BlockState state, ServerLevel level, BlockPos pos) {
-        //? if 1.19.4 || 1.20.1 || 1.21.1 {
-        /*return state.isSolidRender(level, pos);
-         *///?} else {
-        return state.isSolidRender();
-        //?}
-    }
 
     private static void clearArea(ServerLevel level, BlockPos base) {
         for (int x = -1; x <= 8; x++) {

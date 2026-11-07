@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""为红石相组合方块生成 blockstate / 方块模型 / 贴图 / 语言键。
+"""为红石相生成 blockstate / 方块模型 / 贴图 / 语言键。
 
-组合方块清单从 CompositeFactories 的实例表解析（map.put(Blocks.XXX, ...)），
-生成 41 个单变体 blockstate（空键覆盖全部状态，power 等属性靠通配），
-统一指向 liquidphase:block/redstone_phase（完整 16³ 立方体）。
+红石相 = 宿主方块上的 phase 取值（redstone_0 … redstone_15），不再是独立方块。
+本脚本从客户端 jar 提取宿主原版 blockstate，生成
+"宿主原版 multipart part + 一层 16³ 红石粉尘外壳" 的 multipart：
 
-贴图是内置的"疏松红石线"图案：16×16 透明底、短线按象限铺满整面，
-三档红色（暗红/主红/亮红），左右上下接缝对称、跨方块拼贴连续。
-不再使用原版 redstone_dust_dot.png —— 那张图只有正中一个点，
-铺到整面时看起来"只覆盖一点红石大小"。
+- 宿主 part 保留原 when（朝向/形状/连接态），并合并 phase 条件
+  `phase = none|lava|obsidian|ice|frosted_0..3`（其它相由各自的覆盖层负责）。
+- 追加 16 个 `when: {phase: redstone_N}` 的 part，全部指向同一个外壳模型
+  （功率只影响信号，不影响外观）。
+- 外壳贴图 = 内置的疏松红石碎屑图案（16×16 透明底，铺满整面）。
+- 外壳整体外扩 0.01px，避免与宿主共面的面片深度冲突。
 
 用法:
-    python tools/gen_redstone_assets.py \
-        src/main/java/org/liquidphase/redstone/composites/CompositeFactories.java \
-        src/main/resources/assets/liquidphase \
-        [客户端 jar 路径]
+    python tools/gen_redstone_assets.py <CompositeFactories 或宿主清单> <assets/liquidphase> <客户端 jar>
 
-第三个参数仍是客户端 jar（宿主原版 blockstate 从 jar 内提取），贴图不再取 jar。
+第 1 个参数现在只用来做"41 个宿主"的数量校验（红石相不再有自己的方块类），
+可以传 tools/phase-blocks/<版本>.redstone-hosts 这样的纯 id 清单。
 """
 import json
 import re
@@ -28,7 +28,7 @@ from pathlib import Path
 
 # 16×16 疏松红石线图案：0=透明，1=暗红，2=主红，3=亮红。
 # 均匀撒满整面的短碎屑（约 29% 覆盖），方向各异、跨格取模 —— 贴到任何一个面都是
-# "疏松红石铺满正面"，四边可无缝拼贴（不会像 redstone_dust_dot 那样只有正中一点）。
+# "疏松红石铺满正面"，四边可无缝拼贴。
 TEXTURE = [
     "0300312320003002",
     "0002333002333003",
@@ -55,9 +55,7 @@ PALETTE = {
     "3": (255, 86, 72, 255),
 }
 
-DUST_DOT_ENTRY = "assets/minecraft/textures/block/redstone_dust_dot.png"
-
-# 中文名按原版译名（红石相前缀在生成时统一添加）
+# 中文名按原版译名
 ZH_NAMES = {
     "oak_stairs": "橡木楼梯",
     "spruce_stairs": "云杉楼梯",
@@ -105,11 +103,6 @@ ZH_NAMES = {
 MODEL_ID = "liquidphase:block/redstone_phase"
 TEXTURE_ID = "liquidphase:block/redstone_phase"
 
-# 红石粉尘外壳 = 完整 16³ 立方体，包在宿主模型外面（不内缩）。
-# 贴图是透明底 cutout：只有红石粉像素不透明并盖住宿主，透明像素后面直接透出
-# 内部宿主的原版模型（multipart 的另一组 part）。
-# 外壳整体外扩 0.01px（约 1/1600 格），避免与宿主共面的面片（方块底面/侧面）
-# 发生深度冲突闪烁；这个量级在视觉上不可见。
 SHELL_OVERHANG = 0.01
 SHELL_FACES = ("down", "up", "north", "south", "west", "east")
 
@@ -126,9 +119,11 @@ MODEL = {
 
 HOST_BLOCKSTATE_ENTRY = "assets/minecraft/blockstates/{host}.json"
 
+# 宿主 part 只在"不渲染红石外壳"的相下渲染。
+NON_REDSTONE_PHASES = "none|lava|obsidian|ice|frosted_0|frosted_1|frosted_2|frosted_3"
+
 
 def load_host_blockstate(jar: Path, host: str) -> dict:
-    """从客户端 jar 提取宿主原版 blockstate（6 个版本内容一致，已核对）。"""
     with zipfile.ZipFile(jar) as zf:
         return json.loads(zf.read(HOST_BLOCKSTATE_ENTRY.format(host=host)).decode("utf-8"))
 
@@ -152,14 +147,30 @@ def host_parts(blockstate: dict):
     return [dict(part) for part in blockstate["multipart"]]
 
 
-def composite_blockstate(jar: Path, host: str) -> dict:
-    """组合方块 blockstate = 宿主原版几何 + 粉尘外壳（透明处露出里面的宿主材质）。
+def with_phase(when, condition):
+    merged = dict(when) if when else {}
+    merged["phase"] = condition
+    return merged
 
-    宿主 part 保留原 when 条件（朝向/形状/连接态）；power 未出现在 when 里，
-    multipart 对未列出的属性天然通配，所以 16 个功率共用同一套模型。
+
+def composite_blockstate(jar: Path, host: str) -> dict:
+    """宿主原版几何 + 红石外壳（透明处露出里面的宿主材质）。
+
+    宿主 part 保留原 when，并限制在"非红石相"的 phase 下；
+    再追加 16 条 phase=redstone_N 的 part 指向同一个外壳模型。
     """
-    parts = host_parts(load_host_blockstate(jar, host))
-    parts.append({"apply": {"model": MODEL_ID}})
+    parts = []
+    for part in host_parts(load_host_blockstate(jar, host)):
+        new_part = {
+            "apply": part["apply"],
+            "when": with_phase(part.get("when"), NON_REDSTONE_PHASES),
+        }
+        parts.append(new_part)
+    for power in range(16):
+        parts.append({
+            "when": {"phase": "redstone_%d" % power},
+            "apply": {"model": MODEL_ID},
+        })
     return {"multipart": parts}
 
 
@@ -181,9 +192,12 @@ def write_png(path: Path, rows) -> None:
     path.write_bytes(png)
 
 
-def collect_hosts(factories: Path):
-    text = factories.read_text(encoding="utf-8")
+def collect_hosts(source: Path):
+    """从 CompositeFactories.java 或纯 id 清单里收集 41 个宿主 id。"""
+    text = source.read_text(encoding="utf-8")
     ids = re.findall(r"map\.put\(Blocks\.([A-Z0-9_]+),", text)
+    if not ids:
+        ids = [line.strip().upper() for line in text.splitlines() if line.strip() and not line.strip().startswith("#")]
     hosts = []
     for upper in ids:
         host = upper.lower()
@@ -202,39 +216,35 @@ def write_lang(path: Path, keys) -> None:
 
 
 def main() -> None:
-    factories = Path(sys.argv[1])
+    source = Path(sys.argv[1])
     out = Path(sys.argv[2])
     jar = Path(sys.argv[3]) if len(sys.argv) >= 4 else None
     if jar is None:
         raise SystemExit(
             "client jar path is required (host blockstates are extracted from it):\n"
-            "  python tools/gen_redstone_assets.py <CompositeFactories.java> <assets/liquidphase> <minecraft-client.jar>"
+            "  python tools/gen_redstone_assets.py <host-list> <assets/liquidphase> <minecraft-client.jar>"
         )
-    hosts = collect_hosts(factories)
+    hosts = collect_hosts(source)
     if len(hosts) != 41:
-        raise SystemExit(f"expected 41 hosts from {factories}, got {len(hosts)}: {hosts}")
+        raise SystemExit(f"expected 41 hosts from {source}, got {len(hosts)}: {hosts}")
 
-    # 贴图：疏松红石线图案（不再从客户端 jar 提取原版 dot，避免只有正中一小块）
     for row in TEXTURE:
         if len(row) != 16:
             raise SystemExit(f"bad texture row: {row!r}")
     texture_path = out / "textures" / "block" / "redstone_phase.png"
     texture_path.parent.mkdir(parents=True, exist_ok=True)
     write_png(texture_path, [[PALETTE[c] for c in row] for row in TEXTURE])
-    print("dust source: built-in porous redstone pattern")
 
-    # 方块模型
     model_path = out / "models" / "block" / "redstone_phase.json"
     model_path.parent.mkdir(parents=True, exist_ok=True)
     model_path.write_text(json.dumps(MODEL, indent=2, sort_keys=False) + "\n", encoding="utf-8")
 
-    # 41 个 blockstate
     blockstates_dir = out / "blockstates"
     blockstates_dir.mkdir(parents=True, exist_ok=True)
     en = {}
     zh = {}
     for host in hosts:
-        target = blockstates_dir / f"redstone_{host}.json"
+        target = blockstates_dir / f"{host}.json"
         target.write_text(json.dumps(composite_blockstate(jar, host), separators=(",", ":")) + "\n", encoding="utf-8")
         key = f"block.liquidphase.redstone_{host}"
         en[key] = "Redstone-Phase " + host.replace("_", " ").title()
@@ -246,7 +256,7 @@ def main() -> None:
     print(f"hosts: {len(hosts)}")
     print(f"texture: {texture_path}")
     print(f"model: {model_path}")
-    print(f"blockstates: {len(list(blockstates_dir.glob('redstone_*.json')))} files -> {blockstates_dir}")
+    print(f"blockstates: {len(list(blockstates_dir.glob('*.json')))} files -> {blockstates_dir}")
     print(f"lang keys: {len(en)} (en_us + zh_cn)")
 
 

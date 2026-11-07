@@ -70,8 +70,8 @@ public final class PhaseHelper {
     /**
      * 带相写入；水相相属性互斥（waterlogged=true ⟺ phase=none）。
      * <p>
-     * 没有 phase 属性的状态（红石相组合方块是宿主子类 + POWER，不带 phase）原样返回：
-     * 直接 setValue 会抛 IllegalArgumentException。
+     * 没有 phase 属性的状态原样返回：直接 setValue 会抛 IllegalArgumentException。
+     * （红石相现在是 phase 的一个取值，同样走这里。）
      */
     public static BlockState withPhase(BlockState state, Phase phase) {
         if (!state.hasProperty(PHASE)) {
