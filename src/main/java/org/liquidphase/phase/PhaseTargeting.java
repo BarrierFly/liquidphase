@@ -113,7 +113,8 @@ public final class PhaseTargeting {
             return false;
         }
         BlockHitResult phaseHit = phase.clip(eye, end, pos);
-        if (phaseHit.getType() != BlockHitResult.Type.BLOCK) {
+        // VoxelShape.clip 未命中时返回 null（不是 MISS 结果）：射线只碰到宿主本体时就是 null → 宿主目标。
+        if (phaseHit == null || phaseHit.getType() != BlockHitResult.Type.BLOCK) {
             return false;
         }
         VoxelShape host = hostOutline(state);
