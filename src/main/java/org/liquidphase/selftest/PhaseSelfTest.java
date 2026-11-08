@@ -63,6 +63,7 @@ public final class PhaseSelfTest {
             checkPlaceIntoWire(level, base);
             checkPlaceIntoWireByPlayer(level, base);
             checkScaffoldingStacking(level, base);
+            checkFallingBlockIntoWire(level, base);
             checkWireStaysUnreplaceable(level, base);
             checkRedstoneRenderParts();
             checkCauldron(level, base);
@@ -348,6 +349,70 @@ public final class PhaseSelfTest {
 
         level.setBlock(wirePos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(wirePos.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+    }
+
+    // ------------------------------------------------------------------
+    // 下落方块（FallingBlockEntity）落位
+    // ------------------------------------------------------------------
+
+    /**
+     * 下落方块落位不经过 {@code BlockItem.place}：{@code FallingBlockEntity.tick()}
+     * 自己调 {@code landing.canBeReplaced(new DirectionalPlaceContext(..., ItemStack.EMPTY, ...))}
+     * 再直接 {@code setBlock}。这条断言覆盖两个方向：
+     * <ul>
+     *   <li>相容宿主（钟乳石）能落进线格，并带上原线功率；</li>
+     *   <li>非宿主（沙子）保持原版行为，落在线上会弹成物品、线格不变。</li>
+     * </ul>
+     */
+    private static void checkFallingBlockIntoWire(ServerLevel level, BlockPos base) {
+        // ---- (1) 相容宿主下落：应落进线格并带红石相 ----
+        BlockPos hostWire = base.offset(16, 1, 0);
+        level.setBlock(hostWire.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(hostWire, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(hostWire.west().below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(hostWire.west(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        int hostPower = level.getBlockState(hostWire).getValue(BlockStateProperties.POWER);
+
+        BlockState dripstone = Blocks.POINTED_DRIPSTONE.defaultBlockState();
+        net.minecraft.world.entity.item.FallingBlockEntity hostEntity =
+            net.minecraft.world.entity.item.FallingBlockEntity.fall(level, hostWire.above(3), dripstone);
+        // 直接把它放到线格正上方，避免等它自己掉（自检不推进 tick）
+        hostEntity.setPos(hostWire.getX() + 0.5, hostWire.getY() + 0.02, hostWire.getZ() + 0.5);
+        hostEntity.setOnGround(true);
+        hostEntity.tick();
+
+        BlockState hostAfter = level.getBlockState(hostWire);
+        assertTrue("falling host: landed in the wire tile (got " + hostAfter.getBlock() + ")",
+            hostAfter.is(Blocks.POINTED_DRIPSTONE));
+        assertTrue("falling host: carried the redstone phase (got " + PhaseHelper.getPhase(hostAfter) + ")",
+            RedstoneBlocks.isRedstonePhase(hostAfter));
+        assertTrue("falling host: power followed the wire (wire=" + hostPower + ", got "
+                + RedstoneBlocks.getPower(hostAfter) + ")",
+            RedstoneBlocks.getPower(hostAfter) == hostPower);
+
+        hostEntity.discard();
+        level.setBlock(hostWire, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(hostWire.above(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(hostWire.west(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+        // ---- (2) 非宿主下落（沙子）：保持原版，红石线不被覆盖 ----
+        BlockPos sandWire = base.offset(17, 1, 0);
+        level.setBlock(sandWire.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(sandWire, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
+
+        net.minecraft.world.entity.item.FallingBlockEntity sand =
+            net.minecraft.world.entity.item.FallingBlockEntity.fall(level, sandWire.above(3),
+                Blocks.SAND.defaultBlockState());
+        sand.setPos(sandWire.getX() + 0.5, sandWire.getY() + 0.02, sandWire.getZ() + 0.5);
+        sand.setOnGround(true);
+        sand.tick();
+
+        assertTrue("falling sand: wire tile not replaced (got " + level.getBlockState(sandWire).getBlock() + ")",
+            level.getBlockState(sandWire).is(Blocks.REDSTONE_WIRE));
+
+        sand.discard();
+        level.setBlock(sandWire, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(sandWire.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
     }
 
     // ------------------------------------------------------------------

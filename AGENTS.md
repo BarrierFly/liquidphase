@@ -107,6 +107,7 @@ phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有�
 | `getSignal`/`getDirectSignal`/`isSignalSource` 状态级注入 | `mixin/RedstoneSignalMixin.java` |
 | 红石线连接判定 | `mixin/RedStoneWireBlockMixin`（≤1.21.11）/ `BlockStateBaseMixin.shouldRedstoneWireConnectTo`（26.3） |
 | 红粉点宿主 / 宿主放进线格 | `mixin/BlockItemMixin` + `mixin/RedstoneWireReplaceMixin` |
+| 下落方块落进线格 | `mixin/FallingBlockIntoWireMixin` |
 | cutout 图层的宿主清单 | `redstone/RedstoneRenderBlocks.java` + `tools/redstone-hosts.txt` |
 
 **代价**：`phase` 从 8 个取值变成 24 个（×3），1.21.11 的状态数从 175,607 涨到 **509,175**，
@@ -189,6 +190,33 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 **不要**接管红石线自身的 `use`/`useWithoutItem`：那是方块交互，会把点击路径写进逻辑。
 玩家点线本身时原版本来就会先切换点/十字形状，这个行为要保留（见 §5 测试矩阵）。
 
+#### 三个容易踩的坑
+
+1. **注入必须挂在状态级 `BlockStateBase.canBeReplaced(BlockPlaceContext)`，不能挂块级。**
+   块级 `BlockBehaviour.canBeReplaced(state, context)` 会被宿主的覆写遮蔽：
+   `ScaffoldingBlock`、`SlabBlock`、`SnowLayerBlock`、`VineBlock`、`SeaPickleBlock`、
+   `CandleBlock`、`MultifaceBlock`、`BedBlock`、`DoorBlock`、`TurtleEggBlock`、
+   `MossyCarpetBlock`、`FlowerBedBlock`、`LeafLitterBlock`、`SegmentableBlock`、
+   `PitcherCropBlock`、`GrowingPlantBodyBlock`、`DoublePlantBlock`、`WallSkullBlock`
+   都自己声明了这个方法。块级钩子对它们完全不生效（脚手架堆叠就是这么坏掉的）。
+
+2. **下落方块（`FallingBlockEntity.tick()`）不经过 `BlockItem.place`。**
+   它自己调
+   ```java
+   landing.canBeReplaced(new DirectionalPlaceContext(level, pos, DOWN, ItemStack.EMPTY, UP))
+   ```
+   然后直接 `level.setBlock(pos, this.blockState, flags)`（26.3 是 `setBlockAndUpdate`）。
+   注意上下文里是 **`ItemStack.EMPTY`**——没有"手里的物品"可读，所以按物品判断的钩子
+   对这条路径永远返回 false。处理方式见 `mixin/FallingBlockIntoWireMixin`：
+   仅当**下落方块本身是 `PhaseCapable`** 时，把那个空物品上下文换成用下落方块自己的
+   物品构造的上下文；其它下落方块（沙子/砂砾/混凝土粉末）保持原样，仍会在线上弹成物品。
+   落位写方块时也要在这里补 `phase=redstone_<原线功率>`，因为 `BlockItem.place` 那条钩子
+   这条路径根本不触发。
+
+3. **`@Redirect` 用 `require = 1`，不要用 `require = 0`。**
+   两个注入点原版每个版本都有；`require = 0` 会让"某版本没命中"变成静默通过，
+   表现为"构建成功、实机不生效"。
+
 
 ### 3.3.1 信号结算时机
 
@@ -199,11 +227,12 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 ### 3.4 自动化自检
 
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
-`ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，53 项断言覆盖：
+`ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，57 项断言覆盖：
 相枚举/相位属性全覆盖、宿主方块身份、选择框/碰撞/遮挡、面露出判定、
 向红石线 -1 / 向固相满功率 / DOWN 不输出 / 被覆盖面不输出、供电即时性（邻居变化同 tick 生效）、
 红石线格放置（**两层**：无玩家直接 `BlockItem.place` + FakePlayer 走
-`ServerPlayerGameMode.useItemOn`）、脚手架堆叠（物品自己搜索落点那一类）、
+`ServerPlayerGameMode.useItemOn`）、统一用例，脚手架堆叠（物品自己搜索落点那一类）、
+下落方块落位（相容宿主落进线格带相；沙子仍被弹开）、
 红石线可替换性的精确边界（宿主放行、石头/红石粉仍拒绝）、炼药锅满锅取水门槛。
 默认关闭，不进正式玩法路径。**改动红石相形状或信号语义后请先跑它。**
 
@@ -252,6 +281,8 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 | 红石粉点楼梯 | 该格写入 `phase=redstone_15`；方块仍是原版楼梯、宿主模型可见、疏松红石碎屑铺满整面；破坏留红石线 |
 | 楼梯放进红石线格 | 该格换成楼梯并带红石相，朝向/半砖跟随点击面、功率沿用原线 |
 | 脚手架堆叠到线格 | 线格能被替换成脚手架（物品自己搜索落点那条路） |
+| 相容宿主下落 | 钟乳石等 `Fallable` + `PhaseCapable` 方块落到线格，变成含红石相的宿主 |
+| 普通下落方块 | 沙子/砂砾仍像原版一样弹成物品，红石线不被覆盖 |
 | 点线本身（不相容物品以外） | 原版先切换点/十字形状，属于预期行为 |
 | 非宿主方块进线格 | 仍然放不进去（石头/红石粉等保持原版行为） |
 | 红石线自身可替换性 | `canBeReplaced()` 仍为 false；只对相容宿主物品放行上下文重载 |

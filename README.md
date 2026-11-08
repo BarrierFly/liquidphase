@@ -124,11 +124,13 @@
     - 第一版（0.1.7）挂红石线自己的 `use`/`useWithoutItem`：接管右键、把点击路径写进逻辑，只对"点线本身"一种姿势生效。
     - 第二版（0.1.8 初稿）在 `BlockItem.place` 入口替换放置上下文（`WirePlaceContext`）：看起来能用，但**漏掉了"物品自己搜索落点"那一类**——`ScaffoldingBlockItem.updatePlacementContext` 会在自己的循环里调 `canBeReplaced`，红石线格被直接跳过、方块落到别处（打包成脚手架堆叠时暴露）。
     - **本版（最终）**：在 `canBeReplaced(BlockState, BlockPlaceContext)` 里放行——这一格是红石线、且这个放置上下文要放的方块是相容宿主 → 返回 `true`。这是**唯一**能同时覆盖 `BlockItem.place` 入口和物品自行搜索落点的位置。红石相由 `BlockItemMixin.placeBlock` 补：写方块前若目标格仍是红石线，就写成 `phase=redstone_<原线功率>`。
+  - **下落方块（`FallingBlockEntity`）落到线格也不行（同轮修）**：这条路径**既不走 `BlockItem.place`、也不走任何“手里的物品”**——`tick()` 里用 `landing.canBeReplaced(new DirectionalPlaceContext(level, pos, DOWN, ItemStack.EMPTY, UP))` 判一次，然后直接 `level.setBlock(pos, this.blockState, flags)`（26.3 是 `setBlockAndUpdate`）。那个上下文装的是 `ItemStack.EMPTY`，所以"按待放物品判断"的钩子对这条路径永远返回 false。新增 `FallingBlockIntoWireMixin`：仅当**下落方块本身是 `PhaseCapable`** 时，把空物品上下文换成用下落方块自己的物品构造的；落位写方块时补 `phase=redstone_<原线功率>`。沙子/砂砾/混凝土粉末保持原版，仍会在红石线上弹成物品。
+  - **注入位置踩过的坑**：块级 `BlockBehaviour.canBeReplaced(state, context)` 会被宿主覆写遮蔽（`ScaffoldingBlock`、`SlabBlock`、`SnowLayerBlock`、`VineBlock` 等十几个类都自己声明了），脚手架堆叠就是这么坏的。现在统一挂**状态级** `BlockStateBase.canBeReplaced(BlockPlaceContext)`，那是唯一不会被遮蔽的分发点。
   - **顺带纠正一个错误的判断**：曾以为放宽 `canBeReplaced(state, context)` 会让水流/活塞也把红石线当可替换方块。实际存在**两个重载**——`(BlockState, BlockPlaceContext)` 只服务方块放置，`(BlockState, Fluid)` 才是流体流动（`FluidState.canBeReplacedWith`）。改前者不影响水流与活塞。
   - **判定里没有"手持"**：用的是 `context.getItemInHand()`，即**放置上下文自己携带的待放物品**（玩家右键时来自手上，其它来源来自被投放的物品，同一个字段）；`getPlayer()` 为 `null` 时行为完全一样，不读 `InteractionHand`、不读潜行状态。
   - **点红线本身仍会被原版挡下**（`useWithoutItem` 先切换点/十字形状）。这是原版方块交互，按玩家要求保留。
   - **撤回**：`RedstoneWireUseMixin`（接管右键）与 `WirePlaceContext`（只覆盖单个入口）都已删除。
-  - 自检改为 **53 项，六版本实测 53/53**，放置类断言分两层：无玩家直接 `BlockItem.place`、FakePlayer 走真实 `ServerPlayerGameMode.useItemOn`；并新增脚手架堆叠、以及可替换性边界（宿主放行 / 石头与红石粉仍拒绝）的断言。
+  - 自检改为 **57 项，六版本实测 57/57**，放置类断言分两层：无玩家直接 `BlockItem.place`、FakePlayer 走真实 `ServerPlayerGameMode.useItemOn`；并新增脚手架堆叠、下落方块落位（相容宿主带相 / 沙子仍弹开）、以及可替换性边界（宿主放行 / 石头与红石粉仍拒绝）的断言。
   - 新增 `tools/check_redstone_render.py`：按原版 multipart 语义模拟状态命中，断言红石相下 `host parts > 0`。
   - 新增 `tools/verify_jars.py`：发布前抽查 dist 里每个 jar 的版本号、非法 condition 数，并断言放行 mixin 在包里、已删除的两个 mixin 确实不在包里。
 
