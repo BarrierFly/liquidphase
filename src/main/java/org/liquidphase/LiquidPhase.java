@@ -48,8 +48,15 @@ public final class LiquidPhase implements ModInitializer {
         if (!enabled) {
             return;
         }
-        net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STARTED.register(
-            org.liquidphase.selftest.PhaseSelfTest::run);
+        // 便于脚本/CI：跑完自检直接关服，不用手动 kill（默认不关）。
+        boolean stopAfter = Boolean.getBoolean("liquidphase.selftest.stop")
+            || "true".equalsIgnoreCase(System.getenv("LIQUIDPHASE_SELFTEST_STOP"));
+        net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+            org.liquidphase.selftest.PhaseSelfTest.run(server);
+            if (stopAfter) {
+                server.halt(false);
+            }
+        });
     }
 
     /**

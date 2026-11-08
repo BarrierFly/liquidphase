@@ -81,7 +81,8 @@
    （透明底 cutout，贴图是**短碎屑铺满整面**的疏松红石纹理），形状/碰撞/掉落仍是楼梯自己的。
    按红石线规则衰减传递信号（对相邻红石线 -1，对灯/活塞等元件满功率），被宿主遮住的面不输出；
    破坏它 → 留下对应功率的红石线。
-   也可以反过来：拿楼梯/台阶等可含水方块**右键点红石线所在格**，直接吸走那条线变成含红石相的宿主。
+   也可以反过来：把楼梯/台阶等可含水方块**放进红石线所在的那一格**，那条线就被吸进宿主、
+   变成含红石相的方块（功率沿原线）。这一步走的是普通方块放置流程，和谁在放无关：
 7. 拿空桶**左键**水锅/熔岩锅 → 整锅拆空、掉落"水"/"熔岩"物品；**锅本身保留**。
    只有满锅才能取（水锅必须是 3 级）；右键对着锅不再取水。
 
@@ -114,6 +115,51 @@
 ---
 
 ## 变更记录
+
+- **未发布（0.1.8：修 0.1.7 的两个实机问题）**：
+  - **红石相表面按不透明渲染 / 楼梯形状消失**：根因不在渲染层注册（1.21.10/1.21.11 实测 `ItemBlockRenderTypes.getChunkRenderType` 已是 `CUTOUT`），而是 blockstate 把**宿主模型整个排除了**——宿主 part 的 `phase` 条件被限制成`none|lava|obsidian|ice|frosted_0..3`，于是含红石相时宿主根本不渲染，整格只剩一个 16³ 粉尘外壳。视觉上就是"整格变成不透明粉尘面、楼梯形状没了"。
+    改为：宿主 part 的 `phase` 条件覆盖**全部 24 个取值**（任何相下都照常渲染），红石外壳只是**额外叠加**一层——与旧版组合方块"宿主 + 粉尘外壳同时渲染"的行为一致。
+  - **可含水方块放不进红石线所在格（修法推翻重做）**：上一版的做法是放宽 `BlockBehaviour.canBeReplaced(state, context)`，让红石线在"手持相容宿主"时算作可替换。这解决了一半问题，但代价是**把红石线对全世界的可替换语义改掉了**——水流、活塞、邻居更新、其它模组都会把红石线当可替换方块，属于改坏底层语义。
+    本版改为**只在放置上下文里放行**，见下文"放置入口"。
+  - **放置入口（最终方案）**：能力属于"方块放置流水线"，与玩家、手、`InteractionHand`、潜行**完全无关**。
+    根因只有一个：`BlockItem.place` 第一步 `context.canPlace()` 只问"目标格能不能被替换"，红石线不可替换 → 直接 FAIL。
+    现在新增 `redstone/WirePlaceContext`：`canPlace()` 恒真（仅限该上下文）、`getClickedPos()` 指向线格；
+    `BlockItemMixin` 在 `place` 入口用 `@ModifyVariable` 换上下文（**仅当要放的方块是 `PhaseCapable`**），
+    在 `placeBlock` 入口补 `phase=redstone_<原线功率>`。其余流程原封不动
+    （`updatePlacementContext → getStateForPlacement → placeBlock → setPlacedBy →` 音效/统计/扣物品），
+    朝向/半砖/连接态/含水全部由宿主自己的 `getStateForPlacement` 按线格算出。
+  - **撤回前两轮的两种错误做法**：删除 `RedstoneWireUseMixin`（接管红石线 `use`/`useWithoutItem`，
+    把玩家点击手势写进逻辑，只对"点线本身"这一种姿势生效）与 `RedstoneWireReplaceMixin`
+    （全局放宽 `canBeReplaced`，改坏方块语义）。
+  - 自检改为 **48 项，六版本实测 48/48**：放置类断言**不再用 FakePlayer**，改成直接驱动
+    `BlockItem.place`（无玩家、无手），并新增三条反向断言——非宿主方块仍放不进线格、
+    红石线自身仍不可替换、普通红石粉放置不受影响。这样才能区分"精确放行"和"全局放宽"。
+  - 新增 `tools/check_redstone_render.py`：按原版 multipart 语义模拟状态命中，断言红石相下 `host parts > 0`。
+  - 新增 `tools/verify_jars.py`：发布前抽查 dist 里每个 jar 的版本号、非法 condition 数，
+    并断言 `WirePlaceContext` 在包里、两个已删除的 mixin 确实不在包里。
+
+- **未发布（修复 0.1.6 的两个实机问题）**：
+  - **可含水方块整片变成紫黑"错误模型"**：`tools/gen_phase_blockstates.py` 合并条件时
+    拼出了 `phase: "(obsidian)&(none|lava|...)"` 这种伪语法。原版 multipart 的 `when`
+    没有 `&` 运算符——值里只有 `a|b`（同一属性的 OR），跨属性必须写成
+    `{"AND": [...]}` / `{"OR": [...]}`。解析器把这个字符串当成一个属性取值去查，
+    抛 `Unknown value`，**整份 blockstate 加载失败**，于是该方块全部状态都没有模型
+    （日志刷 `Missing model for variant`），只有内缩的相覆盖层还渲染得出来。
+    受影响的是 41 个红石相宿主（楼梯/台阶/墙/栅栏）的所有状态，六个版本都有。
+    改为正确的嵌套条件合并（`and_condition()`），并给生成器加了产出前自检
+    （`validate_result()`，非法条件直接让构建失败）。
+  - **`resin_clump` 等方块报 `Unknown property 'phase'`**：1.21.10+ 的多面体家族
+    （glow_lichen / sculk_vein / resin_clump）统一成 `MultifaceBlock`，但
+    `PhaseCapableMixin` 的 stonecutter 分支把 live 分支写成了旧的
+    `GlowLichenBlock`/`SculkVeinBlock`，导致这些方块拿不到 `phase` 属性，
+    而生成器又给它们的 blockstate 加了 `phase` 条件。已把 1.21.10+ 分支改为
+    `MultifaceBlock`（注入数 409 → 410）。
+  - **向红石线占用的方块放置宿主"还是没反应"**：最常见的真实手势是线铺在地上、玩家拿着楼梯去点**线下面支撑它的方块**。此时原版 `BlockPlaceContext` 已经把`getClickedPos()` 算成"线所在那一格"，但那一格是红石线（不可替换）→ `canPlace()` 为 false；而 `RedstoneWireUseMixin` 只在**直接右键红石线**时触发，于是右键毫无反应。`BlockItemMixin` 新增 (b1) 分支显式接管这条路径：把宿主写进红石线所在格、功率沿用原线。
+  - **自检补上"真实右键入口"**：新增 9 项断言用 `FakePlayer` 驱动
+    `ServerPlayerGameMode.useItemOn` 把楼梯放进红石线格，覆盖客户端真正走的那条路；
+    旧自检只调内部方法，mixin 失效也会 PASS。另加"每个 PhaseCapable 都有 phase 属性"
+    与"生成器产出可被原版解析"两条守护断言。共 42 项，六版本实测 42/42。
+  - 自检新增 `-Dliquidphase.selftest.stop=true`：跑完自动关服，便于脚本刷六版本。
 
 - **0.1.6**：放宽 `fabric.mod.json` 的依赖声明——`fabricloader` 从构建用的 `>=0.20.1` 改为
   各版本实测最小需求（`max(Fabric API 要求, 0.15.0)`，0.15.0 起 loader 自带 MixinExtras）；
@@ -258,7 +304,8 @@ occlusion explicitly from its host, and all six versions pass startup + self-tes
 model with a full-cube redstone-dust shell on top**:
 the shell uses a porous redstone-wire texture that fills each face, transparent pixels let the host show through (cutout), the crosshair outline
 covers the whole cube (collision stays with the host), and they have **no item form**; they are only created through redstone-dust/phase-block
-interactions (either dust on a host, or a host item right-clicked onto a redstone wire). Signals decay by 1 into neighbouring wires/composites
+interactions (either dust on a host, or a host block item placed into the redstone-wire tile through the normal block placement pipeline).
+Signals decay by 1 into neighbouring wires/composites
 but stay at full power for lamps, pistons and other components.
 Phased blocks with a solid phase look like a full cube of that material, but collision and mining still follow the host: aim at the exposed host and
 it mines at host speed, aim at the exposed phase and it mines as the phase material (obsidian still needs a diamond pickaxe — that slowness is intended).

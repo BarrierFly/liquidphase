@@ -44,12 +44,14 @@ import org.spongepowered.asm.mixin.Mixin;
         HeavyCoreBlock.class,
         //?}
         HangingRootsBlock.class,
+        // 1.21.10+ 多面体家族统一成 MultifaceBlock（glow_lichen / sculk_vein / resin_clump 都直接或间继承它）。
+        // 注意：原始源码必须对 1.21.11 合法——这里的 live 分支就是 1.21.11 要用的 MultifaceBlock。
         //? if 1.19.4 || 1.20.1 || 1.21.1 {
-        GlowLichenBlock.class,
+        /*GlowLichenBlock.class,
         SculkVeinBlock.class,
-        //?} else {
-        /*MultifaceBlock.class,
-         *///?}
+        *///?} else {
+        MultifaceBlock.class,
+        //?}
         LadderBlock.class,
         LanternBlock.class,
         LeavesBlock.class,

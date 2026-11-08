@@ -3,7 +3,6 @@ package org.liquidphase.redstone;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.BlockGetter;
@@ -21,7 +20,6 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.liquidphase.phase.Phase;
-import org.liquidphase.phase.PhaseCapable;
 import org.liquidphase.phase.PhaseHelper;
 
 /**
@@ -170,12 +168,6 @@ public final class RedstoneBlocks {
     // 生成与破坏
     // ------------------------------------------------------------------
 
-    /** {@return 手持物品是否为"可以变成含红石相"的宿主方块物品} */
-    public static boolean isPhaseHostItem(ItemStack stack) {
-        return stack.getItem() instanceof BlockItem blockItem
-            && blockItem.getBlock() instanceof PhaseCapable;
-    }
-
     /**
      * 把该格换成含红石相的宿主（功率沿用传入值）。
      * <p>
@@ -197,25 +189,6 @@ public final class RedstoneBlocks {
     /** 直接挖红石相（D8）：掉红石粉、相清空、宿主保留。 */    public static void mineRedstonePhase(ServerLevel level, BlockPos pos, BlockState state) {
         Block.popResource(level, pos, new ItemStack(Items.REDSTONE));
         level.setBlock(pos, PhaseHelper.withPhase(state, Phase.NONE), Block.UPDATE_ALL);
-    }
-
-    /**
-     * 放置实现（与玩家解耦，自检也走这条路径）：
-     * 把 hostState 写进红石线所在格，并把线的功率带过去。
-     */
-    public static boolean placeHostIntoWire(Level level, BlockPos pos, BlockState hostState, int power) {
-        if (hostState == null || !PhaseHelper.hasPhaseProperty(hostState)) {
-            return false;
-        }
-        if (!isWire(level.getBlockState(pos))) {
-            return false;
-        }
-        BlockState target = PhaseHelper.withPhase(hostState, Phase.redstone(power));
-        if (!target.canSurvive(level, pos)) {
-            return false;
-        }
-        level.setBlock(pos, target, Block.UPDATE_ALL);
-        return true;
     }
 
     /** 破坏保留：含红石相的宿主被破坏 → 原格留下对应功率的原版红石线。 */

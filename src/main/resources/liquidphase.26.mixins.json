@@ -4,8 +4,7 @@
   "compatibilityLevel": "JAVA_21",
   "minVersion": "0.8",
   "mixins": [
-    "DispatcherAccessor",
-    "RedstoneWireUseMixin"
+    "DispatcherAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -68,6 +68,25 @@ python tools/gen_redstone_assets.py tools/redstone-hosts.txt \
 
 `tools/phase-blocks/<版本>.ids` 是相容方块 id 清单；`<版本>.closure.txt` 是"直接实现 SimpleWaterloggedBlock 的类 + 继承闭包"。
 
+### 2.1 发布前静态校验（0.1.7 起）
+
+```bash
+# 1) 生成出来的 blockstate 是否都能被原版 multipart 解析器接受
+#    （按 KeyValueCondition/CombinedCondition 的真实语义，覆盖全部 6 个版本的构建产物）
+python tools/validate_blockstates.py
+
+# 2) 每个版本 jar 里 PhaseCapableMixin 的 @Mixin 目标是否对得上该版本的多面体/石钟乳家族
+#    （1.21.10+ 是 MultifaceBlock / SpeleothemBlock，之前是 GlowLichen+SculkVein / PointedDripstone）
+python tools/check_mixin_targets.py
+
+# 3) dist/ 里的 jar 内部资源抽查（版本号、坏条件数、关键 mixin 是否真的在包里）
+python tools/verify_jars.py
+```
+
+`tools/validate_blockstates.py` 会在构建时被 `gen_phase_blockstates.py` 的
+`validate_result()` 再查一遍（非法条件直接让 `convertPhaseBlockstates` 失败），
+但单独跑一次可以对任意产物（含已经拷进 `dist/` 的 jar）复核。
+
 ### 3.1 相覆盖层的两类宿主
 
 `tools/gen_phase_blockstates.py` 的 `FULL_CUBE_HOSTS` 列出"原版模型本来就填满整格"的宿主
@@ -87,7 +106,7 @@ phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有�
 | 信号输出/接收/重算/生成/破坏 | `redstone/RedstoneBlocks.java` |
 | `getSignal`/`getDirectSignal`/`isSignalSource` 状态级注入 | `mixin/RedstoneSignalMixin.java` |
 | 红石线连接判定 | `mixin/RedStoneWireBlockMixin`（≤1.21.11）/ `BlockStateBaseMixin.shouldRedstoneWireConnectTo`（26.3） |
-| 红粉点宿主 / 宿主放进线格 | `mixin/BlockItemMixin` / `mixin/RedstoneWireUseMixin` |
+| 红粉点宿主 / 宿主放进线格 | `mixin/BlockItemMixin` + `redstone/WirePlaceContext.java` |
 | cutout 图层的宿主清单 | `redstone/RedstoneRenderBlocks.java` + `tools/redstone-hosts.txt` |
 
 **代价**：`phase` 从 8 个取值变成 24 个（×3），1.21.11 的状态数从 175,607 涨到 **509,175**，
@@ -95,8 +114,26 @@ phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有�
 
 **渲染**：`tools/gen_phase_blockstates.py` 除了相覆盖层，还会对 `tools/redstone-hosts.txt`
 里的 41 个宿主额外追加：
-- 宿主原 part 的 `when.phase` 限制为 `none|lava|obsidian|ice|frosted_0..3`；
-- 16 条 `when{phase: redstone_N}` 的 part，全部指向同一个外壳模型。
+- 宿主原 part 的 `when.phase` 补上**全部 24 个相**（= 任何相下宿主都照常渲染）；
+- 16 条 `when{phase: redstone_N}` 的 part，全部指向同一个外壳模型（**叠加**在宿主之上）。
+
+> ⚠️ **红石相是"宿主 + 外壳叠加"，不是"外壳取代宿主"**（0.1.7 的实机 bug）。
+> 曾经把宿主 part 限制成 `phase != redstone_*`，结果含红石相时**宿主根本不渲染**，
+> 整格只剩一个 16³ 粉尘外壳：楼梯/台阶的形状消失、整格变成不透明粉尘面——
+> 玩家看到的就是"红石相表面按不透明渲染"。正确做法是宿主 part 的 phase 条件
+> 覆盖全部取值，外壳只多渲染一层。回归检查：`python tools/check_redstone_render.py`
+> （断言红石相状态下 `host parts > 0`）。
+
+> ⚠️ **multipart 的 `when` 没有 `"a&b"` 这种语法**（0.1.6 的实机 bug）。
+> 原版解析器（`KeyValueCondition` / `CombinedCondition`）的规则是：
+> 一个 object 内的多个键 = AND，值里的 `a|b` = 同一属性的 OR，
+> 跨属性组合必须显式写成 `{"AND": [...]}` / `{"OR": [...]}`，且一个 object 里
+> **不能**同时出现 `AND`/`OR` 与属性键。写成 `"(a)&(b)"` 会被当成一个属性取值去查，
+> 抛 `Unknown value`，**整份 blockstate 加载失败**，该方块所有状态退化成 missing model
+> （紫黑方块 + `Missing model for variant` 刷屏）。合并条件一律走
+> `and_condition()`；生成器结尾有 `validate_result()` 自检，非法条件直接让构建失败。
+> 相覆盖层（`when` 里已带 `phase`）不要参与"排除红石相"的合并，否则条件取交集后永远不成立、
+> 覆盖层不渲染。
 
 外壳模型/贴图由 `tools/gen_redstone_assets.py` 生成（16³ 外壳外扩 0.01px，贴图是
 **短碎屑均匀铺满整面**的疏松红石纹理，16×16 透明底、约 29% 覆盖、跨格可拼贴）。
@@ -104,11 +141,47 @@ phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有�
 ### 3.3 红石相的两向生成
 
 - 红石粉点宿主 → 该格写入 `phase=redstone_15`（`BlockItemMixin` 分支 a0）。
-- 宿主方块右键点红石线格 → 宿主写进该格、功率沿用原线
-  （`RedstoneWireUseMixin` + `RedstoneBlocks.placeHostIntoWire`）。
-  **必须挂在红石线自己的右键入口上**：红石线的“点/十字切换”会先吃掉交互，
-  `BlockItem.place` 那条分支根本走不到（踩过的坑）。位置换算走 `WirePlaceContext`
-  （`replaceClicked = true`，否则 `getClickedPos()` 会是线旁边那格）。
+- 相容宿主方块落到红石线所在格 → 宿主写进该格、功率沿用原线。
+
+**关键：放置能力属于"方块放置流水线"，与玩家、手、`InteractionHand`、潜行都无关。**
+
+根因只有一个：`BlockItem.place` 的第一步
+
+```java
+if (!context.canPlace()) return FAIL;
+```
+
+`canPlace()` 只问"目标格现在能不能被替换"，而红石线不是可替换方块 → 直接 FAIL。
+以前两轮都绕错了地方：
+
+| 做法 | 后果 |
+| --- | --- |
+| 挂红石线自己的 `use` / `useWithoutItem`（`RedstoneWireUseMixin`） | 接管右键、把玩家手势写进逻辑；只对"点线本身"这一种姿势生效 |
+| 放宽 `BlockBehaviour.canBeReplaced(state, context)`（`RedstoneWireReplaceMixin`） | 红石线对**所有系统**（水流、活塞、邻居更新、其它模组）都变成可替换方块 |
+
+这两个 mixin 都已删除。正确做法是**只在放置上下文里回答两个问题**：
+
+```java
+final class WirePlaceContext extends BlockPlaceContext {
+    @Override public boolean canPlace() { return true; }          // 只对本上下文
+    @Override public BlockPos getClickedPos() { return wirePos; } // 目标格定到线格
+}
+```
+
+`BlockItem.place` 的入口用 `@ModifyVariable` 把上下文换掉（只对
+`getBlock() instanceof PhaseCapable` 生效），`placeBlock` 处再把
+`phase=redstone_<原线功率>` 补进状态。其余流程原封不动：
+`updatePlacementContext → getPlacementState → placeBlock → setPlacedBy →` 音效/统计/扣物品。
+所以朝向、半砖、连接态、含水全部由宿主自己的 `getStateForPlacement` 按线格算出来。
+
+**目标格怎么定**（`WirePlaceContext.of`，纯几何）：
+
+1. 原版算出的落点已经是线格 → 直接用（对着线下面撑它的方块、对着线旁方块朝线的那个面）；
+2. 命中的方块就是红石线本身 → 目标格取线所在格。
+
+判定里没有玩家、没有手、没有潜行。不要再用 `replaceClicked = true` 硬改点击语义，
+也不要再按"点线""点线下面"分别加特例——那都是绕同一个判定，换种姿势就失效。
+
 
 ### 3.3.1 信号结算时机
 
@@ -119,13 +192,25 @@ phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有�
 ### 3.4 自动化自检
 
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
-`ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，33 项断言覆盖：
-组合方块注册/反向表/属性、选择框整格、碰撞=宿主（含缓存）、遮挡非整格、面露出判定、
+`ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，断言覆盖：
+相枚举/相位属性全覆盖、宿主方块身份、选择框/碰撞/遮挡、面露出判定、
 向红石线 -1 / 向固相满功率 / DOWN 不输出 / 被覆盖面不输出、供电即时性（邻居变化同 tick 生效）、
-向红石线格放置宿主、炼药锅满锅取水门槛。
+**放置流水线**把宿主放进红石线格（`BlockItem.place` 直接驱动，无玩家/无手）、
+红石线自身仍不可替换的回归断言、炼药锅满锅取水门槛。
 默认关闭，不进正式玩法路径。**改动红石相形状或信号语义后请先跑它。**
 
+> 加 `-Dliquidphase.selftest.stop=true`（或 `LIQUIDPHASE_SELFTEST_STOP=true`）会在跑完后
+> 直接关服，方便脚本一键跑 6 个版本（返回码仍以日志里的 `result: N passed, 0 failed` 为准）。
+> 批量脚本：`tools/run_selftest_all.ps1`（每个版本独立进程 + 输出重定向到文件，
+> 避免 Gradle daemon / JVM 输出把控制台管道堵死）。
+
 > 自检场地要放真实电源：信号即时化之后，手动 `setValue(POWER, 15)` 会被立刻重算回真实值。
+
+> ⚠️ **自检必须走真实入口**：只调内部辅助方法，即使 mixin 完全没生效也会 PASS。
+> 放置类断言一律走 `BlockItem.place`（**不要**改用 FakePlayer + `useItemOn`：
+> 这个能力本来就不该和玩家绑定，用玩家入口测会把错误的设计固化成"正确"）。
+> 同时必须有"非宿主方块仍然放不进线格""红石线自身仍不可替换"的反向断言，
+> 否则无法区分"精确放行"和"全局放宽"。
 
 ## 4. mixin 目标核对流程
 
@@ -142,7 +227,7 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 
 | 用例 | 期望 |
 | --- | --- |
-| 启动服务端 | 日志出现 `injected phase property into … blocks` 与 `registered … redstone-phase composite blocks`，无 mixin 报错 |
+| 启动服务端 | 日志出现 `injected phase property into … blocks` 与 `redstone phase uses phase=redstone_0..15 (no extra blocks registered)`，无 mixin 报错 |
 | 熔岩桶 → 楼梯 | 出现含熔岩相；整格发光 15；可流出/被流入 |
 | 水 → 含熔岩 | 变为含黑曜石相 + 嘶声 |
 | 破坏含冰楼梯 | 掉楼梯 + 原地留冰；准星瞄楼梯就按楼梯速度挖，瞄相才按冰算 |
@@ -156,7 +241,9 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 | 混凝土粉末 + 水锅 | 混泥土 + 水位 -1 |
 | 发射器/漏斗 | 填锅、抽锅（水锅满锅才抽）、液体物品进出 |
 | 红石粉点楼梯 | 该格写入 `phase=redstone_15`；方块仍是原版楼梯、宿主模型可见、疏松红石碎屑铺满整面；破坏留红石线 |
-| 楼梯右键红石线格 | 该格换成楼梯并带红石相，朝向/半砖跟随点击面、功率沿用原线 |
+| 楼梯放进红石线格 | 该格换成楼梯并带红石相，朝向/半砖跟随点击面、功率沿用原线（走 `BlockItem.place`，与谁在放无关） |
+| 非宿主方块进线格 | 仍然放不进去（石头/红石粉等保持原版行为） |
+| 红石线自身可替换性 | 仍是 false（不受本功能影响） |
 | 红石相输出 | 指向相邻红石线时 -1；指向灯/活塞时满功率；被宿主覆盖的面不输出 |
 | 红石相信号延迟 | 开关/拆线后**同一 tick** 就更新（不走计划刻） |
 | 瞄准红石外壳挖掘 | 掉红石粉、原地留宿主；瞄准宿主露出部分则正常破坏并留下对应功率红石线 |
@@ -167,7 +254,9 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 
 1. 6 版本全量 `build` 通过；
 2. 启动服务端冒烟（`./gradlew :<版本>:runServer`）；红石相/炼药锅相关改动建议带自检跑一遍：
-   `LIQUIDPHASE_SELFTEST=true ./gradlew :<版本>:runServer`（日志里应有 `[selftest] result: 25 passed, 0 failed`）；
+   `LIQUIDPHASE_SELFTEST=true ./gradlew :<版本>:runServer`（日志里应有
+   `[selftest] result: N passed, 0 failed`，N 以当前断言数为准）；批量跑用
+   `powershell -File tools/run_selftest_all.ps1`；
 3. 收集 `versions/*/build/libs/liquidphase-*.jar`（不含 sources）到 `dist/`；
 4. 更新 `README.md` 的版本支持与已知限制，然后提交。
 

@@ -119,8 +119,9 @@ MODEL = {
 
 HOST_BLOCKSTATE_ENTRY = "assets/minecraft/blockstates/{host}.json"
 
-# 宿主 part 只在"不渲染红石外壳"的相下渲染。
-NON_REDSTONE_PHASES = "none|lava|obsidian|ice|frosted_0|frosted_1|frosted_2|frosted_3"
+# 宿主 part 在**任何**相下都渲染；红石相只是再叠一层粉尘外壳。
+ALL_PHASES = ("none|lava|obsidian|ice|frosted_0|frosted_1|frosted_2|frosted_3|"
+              + "|".join("redstone_%d" % i for i in range(16)))
 
 
 def load_host_blockstate(jar: Path, host: str) -> dict:
@@ -156,14 +157,14 @@ def with_phase(when, condition):
 def composite_blockstate(jar: Path, host: str) -> dict:
     """宿主原版几何 + 红石外壳（透明处露出里面的宿主材质）。
 
-    宿主 part 保留原 when，并限制在"非红石相"的 phase 下；
-    再追加 16 条 phase=redstone_N 的 part 指向同一个外壳模型。
+    宿主 part 在**任何**相下都渲染；再追加 16 条 phase=redstone_N 的 part
+    指向同一个外壳模型，叠在宿主之上（对齐旧版组合方块：形状/轮廓保持不变）。
     """
     parts = []
     for part in host_parts(load_host_blockstate(jar, host)):
         new_part = {
             "apply": part["apply"],
-            "when": with_phase(part.get("when"), NON_REDSTONE_PHASES),
+            "when": with_phase(part.get("when"), ALL_PHASES),
         }
         parts.append(new_part)
     for power in range(16):
