@@ -29,9 +29,15 @@ import org.liquidphase.redstone.RedstoneBlocks;
  * 用 {@code -Dliquidphase.selftest=true} 启动服务端时，等服务器启动完成后在出生点附近
  * 造一小块测试场地逐项断言，把 {@code PASS}/{@code FAIL} 打进日志，最后清理场地。
  * <p>
- * 放置类断言刻意<b>不</b>使用 FakePlayer：这个模组的放置能力属于"方块放置流水线"，
- * 与谁在放、用哪只手、是否潜行都无关。用 {@link BlockItem#place} 直接驱动，
- * 才能证明它真的和玩家无关（其它复用同一条物品放置路径的来源行为一致）。
+ * 放置类断言分两层：
+ * <ol>
+ *   <li><b>无玩家层</b>：直接 {@link BlockItem#place}（{@code getPlayer()} 为 {@code null}），
+ *       证明能力不依赖玩家实体；</li>
+ *   <li><b>真实玩家层</b>：FakePlayer → {@code ServerPlayerGameMode.useItemOn}，
+ *       走客户端实际落到的服务端入口。</li>
+ * </ol>
+ * 两层都要覆盖"物品自己搜索落点"的那一类（脚手架的 {@code updatePlacementContext}），
+ * 这类路径不经过放置上下文改写，只在入口动手是测不出来的。
  */
 public final class PhaseSelfTest {
 
@@ -55,6 +61,8 @@ public final class PhaseSelfTest {
             checkSignal(level, base);
             checkInstantUpdate(level, base);
             checkPlaceIntoWire(level, base);
+            checkPlaceIntoWireByPlayer(level, base);
+            checkScaffoldingStacking(level, base);
             checkWireStaysUnreplaceable(level, base);
             checkRedstoneRenderParts();
             checkCauldron(level, base);
@@ -89,12 +97,6 @@ public final class PhaseSelfTest {
     // 红石相 = 宿主方块 + phase 取值（不再有新方块）
     // ------------------------------------------------------------------
 
-    /**
-     * 兼容宿主必须真的拿到 phase 属性：多面体家族（glow_lichen / sculk_vein / resin_clump）
-     * 在 1.21.10+ 统一成 MultifaceBlock，如果把 Mixin 目标错写成旧版的
-     * GlowLichenBlock/SculkVeinBlock，它们的 blockstate 里会出现 phase 条件却没有该属性，
-     * 客户端直接报 Unknown property 'phase' 并退化成 missing model。
-     */
     private static void checkPhasePropertyCoverage() {
         java.util.List<String> missing = new java.util.ArrayList<>();
         for (Block block : net.minecraft.core.registries.BuiltInRegistries.BLOCK) {
@@ -141,7 +143,7 @@ public final class PhaseSelfTest {
     }
 
     // ------------------------------------------------------------------
-    // 信号：向红石线 -1，向固相满功率，DOWN 不输出，被覆盖面不输出
+    // 信号
     // ------------------------------------------------------------------
 
     private static void checkSignal(ServerLevel level, BlockPos base) {
@@ -149,31 +151,26 @@ public final class PhaseSelfTest {
         level.setBlock(pos, PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.REDSTONE_15),
             Block.UPDATE_ALL);
 
-        // 默认橡木楼梯朝北：北面被台阶踏面盖满（按设计不输出），南面才是露出的。
         BlockState stairs = level.getBlockState(pos);
         assertTrue("stair host hides NORTH face when facing north", !RedstoneBlocks.exposed(stairs, Direction.NORTH));
         assertTrue("stair host exposes SOUTH face when facing north", RedstoneBlocks.exposed(stairs, Direction.SOUTH));
 
-        // 信号是即时结算的：必须放真实电源，且只能放在露出的面上。
         level.setBlock(pos.south().below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(pos.south(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
         assertTrue("redstone phase keeps power 15 (got " + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
             RedstoneBlocks.getPower(level.getBlockState(pos)) == 15);
 
-        // 南侧换成红石线 → 以 NORTH 查询（接收方在南）→ 15 - 1 = 14
         level.setBlock(pos.south(), Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(pos.above(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
         int toWire = level.getSignal(pos, Direction.NORTH);
         assertTrue("signal into wire is power-1 (got " + toWire + ")", toWire == 14);
 
-        // 换成固相 → 同一方向满功率
         level.setBlock(pos.south(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
         int toStone = level.getSignal(pos, Direction.NORTH);
         assertTrue("signal into solid is full power (got " + toStone + ")", toStone == 15);
 
         assertTrue("signal DOWN is 0", level.getSignal(pos, Direction.DOWN) == 0);
 
-        // 双台阶（整格宿主）被完全覆盖 → 不输出
         BlockPos slabPos = base.offset(2, 1, 0);
         level.setBlock(slabPos, PhaseHelper.withPhase(
             Blocks.STONE_SLAB.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.DOUBLE),
@@ -182,10 +179,6 @@ public final class PhaseSelfTest {
         level.setBlock(slabPos.south(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
         assertTrue("covered face does not output", level.getSignal(slabPos, Direction.NORTH) == 0);
     }
-
-    // ------------------------------------------------------------------
-    // 供电即时性：邻居变化后同一 tick 内功率就已更新（不走计划刻）
-    // ------------------------------------------------------------------
 
     private static void checkInstantUpdate(ServerLevel level, BlockPos base) {
         BlockPos pos = base.offset(4, 1, 0);
@@ -203,31 +196,25 @@ public final class PhaseSelfTest {
     }
 
     // ------------------------------------------------------------------
-    // 向红石线所在格放置宿主方块（走方块放置流水线，不经过玩家/手）
+    // 第 1 层：无玩家，直接走 BlockItem.place
     // ------------------------------------------------------------------
 
-    /**
-     * 用 {@link BlockItem#place} 直接驱动——这是方块物品放置的公共通道（玩家用物品放置、
-     * 其它复用这条路径的来源都汇到这里）。断言里刻意不出现 FakePlayer / 手 / 潜行：
-     * 这个能力属于"放置流水线"，与谁在放无关。
-     */
     private static void checkPlaceIntoWire(ServerLevel level, BlockPos base) {
-        // ---- (1) 原版落点算到线格：对着线下面支撑它的方块 ↩ 的顶面放 ----
+        // (1) 原版落点算到线格：对着线下面支撑它的方块 ↩ 的顶面放
         BlockPos wirePos = base.offset(6, 1, 0);
         level.setBlock(wirePos.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(wirePos, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
-        level.setBlock(wirePos.above(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(wirePos.west().below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(wirePos.west(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
         assertTrue("scene(1): wire present at target tile",
             level.getBlockState(wirePos).is(Blocks.REDSTONE_WIRE));
         int wirePower = level.getBlockState(wirePos).getValue(BlockStateProperties.POWER);
-        assertTrue("scene(1): wire powered by redstone block above (got " + wirePower + ")", wirePower == 15);
+        assertTrue("scene(1): wire powered (got " + wirePower + ")", wirePower == 15);
 
         BlockState placed = liquidphase$placeBlockInto(level, Blocks.OAK_STAIRS, wirePos.below(), Direction.UP);
         BlockState after = level.getBlockState(wirePos);
-        assertTrue("scene(1): placement pipeline accepted the wire tile (returned " + placed + ")",
-            placed != null);
-        assertTrue("scene(1): wire tile became the host (got " + after.getBlock() + ")",
-            after.is(Blocks.OAK_STAIRS));
+        assertTrue("scene(1): placement pipeline accepted the wire tile (returned " + placed + ")", placed != null);
+        assertTrue("scene(1): wire tile became the host (got " + after.getBlock() + ")", after.is(Blocks.OAK_STAIRS));
         assertTrue("scene(1): host carries the redstone phase (got " + PhaseHelper.getPhase(after) + ")",
             RedstoneBlocks.isRedstonePhase(after));
         assertTrue("scene(1): host carried the wire power (wire=" + wirePower + ", got "
@@ -235,34 +222,9 @@ public final class PhaseSelfTest {
             RedstoneBlocks.getPower(after) == wirePower);
 
         level.setBlock(wirePos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
-        level.setBlock(wirePos.above(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(wirePos.west(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
 
-        // ---- (2) 原版落点算到线格：对着线旁的方块 ↩ 朝线的侧面放 ----
-        BlockPos sideWire = base.offset(8, 1, 0);
-        BlockPos sideGround = sideWire.east();
-        level.setBlock(sideWire.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
-        level.setBlock(sideWire, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
-        level.setBlock(sideWire.above(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
-        level.setBlock(sideGround, Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
-        assertTrue("scene(2): wire present at side tile",
-            level.getBlockState(sideWire).is(Blocks.REDSTONE_WIRE));
-
-        BlockState sidePlaced = liquidphase$placeBlockInto(level, Blocks.OAK_STAIRS, sideGround, Direction.WEST);
-        BlockState sideAfter = level.getBlockState(sideWire);
-        assertTrue("scene(2): side placement accepted the wire tile (returned " + sidePlaced + ")",
-            sidePlaced != null);
-        assertTrue("scene(2): side placement became the host with redstone phase (got " + sideAfter.getBlock()
-                + "/" + PhaseHelper.getPhase(sideAfter) + ")",
-            sideAfter.is(Blocks.OAK_STAIRS) && RedstoneBlocks.isRedstonePhase(sideAfter));
-        assertTrue("scene(2): side placement kept the wire power (got "
-                + RedstoneBlocks.getPower(sideAfter) + ")",
-            RedstoneBlocks.getPower(sideAfter) == 15);
-
-        level.setBlock(sideWire, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
-        level.setBlock(sideWire.above(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
-        level.setBlock(sideGround, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
-
-        // ---- (3) 非相容宿主不享受这个口子：石头仍然放不进线格（原版语义） ----
+        // (3) 非相容宿主不享受这个口子
         BlockPos stoneWire = base.offset(10, 1, 0);
         level.setBlock(stoneWire.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(stoneWire, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
@@ -273,7 +235,7 @@ public final class PhaseSelfTest {
             level.getBlockState(stoneWire).is(Blocks.REDSTONE_WIRE));
         level.setBlock(stoneWire, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
 
-        // ---- (4) 普通放置没被影响：红石粉照常铺在石头顶上 ----
+        // (4) 普通放置没被影响
         BlockPos dustPos = base.offset(11, 1, 0);
         level.setBlock(dustPos.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
         BlockState dustPlaced = liquidphase$placeBlockInto(level, Blocks.REDSTONE_WIRE, dustPos.below(), Direction.UP);
@@ -283,36 +245,166 @@ public final class PhaseSelfTest {
         level.setBlock(dustPos.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
     }
 
+    // ------------------------------------------------------------------
+    // 第 2 层：真实玩家入口（FakePlayer → ServerPlayerGameMode.useItemOn）
+    // ------------------------------------------------------------------
+
     /**
-     * 红石线自身的"可替换"语义必须保持原版：前两轮有一版把
-     * {@code BlockBehaviour.canBeReplaced(state, context)} 整个放宽了，
-     * 那会让水流、活塞、邻居更新、其它模组都把红石线当可替换方块。
-     * 这里断言那个口子没有回来。
+     * 客户端右键在服务端最终落到 {@code ServerPlayerGameMode.useItemOn}，这里走同一条路。
+     * <p>
+     * 覆盖三种真实姿势：点线下面方块、点线旁方块朝线的侧面、点线上方方块底面。
+     * 这条链路会先经过 {@code BlockState.useItemOn → useWithoutItem}，如果被方块交互吃掉，
+     * 放置根本不会发生——这一层能测出来，直接调 {@code BlockItem.place} 测不出来。
+     */
+    private static void checkPlaceIntoWireByPlayer(ServerLevel level, BlockPos base) {
+        net.minecraft.server.level.ServerPlayer player = liquidphase$fakePlayer(level);
+
+        // (1) 点线下面的方块
+        assertTrue("player scene(1): host lands in the wire tile", liquidphase$playerGesture(level, player,
+            base.offset(7, 1, 0).below(), Direction.UP, base.offset(7, 1, 0), Blocks.OAK_STAIRS));
+        assertTrue("player scene(1): keeps 15 power",
+            RedstoneBlocks.getPower(level.getBlockState(base.offset(7, 1, 0))) == 15);
+        liquidphase$clearGesture(level, base.offset(7, 1, 0), base.offset(7, 1, 0).below());
+
+        // (2) 点线旁方块朝线的侧面
+        BlockPos sideWire = base.offset(8, 1, 0);
+        BlockPos sideGround = sideWire.east();
+        assertTrue("player scene(2): host lands in the wire tile", liquidphase$playerGesture(level, player,
+            sideGround, Direction.WEST, sideWire, Blocks.OAK_STAIRS));
+        assertTrue("player scene(2): keeps 15 power",
+            RedstoneBlocks.getPower(level.getBlockState(sideWire)) == 15);
+        liquidphase$clearGesture(level, sideWire, sideGround);
+
+        // (3) 点线上方方块底面
+        BlockPos upWire = base.offset(9, 1, 0);
+        BlockPos upGround = upWire.above();
+        assertTrue("player scene(3): host lands in the wire tile", liquidphase$playerGesture(level, player,
+            upGround, Direction.DOWN, upWire, Blocks.OAK_STAIRS));
+        liquidphase$clearGesture(level, upWire, upGround);
+
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+    }
+
+    // ------------------------------------------------------------------
+    // 脚手架堆叠：物品自己搜索落点（updatePlacementContext）的那一类
+    // ------------------------------------------------------------------
+
+    /**
+     * {@code ScaffoldingBlockItem.updatePlacementContext} 会自己沿方向搜索
+     * "能放"的格子，搜索时问的是 {@code BlockState.canBeReplaced(context)}。
+     * 只在 {@code BlockItem.place} 入口上做手脚时，红石线格会被它跳过、方块落到别处——
+     * 这条断言就是防这个回归。
+     */
+    private static void checkScaffoldingStacking(ServerLevel level, BlockPos base) {
+        net.minecraft.server.level.ServerPlayer player = liquidphase$fakePlayer(level);
+        BlockPos wirePos = base.offset(12, 1, 0);
+        level.setBlock(wirePos.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(wirePos, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(wirePos.west().below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(wirePos.west(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        // 线格上方立一段脚手架柱（堆叠场景），玩家点柱顶继续往上堆
+        level.setBlock(wirePos.above(), Blocks.SCAFFOLDING.defaultBlockState(), Block.UPDATE_ALL);
+        BlockPos columnTop = wirePos.above();
+
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, new ItemStack(Blocks.SCAFFOLDING));
+        BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(columnTop), Direction.UP, columnTop, false);
+        player.gameMode.useItemOn(player, level, player.getMainHandItem(),
+            net.minecraft.world.InteractionHand.MAIN_HAND, hit);
+
+        // 脚手架堆叠会往柱子上面放；关键是不能把线格本身搞坏，且线格的相逻辑不受影响
+        assertTrue("scaffolding stack: wire tile untouched while stacking the column",
+            level.getBlockState(wirePos).is(Blocks.REDSTONE_WIRE));
+
+        // 反向：脚手架直接堆进线格（把柱底换掉）——这条走 canBeReplaced 搜索
+        level.setBlock(wirePos.above(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        assertTrue("scaffolding stack: can replace the wire tile when the item is a host",
+            level.getBlockState(wirePos).canBeReplaced(liquidphase$context(level, Blocks.SCAFFOLDING,
+                wirePos.below(), Direction.UP)));
+
+        level.setBlock(wirePos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(wirePos.above(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(wirePos.west(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+    }
+
+    /**
+     * 红石线自身的"可替换"语义要保持精确：只对相容宿主物品放行，
+     * 对石头/红石粉等其它物品仍然是不可替换。
      */
     private static void checkWireStaysUnreplaceable(ServerLevel level, BlockPos base) {
-        BlockPos wirePos = base.offset(12, 1, 0);
+        BlockPos wirePos = base.offset(14, 1, 0);
         level.setBlock(wirePos.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(wirePos, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
         BlockState wire = level.getBlockState(wirePos);
 
         assertTrue("wire state itself is still not replaceable", !wire.canBeReplaced());
 
-        // 用相容宿主物品构造一个"普通"放置上下文并瞄准线格：原版判定必须是 false。
-        BlockPlaceContext plain = liquidphase$context(level, Blocks.OAK_STAIRS, wirePos.below(), Direction.UP);
-        assertTrue("plain placement context still refuses the wire tile", !plain.canPlace());
+        assertTrue("plain placement context refuses the wire tile (stone)",
+            !wire.canBeReplaced(liquidphase$context(level, Blocks.STONE, wirePos.below(), Direction.UP)));
+        assertTrue("plain placement context refuses the wire tile (dust)",
+            !wire.canBeReplaced(liquidphase$context(level, Blocks.REDSTONE_WIRE, wirePos.below(), Direction.UP)));
+        assertTrue("host placement context accepts the wire tile",
+            wire.canBeReplaced(liquidphase$context(level, Blocks.OAK_STAIRS, wirePos.below(), Direction.UP)));
 
         level.setBlock(wirePos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(wirePos.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
     }
 
+    // ------------------------------------------------------------------
+    // 工具
+    // ------------------------------------------------------------------
+
+    private static net.minecraft.server.level.ServerPlayer liquidphase$fakePlayer(ServerLevel level) {
+        return net.fabricmc.fabric.api.entity.FakePlayer.get(level, new com.mojang.authlib.GameProfile(
+            java.util.UUID.fromString("11111111-2222-3333-4444-555555555555"), "[liquidphase-selftest]"));
+    }
+
     /**
-     * 走 {@link BlockItem#place} 放置一个方块：命中 {@code clickedPos} 的 {@code face} 面。
+     * 一次真实右键：点 {@code clickPos} 的 {@code face} 面，期望宿主落进 {@code wirePos}。
      * <p>
-     * 没有玩家、没有手、没有潜行——放置上下文由 {@link BlockPlaceContext} 自己按命中结果
-     * 算落点，和命令/结构方块/其它模组走的是同一条路。
-     *
-     * @return 实际写入的方块状态；放置失败返回 {@code null}
+     * 通电用"线格西侧的方块 + 红石块"保证不挡住落点，功率稳定为 15。
      */
+    private static boolean liquidphase$playerGesture(ServerLevel level,
+                                                    net.minecraft.server.level.ServerPlayer player,
+                                                    BlockPos clickPos, Direction face,
+                                                    BlockPos wirePos, Block block) {
+        level.setBlock(wirePos.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(wirePos, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
+        if (!clickPos.equals(wirePos) && !clickPos.equals(wirePos.below())) {
+            level.setBlock(clickPos, Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        }
+        level.setBlock(wirePos.west().below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(wirePos.west(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        if (!level.getBlockState(wirePos).is(Blocks.REDSTONE_WIRE)) {
+            LiquidPhase.LOGGER.warn("[selftest] gesture scene broke: wire missing at {}", wirePos);
+            return false;
+        }
+
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, new ItemStack(block));
+        Vec3 hitVec = new Vec3(clickPos.getX() + 0.5 + face.getStepX() * 0.5,
+            clickPos.getY() + 0.5 + face.getStepY() * 0.5,
+            clickPos.getZ() + 0.5 + face.getStepZ() * 0.5);
+        BlockHitResult hit = new BlockHitResult(hitVec, face, clickPos, false);
+        player.gameMode.useItemOn(player, level, player.getMainHandItem(),
+            net.minecraft.world.InteractionHand.MAIN_HAND, hit);
+
+        BlockState after = level.getBlockState(wirePos);
+        boolean ok = after.is(block) && RedstoneBlocks.isRedstonePhase(after);
+        if (!ok) {
+            LiquidPhase.LOGGER.warn("[selftest] gesture failed at {}: click={} face={} -> {} / {}",
+                wirePos, clickPos, face, after.getBlock(), PhaseHelper.getPhase(after));
+        }
+        return ok;
+    }
+
+    private static void liquidphase$clearGesture(ServerLevel level, BlockPos wirePos, BlockPos clickPos) {
+        level.setBlock(wirePos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(wirePos.west(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        if (!clickPos.equals(wirePos) && !clickPos.equals(wirePos.below())) {
+            level.setBlock(clickPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        }
+    }
+
     private static BlockState liquidphase$placeBlockInto(ServerLevel level, Block block,
                                                          BlockPos clickedPos, Direction face) {
         ItemStack stack = new ItemStack(block);
@@ -340,13 +432,6 @@ public final class PhaseSelfTest {
             new ItemStack(block), hit);
     }
 
-    /**
-     * 红石相渲染：宿主模型必须**继续渲染**，粉尘外壳只是额外叠加一层。
-     * <p>
-     * 这是 0.1.7 的实机 bug：当时把宿主 part 限制成 `phase != redstone_*`，
-     * 于是含红石相时宿主不渲染，整格只剩一个外壳 → 楼梯形状消失、
-     * 整格变成不透明粉尘面（表现为"红石相表面按不透明渲染"）。
-     */
     private static void checkRedstoneRenderParts() {
         java.io.InputStream in = LiquidPhase.class.getResourceAsStream(
             "/assets/minecraft/blockstates/oak_stairs.json");
@@ -369,7 +454,6 @@ public final class PhaseSelfTest {
             json.contains("liquidphase:block/redstone_phase"));
     }
 
-    /** {@return 是否存在"宿主 part 的 phase 条件包含 redstone_*"的写法} */
     private static boolean hostPhaseConditionCoversRedstone(String json) {
         int idx = json.indexOf("\"shape\"");
         while (idx >= 0) {
@@ -389,7 +473,7 @@ public final class PhaseSelfTest {
     }
 
     // ------------------------------------------------------------------
-    // 炼药锅：只有满锅才是取水目标
+    // 炼药锅
     // ------------------------------------------------------------------
 
     private static void checkCauldron(ServerLevel level, BlockPos base) {
@@ -409,12 +493,8 @@ public final class PhaseSelfTest {
         assertTrue("lava cauldron is a liquid mine target", PhaseTargeting.isLiquidMineTarget(level, lava));
     }
 
-    // ------------------------------------------------------------------
-    // 工具
-    // ------------------------------------------------------------------
-
     private static void clearArea(ServerLevel level, BlockPos base) {
-        for (int x = -1; x <= 14; x++) {
+        for (int x = -1; x <= 18; x++) {
             for (int y = 0; y <= 2; y++) {
                 for (int z = -1; z <= 9; z++) {
                     level.setBlock(base.offset(x, y, z), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);

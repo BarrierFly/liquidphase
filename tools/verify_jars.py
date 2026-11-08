@@ -61,22 +61,28 @@ for ver, jar in jars():
                 ok = False
                 bad += 1
         mod = json.loads(z.read('fabric.mod.json'))
+        replace_mixin = z.read('org/liquidphase/mixin/RedstoneWireReplaceMixin.class')
         block_item = z.read('org/liquidphase/mixin/BlockItemMixin.class')
 
-        # 放置入口必须真的在包里：BlockItemMixin 要引用 WirePlaceContext（落点改写）
-        has_wire_ctx = b'WirePlaceContext' in block_item
-        # 前两轮的"接管右键 / 全局放宽可替换"必须已经删除
+        # 放行口子必须真的在包里。注意 jar 里的类已 remap 成 intermediary，
+        # 不能按 canBeReplaced / getItemInHand 这类 Mojang 名去查字符串，
+        # 只能查我们自己写的、不会被 remap 的 handler 名。
+        has_replace_mixin = b'liquidphase$wireIsReplaceableForHost' in replace_mixin
+        # 写相位的那一步在 BlockItemMixin
+        has_phase_write = b'liquidphase$redstonePhase' in block_item
+        # 前两轮"接管红石线右键"的 mixin 必须已经删除
         removed_wire_use = 'org/liquidphase/mixin/RedstoneWireUseMixin.class' not in names
-        removed_replace = 'org/liquidphase/mixin/RedstoneWireReplaceMixin.class' not in names
-        has_wire_ctx_class = 'org/liquidphase/redstone/WirePlaceContext.class' in names
+        # 只在 BlockItem.place 入口生效的那套已删除
+        removed_wire_ctx = 'org/liquidphase/redstone/WirePlaceContext.class' not in names
 
-        line_ok = (bad == 0 and has_wire_ctx and removed_wire_use
-                   and removed_replace and has_wire_ctx_class)
+        line_ok = (bad == 0 and has_replace_mixin and has_phase_write
+                   and removed_wire_use and removed_wire_ctx)
         ok = ok and line_ok
-        print('%-8s ver=%-8s blockstates=%-5d bad_conds=%-3d wire_ctx=%s '
-              'no_wire_use_mixin=%s no_global_replace=%s -> %s'
-              % (ver, mod['version'], len(blockstates), bad, has_wire_ctx,
-                 removed_wire_use, removed_replace, 'OK' if line_ok else 'BROKEN'))
+        print('%-8s ver=%-8s blockstates=%-5d bad_conds=%-3d replace_mixin=%s '
+              'phase_write=%s no_wire_use_mixin=%s no_entry_only_hack=%s -> %s'
+              % (ver, mod['version'], len(blockstates), bad, has_replace_mixin,
+                 has_phase_write, removed_wire_use, removed_wire_ctx,
+                 'OK' if line_ok else 'BROKEN'))
 
 if not jars():
     print('no dist jars found')

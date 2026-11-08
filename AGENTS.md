@@ -106,7 +106,7 @@ phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有�
 | 信号输出/接收/重算/生成/破坏 | `redstone/RedstoneBlocks.java` |
 | `getSignal`/`getDirectSignal`/`isSignalSource` 状态级注入 | `mixin/RedstoneSignalMixin.java` |
 | 红石线连接判定 | `mixin/RedStoneWireBlockMixin`（≤1.21.11）/ `BlockStateBaseMixin.shouldRedstoneWireConnectTo`（26.3） |
-| 红粉点宿主 / 宿主放进线格 | `mixin/BlockItemMixin` + `redstone/WirePlaceContext.java` |
+| 红粉点宿主 / 宿主放进线格 | `mixin/BlockItemMixin` + `mixin/RedstoneWireReplaceMixin` |
 | cutout 图层的宿主清单 | `redstone/RedstoneRenderBlocks.java` + `tools/redstone-hosts.txt` |
 
 **代价**：`phase` 从 8 个取值变成 24 个（×3），1.21.11 的状态数从 175,607 涨到 **509,175**，
@@ -152,35 +152,42 @@ if (!context.canPlace()) return FAIL;
 ```
 
 `canPlace()` 只问"目标格现在能不能被替换"，而红石线不是可替换方块 → 直接 FAIL。
-以前两轮都绕错了地方：
+**而且这个问题不止出现在 `place` 入口**：`ScaffoldingBlockItem.updatePlacementContext`
+会自己沿方向搜索落点、搜索时问的是同一个 `canBeReplaced`，红石线格会被它直接跳过、
+方块落到别处。只在 `BlockItem.place` 入口上做手脚覆盖不到这类物品。
+（曾经这样做过，`WirePlaceContext` 是那条错误路线的残留，已删除。）
 
-| 做法 | 后果 |
-| --- | --- |
-| 挂红石线自己的 `use` / `useWithoutItem`（`RedstoneWireUseMixin`） | 接管右键、把玩家手势写进逻辑；只对"点线本身"这一种姿势生效 |
-| 放宽 `BlockBehaviour.canBeReplaced(state, context)`（`RedstoneWireReplaceMixin`） | 红石线对**所有系统**（水流、活塞、邻居更新、其它模组）都变成可替换方块 |
+**两个 `canBeReplaced` 重载别搞混**（这是 0.1.9 之前的判断失误）：
 
-这两个 mixin 都已删除。正确做法是**只在放置上下文里回答两个问题**：
+| 重载 | 谁在用 | 作用 |
+| --- | --- | --- |
+| `canBeReplaced(BlockState, BlockPlaceContext)` | `BlockItem.place` / `ScaffoldingBlockItem` / `SlabBlock` / `SnowLayerBlock` / `VineBlock` 等 | 「这个方块能不能被**要放的物品**替换」 |
+| `canBeReplaced(BlockState, Fluid)` | 水/熔岩流动（`FluidState.canBeReplacedWith`） | 「流体能不能**流进**这一格」 |
+
+**改前一个不会影响水流和活塞。** 曾经误以为会，于是绕开它去改放置上下文，
+结果脚手架这类"自己搜索落点"的物品漏掉了。
+
+正确做法是在 `canBeReplaced(BlockState, BlockPlaceContext)` 里回答：
 
 ```java
-final class WirePlaceContext extends BlockPlaceContext {
-    @Override public boolean canPlace() { return true; }          // 只对本上下文
-    @Override public BlockPos getClickedPos() { return wirePos; } // 目标格定到线格
-}
+if (state.is(REDSTONE_WIRE) && context.getItemInHand() 是 PhaseCapable 方块物品) return true;
 ```
 
-`BlockItem.place` 的入口用 `@ModifyVariable` 把上下文换掉（只对
-`getBlock() instanceof PhaseCapable` 生效），`placeBlock` 处再把
-`phase=redstone_<原线功率>` 补进状态。其余流程原封不动：
-`updatePlacementContext → getPlacementState → placeBlock → setPlacedBy →` 音效/统计/扣物品。
-所以朝向、半砖、连接态、含水全部由宿主自己的 `getStateForPlacement` 按线格算出来。
+`context.getItemInHand()` 读的是**放置上下文自己携带的待放物品**（玩家右键时来自手上、
+其它来源来自被投放的物品，是同一个字段），**与玩家实体、手、潜行无关**——
+`getPlayer()` 为 `null` 时行为完全一样。
 
-**目标格怎么定**（`WirePlaceContext.of`，纯几何）：
+红石相本身由 `BlockItemMixin.placeBlock` 的 `@ModifyVariable` 补：
+真正写方块前，如果**目标格此刻仍是红石线**，就把宿主状态写成
+`phase=redstone_<原线功率>`。用"目标格现在是线"而不是"上下文里带标记"，
+所以无论是直接进 `place` 还是物品先搜索落点再进来，判定都成立。
 
-1. 原版算出的落点已经是线格 → 直接用（对着线下面撑它的方块、对着线旁方块朝线的那个面）；
-2. 命中的方块就是红石线本身 → 目标格取线所在格。
+其余流程原封不动：`updatePlacementContext → getStateForPlacement → placeBlock →
+setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水全部由宿主自己的
+`getStateForPlacement` 按线格算出来。
 
-判定里没有玩家、没有手、没有潜行。不要再用 `replaceClicked = true` 硬改点击语义，
-也不要再按"点线""点线下面"分别加特例——那都是绕同一个判定，换种姿势就失效。
+**不要**接管红石线自身的 `use`/`useWithoutItem`：那是方块交互，会把点击路径写进逻辑。
+玩家点线本身时原版本来就会先切换点/十字形状，这个行为要保留（见 §5 测试矩阵）。
 
 
 ### 3.3.1 信号结算时机
@@ -192,25 +199,27 @@ final class WirePlaceContext extends BlockPlaceContext {
 ### 3.4 自动化自检
 
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
-`ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，断言覆盖：
+`ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，53 项断言覆盖：
 相枚举/相位属性全覆盖、宿主方块身份、选择框/碰撞/遮挡、面露出判定、
 向红石线 -1 / 向固相满功率 / DOWN 不输出 / 被覆盖面不输出、供电即时性（邻居变化同 tick 生效）、
-**放置流水线**把宿主放进红石线格（`BlockItem.place` 直接驱动，无玩家/无手）、
-红石线自身仍不可替换的回归断言、炼药锅满锅取水门槛。
+红石线格放置（**两层**：无玩家直接 `BlockItem.place` + FakePlayer 走
+`ServerPlayerGameMode.useItemOn`）、脚手架堆叠（物品自己搜索落点那一类）、
+红石线可替换性的精确边界（宿主放行、石头/红石粉仍拒绝）、炼药锅满锅取水门槛。
 默认关闭，不进正式玩法路径。**改动红石相形状或信号语义后请先跑它。**
 
 > 加 `-Dliquidphase.selftest.stop=true`（或 `LIQUIDPHASE_SELFTEST_STOP=true`）会在跑完后
 > 直接关服，方便脚本一键跑 6 个版本（返回码仍以日志里的 `result: N passed, 0 failed` 为准）。
-> 批量脚本：`tools/run_selftest_all.ps1`（每个版本独立进程 + 输出重定向到文件，
-> 避免 Gradle daemon / JVM 输出把控制台管道堵死）。
 
 > 自检场地要放真实电源：信号即时化之后，手动 `setValue(POWER, 15)` 会被立刻重算回真实值。
 
-> ⚠️ **自检必须走真实入口**：只调内部辅助方法，即使 mixin 完全没生效也会 PASS。
-> 放置类断言一律走 `BlockItem.place`（**不要**改用 FakePlayer + `useItemOn`：
-> 这个能力本来就不该和玩家绑定，用玩家入口测会把错误的设计固化成"正确"）。
-> 同时必须有"非宿主方块仍然放不进线格""红石线自身仍不可替换"的反向断言，
-> 否则无法区分"精确放行"和"全局放宽"。
+> ⚠️ **放置类断言必须覆盖"物品自己搜索落点"那一类**（目前唯一实例是脚手架堆叠）。
+> 只测 `BlockItem.place` 会漏掉 `updatePlacementContext` 里对 `canBeReplaced` 的调用，
+> 表现为"自检全过、实机脚手架堆不进去"（0.1.8 踩过）。
+>
+> ⚠️ **反向断言同样必须存在**：非宿主方块仍放不进线格、红石线自身 `canBeReplaced()` 仍为 false、
+> 红石粉放置不受影响。否则无法区分"精确放行"和"全局放宽"。
+>
+> **点线本身仍会被原版挡下**（`useWithoutItem` 切换点/十字形状），这是预期行为，不是 bug。
 
 ## 4. mixin 目标核对流程
 
@@ -241,9 +250,11 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 | 混凝土粉末 + 水锅 | 混泥土 + 水位 -1 |
 | 发射器/漏斗 | 填锅、抽锅（水锅满锅才抽）、液体物品进出 |
 | 红石粉点楼梯 | 该格写入 `phase=redstone_15`；方块仍是原版楼梯、宿主模型可见、疏松红石碎屑铺满整面；破坏留红石线 |
-| 楼梯放进红石线格 | 该格换成楼梯并带红石相，朝向/半砖跟随点击面、功率沿用原线（走 `BlockItem.place`，与谁在放无关） |
+| 楼梯放进红石线格 | 该格换成楼梯并带红石相，朝向/半砖跟随点击面、功率沿用原线 |
+| 脚手架堆叠到线格 | 线格能被替换成脚手架（物品自己搜索落点那条路） |
+| 点线本身（不相容物品以外） | 原版先切换点/十字形状，属于预期行为 |
 | 非宿主方块进线格 | 仍然放不进去（石头/红石粉等保持原版行为） |
-| 红石线自身可替换性 | 仍是 false（不受本功能影响） |
+| 红石线自身可替换性 | `canBeReplaced()` 仍为 false；只对相容宿主物品放行上下文重载 |
 | 红石相输出 | 指向相邻红石线时 -1；指向灯/活塞时满功率；被宿主覆盖的面不输出 |
 | 红石相信号延迟 | 开关/拆线后**同一 tick** 就更新（不走计划刻） |
 | 瞄准红石外壳挖掘 | 掉红石粉、原地留宿主；瞄准宿主露出部分则正常破坏并留下对应功率红石线 |

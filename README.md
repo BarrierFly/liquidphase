@@ -119,24 +119,18 @@
 - **未发布（0.1.8：修 0.1.7 的两个实机问题）**：
   - **红石相表面按不透明渲染 / 楼梯形状消失**：根因不在渲染层注册（1.21.10/1.21.11 实测 `ItemBlockRenderTypes.getChunkRenderType` 已是 `CUTOUT`），而是 blockstate 把**宿主模型整个排除了**——宿主 part 的 `phase` 条件被限制成`none|lava|obsidian|ice|frosted_0..3`，于是含红石相时宿主根本不渲染，整格只剩一个 16³ 粉尘外壳。视觉上就是"整格变成不透明粉尘面、楼梯形状没了"。
     改为：宿主 part 的 `phase` 条件覆盖**全部 24 个取值**（任何相下都照常渲染），红石外壳只是**额外叠加**一层——与旧版组合方块"宿主 + 粉尘外壳同时渲染"的行为一致。
-  - **可含水方块放不进红石线所在格（修法推翻重做）**：上一版的做法是放宽 `BlockBehaviour.canBeReplaced(state, context)`，让红石线在"手持相容宿主"时算作可替换。这解决了一半问题，但代价是**把红石线对全世界的可替换语义改掉了**——水流、活塞、邻居更新、其它模组都会把红石线当可替换方块，属于改坏底层语义。
-    本版改为**只在放置上下文里放行**，见下文"放置入口"。
-  - **放置入口（最终方案）**：能力属于"方块放置流水线"，与玩家、手、`InteractionHand`、潜行**完全无关**。
+  - **可含水方块放不进红石线所在格（修法推翻重做，两次）**：
     根因只有一个：`BlockItem.place` 第一步 `context.canPlace()` 只问"目标格能不能被替换"，红石线不可替换 → 直接 FAIL。
-    现在新增 `redstone/WirePlaceContext`：`canPlace()` 恒真（仅限该上下文）、`getClickedPos()` 指向线格；
-    `BlockItemMixin` 在 `place` 入口用 `@ModifyVariable` 换上下文（**仅当要放的方块是 `PhaseCapable`**），
-    在 `placeBlock` 入口补 `phase=redstone_<原线功率>`。其余流程原封不动
-    （`updatePlacementContext → getStateForPlacement → placeBlock → setPlacedBy →` 音效/统计/扣物品），
-    朝向/半砖/连接态/含水全部由宿主自己的 `getStateForPlacement` 按线格算出。
-  - **撤回前两轮的两种错误做法**：删除 `RedstoneWireUseMixin`（接管红石线 `use`/`useWithoutItem`，
-    把玩家点击手势写进逻辑，只对"点线本身"这一种姿势生效）与 `RedstoneWireReplaceMixin`
-    （全局放宽 `canBeReplaced`，改坏方块语义）。
-  - 自检改为 **48 项，六版本实测 48/48**：放置类断言**不再用 FakePlayer**，改成直接驱动
-    `BlockItem.place`（无玩家、无手），并新增三条反向断言——非宿主方块仍放不进线格、
-    红石线自身仍不可替换、普通红石粉放置不受影响。这样才能区分"精确放行"和"全局放宽"。
+    - 第一版（0.1.7）挂红石线自己的 `use`/`useWithoutItem`：接管右键、把点击路径写进逻辑，只对"点线本身"一种姿势生效。
+    - 第二版（0.1.8 初稿）在 `BlockItem.place` 入口替换放置上下文（`WirePlaceContext`）：看起来能用，但**漏掉了"物品自己搜索落点"那一类**——`ScaffoldingBlockItem.updatePlacementContext` 会在自己的循环里调 `canBeReplaced`，红石线格被直接跳过、方块落到别处（打包成脚手架堆叠时暴露）。
+    - **本版（最终）**：在 `canBeReplaced(BlockState, BlockPlaceContext)` 里放行——这一格是红石线、且这个放置上下文要放的方块是相容宿主 → 返回 `true`。这是**唯一**能同时覆盖 `BlockItem.place` 入口和物品自行搜索落点的位置。红石相由 `BlockItemMixin.placeBlock` 补：写方块前若目标格仍是红石线，就写成 `phase=redstone_<原线功率>`。
+  - **顺带纠正一个错误的判断**：曾以为放宽 `canBeReplaced(state, context)` 会让水流/活塞也把红石线当可替换方块。实际存在**两个重载**——`(BlockState, BlockPlaceContext)` 只服务方块放置，`(BlockState, Fluid)` 才是流体流动（`FluidState.canBeReplacedWith`）。改前者不影响水流与活塞。
+  - **判定里没有"手持"**：用的是 `context.getItemInHand()`，即**放置上下文自己携带的待放物品**（玩家右键时来自手上，其它来源来自被投放的物品，同一个字段）；`getPlayer()` 为 `null` 时行为完全一样，不读 `InteractionHand`、不读潜行状态。
+  - **点红线本身仍会被原版挡下**（`useWithoutItem` 先切换点/十字形状）。这是原版方块交互，按玩家要求保留。
+  - **撤回**：`RedstoneWireUseMixin`（接管右键）与 `WirePlaceContext`（只覆盖单个入口）都已删除。
+  - 自检改为 **53 项，六版本实测 53/53**，放置类断言分两层：无玩家直接 `BlockItem.place`、FakePlayer 走真实 `ServerPlayerGameMode.useItemOn`；并新增脚手架堆叠、以及可替换性边界（宿主放行 / 石头与红石粉仍拒绝）的断言。
   - 新增 `tools/check_redstone_render.py`：按原版 multipart 语义模拟状态命中，断言红石相下 `host parts > 0`。
-  - 新增 `tools/verify_jars.py`：发布前抽查 dist 里每个 jar 的版本号、非法 condition 数，
-    并断言 `WirePlaceContext` 在包里、两个已删除的 mixin 确实不在包里。
+  - 新增 `tools/verify_jars.py`：发布前抽查 dist 里每个 jar 的版本号、非法 condition 数，并断言放行 mixin 在包里、已删除的两个 mixin 确实不在包里。
 
 - **未发布（修复 0.1.6 的两个实机问题）**：
   - **可含水方块整片变成紫黑"错误模型"**：`tools/gen_phase_blockstates.py` 合并条件时

@@ -20,6 +20,7 @@
     "MultifaceShapeMixin",
     "PhaseCapableMixin",
     "PlacementMixin",
+    "RedstoneWireReplaceMixin",
     "ServerLevelMixin",
     "ServerPlayerGameModeMixin",
     "UseOnContextInvoker",
