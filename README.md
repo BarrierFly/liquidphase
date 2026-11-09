@@ -95,7 +95,8 @@
 - 相位渲染用 blockstate JSON 覆盖（multipart + 内缩模型），与其他**重写过原版 blockstate JSON 的资源包/模组**会冲突。
 - 26.x 的实验性红石评估器（`REDSTONE_EXPERIMENTS`）下，含红石相方块**不保证**与原版红石线行为一致。
 - 红石相是**宿主方块上的 `phase` 取值**（`redstone_0`…`redstone_15`，功率直接编码在取值里），
-  不注册任何新方块；方块仍是原版楼梯/台阶/墙/栅栏。渲染外壳只对 41 种宿主生成。
+  不注册任何新方块；方块仍是原版楼梯/台阶/墙/栅栏。渲染外壳对**全部**相容宿主生成
+  （含树叶/格栅/玻璃板/铁栏杆/梯子/锁链等透明方块）。
 - **状态数会明显增加**：`phase` 从 8 个取值变成 24 个，1.21.11 加载后的总状态数约 51 万
   （0.1.4 约 17.6 万），启动注入时间相应变长；低内存环境请留意。
 - 含固相方块的**相覆盖层会让方块看起来像整格黑曜石/冰**（内缩 0.25px 的立方体），但碰撞与挖掘仍按宿主：
@@ -116,7 +117,31 @@
 
 ## 变更记录
 
-- **未发布（0.1.8：修 0.1.7 的两个实机问题）**：
+- **0.1.9（修 0.1.8 的三个实机问题 + 双端同步复核）**：
+  - **部分透明方块所含红石相看不到**：渲染外壳原先只对 `tools/redstone-hosts.txt` 里的
+    41 个宿主（楼梯/台阶/墙/栅栏）生成。其余宿主——玻璃板、铁栏杆、梯子、锁链、树叶等
+    **透明方块最容易看出来**——也能被写入 `phase=redstone_*`，但 blockstate 里没有外壳 part，
+    于是"含相了却看不到红石"。现在**外壳对全部相容宿主生成**；整格宿主（树叶/铜格栅/红树根）
+    同样带外壳（它们原版 part 已放开到全部相，但相本身需要一层粉尘才可见）。
+  - **含相状态的剔除面不正确**：相覆盖层/红石外壳是叠加层，原版 `BlockState.skipRendering`
+    的"同种方块省一面"会把两块相邻含相方块贴合处各剔一面（相看起来缺一角），
+    两块含红石相的楼梯之间的粉尘也会消失。新增 `PhaseSkipRenderingMixin`：
+    **只要本状态或邻居带相就不走原版剔除**；不带相的状态完全不受影响。
+  - **渲染层升级口径**：红石外壳是透明底 cutout。客户端现在只把**默认图层为 SOLID** 的
+    相容宿主升级成 CUTOUT，**半透明宿主（玻璃板/染色玻璃）保持 TRANSLUCENT**——
+    之前统一 `putBlock(cutout)` 会把半透明像素画成半不透明。
+  - **双端同步（单人 / 连有 mod 服务器 / 连原版服务器）**：功能三是"客户端行为、服务端权威"。
+    之前客户端会无条件启用（流体射线、本地瞬挖、液体物品放置拦截），
+    连原版服务器时会单方面预测出服务端不存在的状态（把红石线格改成含相宿主、把桶换成液体物品），
+    表现为闪一下又回弹、物品数目对不上。现在服务端在 JOIN 时发 `liquidphase:handshake`，
+    客户端收到才启用；**连原版服务器永远收不到 → 自动退回原版行为**。
+    所有会改世界状态的客户端路径都用同一个门控；服务端侧永远为真，
+    所以单人/多人/原版服务器三种情形都不影响方块状态同步。
+  - 自检增至 **69 项，六版本实测 69/69**，新增：整格宿主与透明宿主的 blockstate 渲染断言、
+    含相剔除边界断言、双端同步握手断言。
+  - `tools/verify_jars.py` 增加 `render_sync` 与 `empty_phase_states` 断言，
+    防止"外壳只给 41 个宿主生成"这类回归。
+- **0.1.8（修 0.1.7 的两个实机问题）**：
   - **红石相表面按不透明渲染 / 楼梯形状消失**：根因不在渲染层注册（1.21.10/1.21.11 实测 `ItemBlockRenderTypes.getChunkRenderType` 已是 `CUTOUT`），而是 blockstate 把**宿主模型整个排除了**——宿主 part 的 `phase` 条件被限制成`none|lava|obsidian|ice|frosted_0..3`，于是含红石相时宿主根本不渲染，整格只剩一个 16³ 粉尘外壳。视觉上就是"整格变成不透明粉尘面、楼梯形状没了"。
     改为：宿主 part 的 `phase` 条件覆盖**全部 24 个取值**（任何相下都照常渲染），红石外壳只是**额外叠加**一层——与旧版组合方块"宿主 + 粉尘外壳同时渲染"的行为一致。
   - **可含水方块放不进红石线所在格（修法推翻重做，两次）**：
@@ -294,18 +319,25 @@ Existing phases in old worlds are then **lost permanently** (vanilla drops unkno
 Removing this mod loses every phase. It does not interoperate with generic fluidlogged mods (coexistence is crash-free, data is not shared).
 Phase rendering overrides vanilla blockstate JSONs, so resource packs/mods that rewrite those files conflict.
 Under the 26.x experimental redstone evaluator (`REDSTONE_EXPERIMENTS`) redstone-phase blocks are not guaranteed to match vanilla wire behaviour.
-Redstone-phase composites are available on **all six versions** (41 stair/slab/wall/fence hosts). 1.21.1 used to skip
-them because host shape tables returned null for composite states; the composite now answers outline/collision/support/
-occlusion explicitly from its host, and all six versions pass startup + self-test. Composites render as **the vanilla host
-model with a full-cube redstone-dust shell on top**:
-the shell uses a porous redstone-wire texture that fills each face, transparent pixels let the host show through (cutout), the crosshair outline
-covers the whole cube (collision stays with the host), and they have **no item form**; they are only created through redstone-dust/phase-block
-interactions (either dust on a host, or a host block item placed into the redstone-wire tile through the normal block placement pipeline).
+Redstone-phase composites are available on **all six versions** (every phase-capable host, not just stairs/slabs/walls/fences).
+The shell is generated for **all** phase hosts, including the transparent ones (leaves, grates, glass panes, iron bars, ladders,
+chains) that used to show no redstone at all, and full-cube hosts now render host + shell under redstone phases too.
+Composites render as **the vanilla host model with a full-cube redstone-dust shell on top**:
+the shell uses a porous redstone-wire texture that fills each face, transparent pixels let the host show through (cutout),
+the crosshair outline covers the whole cube (collision stays with the host), and they have **no item form**; they are only created
+through redstone-dust/phase-block interactions (either dust on a host, or a host block item placed into the redstone-wire tile
+through the normal block placement pipeline).
 Signals decay by 1 into neighbouring wires/composites
 but stay at full power for lamps, pistons and other components.
+Phased states never take part in vanilla same-block face culling, so two adjacent phased blocks do not lose the shared face
+(the phase no longer shows a missing corner). The client only upgrades hosts whose layer is SOLID to CUTOUT; translucent hosts
+(glass panes, stained glass) keep TRANSLUCENT.
 Phased blocks with a solid phase look like a full cube of that material, but collision and mining still follow the host: aim at the exposed host and
 it mines at host speed, aim at the exposed phase and it mines as the phase material (obsidian still needs a diamond pickaxe — that slowness is intended).
 Full-cube hosts (leaves, copper grates, mangrove roots) show the phase material instead of the host texture while phased.
+Feature 3 is client driven but server authoritative, so the server announces itself with a `liquidphase:handshake` packet on join and the client
+only enables its phase features after receiving it. A vanilla server never sends it, so the client falls back to vanilla behaviour there
+(single player works because the integrated server still sends the handshake).
 1.19.4/1.20.1 use **Statement** for state injection (shipped as a dependency).
 Dependency floors follow each version's real minimum (`fabricloader` 0.15.0 / 0.16.10 / 0.15.11 /
 0.17.0 / 0.17.3 / 0.19.3 respectively), `minecraft` stays patch-level (`~x.y.z`), and `fabric-api` plus

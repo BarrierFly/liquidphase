@@ -33,6 +33,9 @@ public final class LiquidPhase implements ModInitializer {
         }
         LiquidInteractions.registerDispenserBehaviors();
         org.liquidphase.cauldron.CauldronBehaviorRegistration.register();
+        // 相能力握手：把服务端配置广播给客户端；连原版服务器的客户端永远收不到，
+        // 客户端侧功能会自动退回原版行为（见 PhaseHandshake / PhaseSyncState）。
+        org.liquidphase.sync.PhaseHandshake.registerServer();
         liquidphase$registerSelfTest();
         LOGGER.info("[Liquid Phase] initialized");
     }

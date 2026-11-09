@@ -44,6 +44,12 @@ public abstract class BucketItemUseMixin {
         if (!LiquidPhaseConfig.get().liquidInteraction) {
             return;
         }
+        // 客户端必须等服务端握手确认支持相（连原版服务器时永远为 false）。
+        // 不拦的话客户端会自己把水/熔岩摆下去、扣物品，而服务端什么都没发生——
+        // 表现就是"放了又弹回来、物品数量对不上"。
+        if (!org.liquidphase.sync.PhaseSyncState.canMutateWorld(level)) {
+            return;
+        }
         if (this.content == Fluids.EMPTY) {
             // 空桶：原版"装液体"拒绝（§5.2）。
             cir.setReturnValue(InteractionResult.PASS);

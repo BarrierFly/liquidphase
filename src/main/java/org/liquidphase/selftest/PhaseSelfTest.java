@@ -20,6 +20,7 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import org.liquidphase.LiquidPhase;
 import org.liquidphase.phase.Phase;
 import org.liquidphase.phase.PhaseHelper;
+import org.liquidphase.phase.PhaseRenderSupport;
 import org.liquidphase.phase.PhaseTargeting;
 import org.liquidphase.redstone.RedstoneBlocks;
 
@@ -66,6 +67,8 @@ public final class PhaseSelfTest {
             checkFallingBlockIntoWire(level, base);
             checkWireStaysUnreplaceable(level, base);
             checkRedstoneRenderParts();
+            checkPhaseRenderCulling(level, base);
+            checkSyncState();
             checkCauldron(level, base);
         } catch (Throwable t) {
             failed++;
@@ -517,6 +520,38 @@ public final class PhaseSelfTest {
                 && hostPhaseConditionCoversRedstone(json));
         assertTrue("stair blockstate adds a redstone shell overlay",
             json.contains("liquidphase:block/redstone_phase"));
+
+        // Full-cube hosts (leaves / grates / mangrove roots): the host part must stay visible
+        // under redstone phases and the shell must be added. 0.1.8 limited the host part to
+        // none|lava, so redstone-phase leaves rendered nothing at all.
+        String leaves = liquidphase$resource("/assets/minecraft/blockstates/oak_leaves.json");
+        assertTrue("leaves blockstate resource is present", leaves != null);
+        if (leaves != null) {
+            assertTrue("leaves host part still renders under redstone phase",
+                leaves.contains("redstone_15") && leaves.contains("minecraft:block/oak_leaves"));
+            assertTrue("leaves blockstate adds a redstone shell overlay",
+                leaves.contains("liquidphase:block/redstone_phase"));
+        }
+
+        // Transparent hosts previously got no shell at all (only the 41 redstone hosts did),
+        // which is exactly why "some transparent blocks still show no redstone phase".
+        String pane = liquidphase$resource("/assets/minecraft/blockstates/glass_pane.json");
+        assertTrue("glass pane blockstate resource is present", pane != null);
+        if (pane != null) {
+            assertTrue("transparent host (glass pane) gets a redstone shell too",
+                pane.contains("liquidphase:block/redstone_phase") && pane.contains("redstone_15"));
+        }
+    }
+
+    private static String liquidphase$resource(String path) {
+        try (java.io.InputStream stream = LiquidPhase.class.getResourceAsStream(path)) {
+            if (stream == null) {
+                return null;
+            }
+            return new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (java.io.IOException e) {
+            return null;
+        }
     }
 
     private static boolean hostPhaseConditionCoversRedstone(String json) {
@@ -535,6 +570,60 @@ public final class PhaseSelfTest {
             idx = json.indexOf("\"shape\"", idx + 1);
         }
         return false;
+    }
+
+    // ------------------------------------------------------------------
+    // 渲染剔除 + 双端同步
+    // ------------------------------------------------------------------
+
+    /**
+     * 相邻面剔除：含相状态不得参与原版"同种方块共面剔除"。
+     * <p>
+     * 否则两块相邻的含相同相方块会在贴合处各少一面（相缺一角），
+     * 两块含红石相的楼梯之间的粉尘也会消失。
+     */
+    private static void checkPhaseRenderCulling(ServerLevel level, BlockPos base) {
+        BlockState iceStairs = PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.ICE);
+        BlockState redStairs = PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.REDSTONE_15);
+        BlockState plainStairs = Blocks.OAK_STAIRS.defaultBlockState();
+
+        assertTrue("phased state never culls its own faces",
+            !iceStairs.skipRendering(iceStairs, Direction.NORTH)
+                && !redStairs.skipRendering(redStairs, Direction.UP));
+        assertTrue("a plain neighbour may not cull against a phased block",
+            !plainStairs.skipRendering(iceStairs, Direction.NORTH)
+                && !plainStairs.skipRendering(redStairs, Direction.UP));
+        assertTrue("unphased states keep vanilla culling",
+            PhaseRenderSupport.allowVanillaCulling(plainStairs, plainStairs));
+
+        // Leaves are the classic "same block culls faces" case; make sure such a host also
+        // refuses to cull once phased (skip the check if this version has no leaves).
+        if (Blocks.OAK_LEAVES != null) {
+            BlockState leaves = Blocks.OAK_LEAVES.defaultBlockState();
+            BlockState iceLeaves = PhaseHelper.withPhase(leaves, Phase.ICE);
+            assertTrue("phased leaves do not cull against each other",
+                !iceLeaves.skipRendering(iceLeaves, Direction.NORTH));
+        }
+    }
+
+    /**
+     * 双端同步：客户端侧功能必须等服务器握手。
+     * <p>
+     * 三种情形：单人（集成服务器）、连有 mod 的服务器、连原版服务器。
+     * 这里只验证"默认不支持"这一条最关键的语义——只要它成立，
+     * 原版服务器就不会被客户端单方面预测的状态覆盖。
+     */
+    private static void checkSyncState() {
+        // 玩家进服那一刻（握手包到达前）必须是 false。
+        assertTrue("client phase sync starts disabled until the server handshake arrives",
+            !org.liquidphase.sync.PhaseSyncState.serverSupportsPhases());
+        int bits = org.liquidphase.sync.PhaseHandshake.bits(true, true);
+        assertTrue("handshake mask advertises phases and liquid interaction (got " + bits + ")",
+            org.liquidphase.sync.PhaseHandshake.hasPhase(bits)
+                && org.liquidphase.sync.PhaseHandshake.hasLiquidInteraction(bits));
+        assertTrue("phase-disabled config advertises nothing",
+            !org.liquidphase.sync.PhaseHandshake.hasPhase(
+                org.liquidphase.sync.PhaseHandshake.bits(false, false)));
     }
 
     // ------------------------------------------------------------------

@@ -113,6 +113,9 @@ public class PlacementMixin {
 
     @Inject(method = "getStateForPlacement", at = @At("RETURN"), cancellable = true)
     private void liquidphase$getStateForPlacement(BlockPlaceContext context, CallbackInfoReturnable<BlockState> cir) {
+        if (!org.liquidphase.sync.PhaseSyncState.canMutateWorld(context.getLevel())) {
+            return;
+        }
         if (this instanceof PhaseCapable && cir.getReturnValue() != null && cir.getReturnValue().hasProperty(PhaseHelper.PHASE)) {
             BlockState placed = cir.getReturnValue();
             BlockPos pos = context.getClickedPos();

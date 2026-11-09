@@ -57,6 +57,10 @@ public abstract class FallingBlockIntoWireMixin {
         if (!level.getBlockState(pos).is(Blocks.REDSTONE_WIRE)) {
             return new DirectionalPlaceContext(level, pos, direction, stack, horizontal);
         }
+        // Client-side prediction must wait for the server handshake (vanilla server keeps wires).
+        if (!org.liquidphase.sync.PhaseSyncState.canMutateWorld(level)) {
+            return new DirectionalPlaceContext(level, pos, direction, stack, horizontal);
+        }
         ItemStack self = liquidphase$selfStack();
         return new DirectionalPlaceContext(level, pos, direction,
             self.isEmpty() ? stack : self, horizontal);
@@ -75,6 +79,10 @@ public abstract class FallingBlockIntoWireMixin {
     /** {@return 落位要写的状态（目标格是红石线且自己是相容宿主时带上原线功率）} */
     private BlockState liquidphase$landingState(Level level, BlockPos pos, BlockState state) {
         if (!PhaseHelper.hasPhaseProperty(state)) {
+            return state;
+        }
+        // Client-side prediction must wait for the server handshake (vanilla server keeps wires).
+        if (!org.liquidphase.sync.PhaseSyncState.canMutateWorld(level)) {
             return state;
         }
         BlockState landing = level.getBlockState(pos);

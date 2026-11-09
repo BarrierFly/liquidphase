@@ -18,8 +18,7 @@ import org.liquidphase.phase.PhaseCapable;
 import org.liquidphase.phase.PhaseHelper;
 import org.liquidphase.redstone.RedstoneBlocks;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
-import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.Shadow;import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
@@ -76,6 +75,12 @@ public abstract class BlockItemMixin {
     @Inject(method = "place", at = @At("HEAD"), cancellable = true)
     private void liquidphase$place(BlockPlaceContext context, CallbackInfoReturnable<InteractionResult> cir) {
         Level level = context.getLevel();
+        // 客户端必须等服务端握手确认支持相（连原版服务器时永远为 false）。
+        // 否则客户端会自己把相写进本地世界（红石粉点宿主、液体物品、相材料吸收），
+        // 服务端随后下发真实状态覆盖回来，表现为方块闪一下就变回去。
+        if (!org.liquidphase.sync.PhaseSyncState.canMutateWorld(level)) {
+            return;
+        }
         BlockHitResult hit = ((UseOnContextInvoker) context).liquidphase$getHitResult();
         if (hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) {
             return;

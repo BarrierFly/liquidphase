@@ -47,6 +47,10 @@ public abstract class BucketItemMixin {
         if (!(state.getBlock() instanceof PhaseCapable)) {
             return;
         }
+        // 客户端预测必须等服务端握手；连原版服务器时不写相（否则本地闪一下又回弹）。
+        if (!org.liquidphase.sync.PhaseSyncState.canMutateWorld(level)) {
+            return;
+        }
         if (PhaseHelper.fillWithPhase(level, pos, state, Phase.LAVA)) {
             this.playEmptySound(user, level, pos);
             cir.setReturnValue(true);
@@ -65,6 +69,10 @@ public abstract class BucketItemMixin {
         }
         BlockState state = level.getBlockState(pos);
         if (!(state.getBlock() instanceof PhaseCapable)) {
+            return;
+        }
+        // 客户端预测必须等服务端握手；连原版服务器时不写相（否则本地闪一下又回弹）。
+        if (!org.liquidphase.sync.PhaseSyncState.canMutateWorld(level)) {
             return;
         }
         if (PhaseHelper.fillWithPhase(level, pos, state, Phase.LAVA)) {

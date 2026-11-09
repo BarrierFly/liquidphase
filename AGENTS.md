@@ -59,7 +59,8 @@ python tools/gen_redstone_assets.py tools/redstone-hosts.txt \
     src/main/resources/assets/liquidphase "<GRADLE_USER_HOME>/caches/fabric-loom/1.21.11/minecraft-client.jar"
 ```
 
-`tools/redstone-hosts.txt` 是红石外壳覆盖的 41 个宿主清单（生成器与客户端共用）。
+`tools/redstone-hosts.txt` 是"外壳贴图最早覆盖的 41 个代表宿主"清单（生成器自检/文档用）。
+**0.1.9 起外壳对全部相容宿主生成**，客户端也不再按这份清单登记渲染层（见 §3.2 渲染层）。
 
 `fabric_loader_version`（共享 `gradle.properties`）是**构建用** loader，`depends` 里声明的是
 各版本 `versions/<版本>/gradle.properties` 的 `fabric_loader_min`（= max(Fabric API 自身要求, 0.15.0)，
@@ -108,15 +109,23 @@ phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有�
 | 红石线连接判定 | `mixin/RedStoneWireBlockMixin`（≤1.21.11）/ `BlockStateBaseMixin.shouldRedstoneWireConnectTo`（26.3） |
 | 红粉点宿主 / 宿主放进线格 | `mixin/BlockItemMixin` + `mixin/RedstoneWireReplaceMixin` |
 | 下落方块落进线格 | `mixin/FallingBlockIntoWireMixin` |
-| cutout 图层的宿主清单 | `redstone/RedstoneRenderBlocks.java` + `tools/redstone-hosts.txt` |
+| 相邻面剔除（含相状态不参与 `skipRendering`） | `mixin/PhaseSkipRenderingMixin` + `phase/PhaseRenderSupport.java` |
+| 渲染层升级（SOLID → CUTOUT，半透明不动） | `client/LiquidPhaseClient.java` |
+| 双端能力握手 | `sync/PhaseHandshake.java` + `sync/PhaseHandshakeClient.java` + `sync/PhaseSyncState.java` |
 
 **代价**：`phase` 从 8 个取值变成 24 个（×3），1.21.11 的状态数从 175,607 涨到 **509,175**，
 启动注入时间相应变长。
 
-**渲染**：`tools/gen_phase_blockstates.py` 除了相覆盖层，还会对 `tools/redstone-hosts.txt`
-里的 41 个宿主额外追加：
+**渲染**：`tools/gen_phase_blockstates.py` 除相覆盖层外，会给**全部**相容宿主追加：
 - 宿主原 part 的 `when.phase` 补上**全部 24 个相**（= 任何相下宿主都照常渲染）；
 - 16 条 `when{phase: redstone_N}` 的 part，全部指向同一个外壳模型（**叠加**在宿主之上）。
+
+> ⚠️ **0.1.9 起外壳对全部宿主生成，不再只限 41 个**。之前只给楼梯/台阶/墙/栅栏生成外壳，
+> 其余宿主（玻璃板、铁栏杆、梯子、锁链、树叶……**这些透明方块最明显**）都能被写入
+> `phase=redstone_*`，但没有外壳 part，于是"含相了却看不到红石"。整格宿主
+> （树叶/铜格栅/红树根）同样要外壳——它们的宿主 part 已放开到全部相，但相本身需要一层粉尘才可见。
+> 回归检查见 `tools/verify_jars.py` 的 `empty_phase_states`（断言 `oak_leaves`/`glass_pane`/
+> `iron_bars`/`oak_stairs` 在 `redstone_15` 下至少命中一个 part）。
 
 > ⚠️ **红石相是"宿主 + 外壳叠加"，不是"外壳取代宿主"**（0.1.7 的实机 bug）。
 > 曾经把宿主 part 限制成 `phase != redstone_*`，结果含红石相时**宿主根本不渲染**，
@@ -138,6 +147,50 @@ phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有�
 
 外壳模型/贴图由 `tools/gen_redstone_assets.py` 生成（16³ 外壳外扩 0.01px，贴图是
 **短碎屑均匀铺满整面**的疏松红石纹理，16×16 透明底、约 29% 覆盖、跨格可拼贴）。
+
+#### 剔除面（0.1.9 修）
+
+**相覆盖层/红石外壳是叠加层，不参与原版"同种方块共面剔除"**（`BlockState.skipRendering`）。
+原版这些实现（`LeavesBlock`、`IronBarsBlock`、`HalfTransparentBlock` …）会在邻居是同类方块时
+省掉一面；如果按这条规则处理含相状态，两块相邻的含相同相方块会**各缺一面**（相看起来缺一角），
+两块含红石相的楼梯之间的粉尘也会消失。这就是"被含相的剔除面不正确"。
+
+做法：`mixin/PhaseSkipRenderingMixin` 在状态级 `skipRendering` 的 HEAD 上判定，
+**只要本状态或邻居带相就返回 `false`**（不剔除）；不带相的状态完全走原版。
+不要改成"按相区域/合并轮廓比距离"那一类几何判定——相覆盖层的外表面就在方块边界上，比较恒成立。
+
+> ⚠️ **遮挡/透光仍按宿主原形状**，不要把含相状态的遮挡换成整格：覆盖层内缩 0.25px、
+> 外壳只有约 29% 像素，换成整格会让邻居的面凭空消失、还会吃天光。固相（冰/霜冰/黑曜石）
+> 的碰撞已经是整格（决策点 D7），那是碰撞口径，与遮挡形状分开。
+
+#### 渲染层（0.1.9 修）
+
+红石外壳是透明底 cutout 贴图。**只把默认图层为 SOLID 的相容宿主升级成 CUTOUT**，
+半透明宿主（玻璃板、染色玻璃）必须保持 TRANSLUCENT——改成 cutout 会把半透明像素画成不透明。
+客户端遍历全部 `PhaseCapable` 方块用 `ItemBlockRenderTypes.getChunkRenderType` 判断，
+只在 `phaseEnabled` 时才动（关闭时不留任何图层改动）。26.3 由贴图透明度自动推导，不注册。
+
+#### 双端同步（0.1.9 修）
+
+功能三（流体射线、本地瞬挖、液体物品放置）是**客户端行为 + 服务端权威**。客户端必须
+**先确认服务端支持相**，否则连原版服务器时会单方面预测出服务端不存在的状态
+（把线格改成含红石相宿主、把桶换成液体物品），表现为闪一下又回弹、物品数目对不上。
+
+| 情形 | 握手 | 客户端行为 |
+| --- | --- | --- |
+| 单人游戏 | 集成服务器照常发包 | 到达前按"不支持"处理，之后正常 |
+| 连有本 mod 的服务器 | 收到 `liquidphase:handshake` | 启用功能三 |
+| 连原版服务器 | 永远收不到 | 全部退回原版行为 |
+
+- 服务端 `ServerPlayConnectionEvents.JOIN` 时发 `PhaseHandshakePayload`（1.19.4/1.20.1 用裸
+  `FriendlyByteBuf` 通道，1.21.1+ 用 `CustomPacketPayload`；注意 26.3 的
+  `PayloadTypeRegistry` 改名为 `clientboundPlay()`）。
+- 客户端收到就置 `PhaseSyncState.serverSupportsPhases()`；`DISCONNECT`/`JOIN` 都复位。
+- 所有**会改世界状态**的客户端路径都用 `PhaseSyncState.canMutateWorld(level)` 门控
+  （`BlockItemMixin`、`PlacementMixin`、`BucketItemMixin`、`BucketItemUseMixin`、`BucketUseMixin`、
+  `RedstoneWireReplaceMixin`、`FallingBlockIntoWireMixin`、`ClientLiquidMineMixin`、`EntityPickMixin`）。
+  服务端侧永远为真（自己的配置就是权威），所以**单人/多人/原版服务器都不影响方块状态同步**。
+- 新增 `selftest` 断言：握手掩码、默认不支持、渲染剔除边界。
 
 ### 3.3 红石相的两向生成
 
@@ -227,14 +280,17 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 ### 3.4 自动化自检
 
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
-`ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，57 项断言覆盖：
+`ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，69 项断言覆盖：
 相枚举/相位属性全覆盖、宿主方块身份、选择框/碰撞/遮挡、面露出判定、
 向红石线 -1 / 向固相满功率 / DOWN 不输出 / 被覆盖面不输出、供电即时性（邻居变化同 tick 生效）、
 红石线格放置（**两层**：无玩家直接 `BlockItem.place` + FakePlayer 走
 `ServerPlayerGameMode.useItemOn`）、统一用例，脚手架堆叠（物品自己搜索落点那一类）、
 下落方块落位（相容宿主落进线格带相；沙子仍被弹开）、
-红石线可替换性的精确边界（宿主放行、石头/红石粉仍拒绝）、炼药锅满锅取水门槛。
-默认关闭，不进正式玩法路径。**改动红石相形状或信号语义后请先跑它。**
+红石线可替换性的精确边界（宿主放行、石头/红石粉仍拒绝）、炼药锅满锅取水门槛、
+**blockstate 渲染资源**（楼梯宿主可见 + 外壳；整格宿主/透明宿主都有外壳）、
+**相剔除边界**（含相状态不参与 `skipRendering`，无相状态保持原版）、
+**双端同步**（客户端默认不支持、握手掩码正确）。
+默认关闭，不进正式玩法路径。**改动红石相形状、渲染或信号语义后请先跑它。**
 
 > 加 `-Dliquidphase.selftest.stop=true`（或 `LIQUIDPHASE_SELFTEST_STOP=true`）会在跑完后
 > 直接关服，方便脚本一键跑 6 个版本（返回码仍以日志里的 `result: N passed, 0 failed` 为准）。
@@ -326,15 +382,18 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 1. **红石相不再是独立方块**（0.1.5 起）：改成 `phase = redstone_0..15`，宿主方块本身不变。
    不再有组合方块注册、`COMPOSITE_TO_HOST` 表、`RedstonePhaseBlock` 标记接口。
    代价是 `phase` 取值 8 → 24，状态数约 ×3（1.21.11：175,607 → 509,175）。
-2. **红石相宿主覆盖面**：渲染外壳只对 `tools/redstone-hosts.txt` 里的 41 个宿主
-   （楼梯/台阶/墙/栅栏）生成；其他宿主也能被写入 `phase=redstone_*`（逻辑正常），但没有外壳贴图。
-   透明底走 cutout：1.19.4/1.20.1/1.21.1 用旧版 `BlockRenderLayerMap.INSTANCE`，
-   1.21.10/1.21.11 用新版 `client.rendering.v1.BlockRenderLayerMap` + `ChunkSectionLayer.CUTOUT`，
-   26.3 按贴图透明度自动推导。注意 1.21.11 的原版 blockstate/模型 JSON **不支持** `render_type`。
+2. **红石相宿主覆盖面（0.1.9 起已补全）**：渲染外壳现在对**全部**相容宿主生成
+   （约 386 个 id，含树叶/格栅/玻璃板/铁栏杆/梯子/锁链等透明方块）；
+   整格宿主（树叶/铜格栅/红树根）也带外壳。
+   透明底走 cutout：客户端只把**默认图层为 SOLID** 的宿主升级成 CUTOUT，
+   半透明宿主（玻璃板/染色玻璃）保持 TRANSLUCENT。1.19.4/1.20.1/1.21.1 用旧版
+   `BlockRenderLayerMap.INSTANCE`，1.21.10/1.21.11 用新版 `client.rendering.v1.BlockRenderLayerMap`
+   + `ChunkSectionLayer.CUTOUT`，26.3 按贴图透明度自动推导。
+   注意 1.21.11 的原版 blockstate/模型 JSON **不支持** `render_type`。
 3. **§3.5 元件相**（中继器/比较器/侦测器）未实现，方案见 `docs/milestone-2.5-repeater-proposal.md`。
-4. 行为层已做服务端自检（6 版本 25 项断言全过）+ 启动冒烟 + 6 版本编译；
-   游戏内逐条手测（冻结、凝固、破坏保留、桶挖、炼药锅转化、树叶相渲染、红石外壳渲染、
-   客户端取水不发本地挖掘包）仍待做。
+4. 行为层已做服务端自检（6 版本 69 项断言全过）+ 启动冒烟 + 6 版本编译；
+   游戏内逐条手测（冻结、凝固、破坏保留、桶挖、炼药锅转化、**含相剔除面**、**所有宿主的红石外壳渲染**、
+   客户端取水不发本地挖掘包、**连原版服务器时的客户端回退**）仍待做。
 5. **相瞄准的判定口径不能改成"合并轮廓 vs 相区域"**：相区域的外表面就落在方块边界上，与合并轮廓（=整格）的命中点重合，
    比较恒成立 → 任何瞄准都算挖相（历史 bug：含固相方块"怎么都挖不掉"）。现在用宿主轮廓（`phase=none` 兄弟状态）
    与相区域比距离，并保证形状表型宿主不会因查不到含相状态而退化成空形状。

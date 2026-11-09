@@ -52,9 +52,14 @@ FULL_CUBE_HOSTS = frozenset({
     "waxed_weathered_copper_grate", "waxed_oxidized_copper_grate",
 })
 
-# 整格宿主的原版 part 只在 phase=none|lava 时渲染（multipart when 的值支持
+# 整格宿主的原版 part 只在 phase=none|lava|<redstone_*> 时渲染（multipart when 的值支持
 # "|" OR，原版 redstone_wire.json 即此用法）；黑曜石/冰/霜冰相只渲染整格覆盖层。
-PHASE_HOST_CONDITION = {"phase": "none|lava"}
+#
+# ⚠️ 红石相必须留在整格宿主的渲染条件里：否则 `phase=redstone_*` 时宿主 part 不匹配、
+# 又没有外壳 part，整格什么都渲染不出来——树叶/铜格栅/红树根这类"透明贴图整格宿主"
+# 含红石相时直接变成隐形方块（0.1.8 的实机 bug）。
+REDSTONE_PHASES = "|".join("redstone_%d" % i for i in range(16))
+PHASE_HOST_CONDITION = {"phase": "none|lava|" + REDSTONE_PHASES}
 
 # ---------------------------------------------------------------------------
 # 红石相外壳（§3.4）：红石相是宿主上的 phase 取值（redstone_0 … redstone_15），
@@ -210,8 +215,14 @@ def convert(state_json: dict, full_cube: bool, redstone_host: bool = False) -> d
         raise ValueError("unknown blockstate layout")
     for value, model in overlays:
         parts.append({"when": {"phase": value}, "apply": {"model": model}})
-    if redstone_host:
-        parts = add_redstone_overlay(parts)
+    # 红石外壳对**全部**宿主都生成（不只 41 个楼梯/台阶/墙/栅栏）。
+    # 原因：任何相容宿主都能被写入 phase=redstone_*，如果只给 41 个生成外壳，
+    # 其余宿主（玻璃板、铁栏杆、梯子、锁链、树叶……这些"透明方块"最明显）在红石相下
+    # 要么什么都不渲染、要么看不到红石——0.1.8 的"部分透明方块所含红石相还是看不到"。
+    #
+    # 整格宿主（树叶/铜格栅/红树根）也要外壳：它们的原版 part 已放开到全部相，
+    # 但"相"本身需要一层粉尘才能看见。
+    parts = add_redstone_overlay(parts)
     return {"multipart": parts}
 
 

@@ -60,6 +60,12 @@ public abstract class RedstoneWireReplaceMixin {
         if (!self.is(Blocks.REDSTONE_WIRE)) {
             return;
         }
+        // Client-side prediction must wait for the server handshake: on a vanilla server the
+        // wire tile is genuinely unreplaceable, and predicting otherwise leaves a ghost block
+        // until the server corrects it.
+        if (!org.liquidphase.sync.PhaseSyncState.canMutateWorld(context.getLevel())) {
+            return;
+        }
         ItemStack placing = context.getItemInHand();
         if (!(placing.getItem() instanceof BlockItem item) || !(item.getBlock() instanceof PhaseCapable)) {
             return;
