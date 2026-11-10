@@ -3,8 +3,10 @@
 
 对每个相容方块 id：从 Minecraft 客户端 jar 提取原版 blockstate JSON，
 把 variants 转换为等价的 multipart（每个变体一条 when 条件），并追加
-phase=obsidian / ice / frosted_0..3 的覆盖层模型（整体内缩 1/64 + cullface，
-贴实心邻居的面被剔除；熔岩相不覆盖——由原版流体渲染直接绘制）。
+phase=obsidian / ice / frosted_0..3 的覆盖层模型（整体内缩 1/64）。
+内缩覆盖层**不带 cullface**：它的面不在方块边界上，原版 cullface 会拿"邻居是否盖住
+整面"去判断，对台阶/楼梯这类部分覆盖的邻居会错误剔掉不该剔的面（0.1.9 的实机 bug）。
+熔岩相不覆盖——由原版流体渲染直接绘制。
 
 整格模型宿主（树叶 / 铜格栅 / 红树根等原版模型本身就是 0..16 完整立方体）
 改用整格（0..16）覆盖模型 phase_*_full，并把原版 part 的 when 合并上

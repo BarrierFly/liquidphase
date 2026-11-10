@@ -541,6 +541,43 @@ public final class PhaseSelfTest {
             assertTrue("transparent host (glass pane) gets a redstone shell too",
                 pane.contains("liquidphase:block/redstone_phase") && pane.contains("redstone_15"));
         }
+
+        // ---- regression for the 0.1.10 bugs ----
+        // (a) The inset phase overlay / outer shell must NOT carry cullface: vanilla cullface
+        // compares "does the neighbour cover the block-boundary face" and misfires against
+        // partial neighbours (slabs/stairs), eating faces the overlay does cover.
+        for (String model : new String[]{
+            "phase_obsidian", "phase_ice", "phase_frosted_0", "phase_frosted_1",
+            "phase_frosted_2", "phase_frosted_3", "redstone_phase"}) {
+            String modelJson = liquidphase$resource("/assets/liquidphase/models/block/" + model + ".json");
+            assertTrue("model " + model + " exists", modelJson != null);
+            if (modelJson != null) {
+                assertTrue("model " + model + " must not use cullface (inset/oversized geometry)",
+                    !modelJson.contains("\"cullface\""));
+            }
+        }
+        // Full-cube overlays sit exactly on the block boundary, so cullface is legitimate there.
+        String full = liquidphase$resource("/assets/liquidphase/models/block/phase_ice_full.json");
+        assertTrue("full-cube overlay exists", full != null);
+        if (full != null) {
+            assertTrue("full-cube overlay keeps cullface (faces are on the boundary)",
+                full.contains("\"cullface\""));
+        }
+
+        // (b) The render layer fix lives in a mixin (the BlockRenderLayerMap table is rebuilt
+        // by the resource reload and would silently lose an init-time putBlock). Assert the
+        // mixin config is shipped and wired.
+        //? if !(26.3) {
+        //# The mixin config must ship and the mixin class must be present; jar-level wiring is
+        //# asserted by tools/verify_jars.py (the dev-server classpath copy of fabric.mod.json can
+        //# lag behind a fresh processResources run, so don't assert on it here).
+        String mixinCfg = liquidphase$resource("/liquidphase.layer.mixins.json");
+        assertTrue("render-layer mixin config is shipped", mixinCfg != null);
+        if (mixinCfg != null) {
+            assertTrue("render-layer mixin is registered in the config",
+                mixinCfg.contains("PhaseRenderLayerMixin"));
+        }
+        //?}
     }
 
     private static String liquidphase$resource(String path) {

@@ -110,7 +110,7 @@ phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有�
 | 红粉点宿主 / 宿主放进线格 | `mixin/BlockItemMixin` + `mixin/RedstoneWireReplaceMixin` |
 | 下落方块落进线格 | `mixin/FallingBlockIntoWireMixin` |
 | 相邻面剔除（含相状态不参与 `skipRendering`） | `mixin/PhaseSkipRenderingMixin` + `phase/PhaseRenderSupport.java` |
-| 渲染层升级（SOLID → CUTOUT，半透明不动） | `client/LiquidPhaseClient.java` |
+| 渲染层（带相状态强制 CUTOUT） | `mixin/client/PhaseRenderLayerMixin` + `liquidphase.layer.mixins.json` |
 | 双端能力握手 | `sync/PhaseHandshake.java` + `sync/PhaseHandshakeClient.java` + `sync/PhaseSyncState.java` |
 
 **代价**：`phase` 从 8 个取值变成 24 个（×3），1.21.11 的状态数从 175,607 涨到 **509,175**，
@@ -148,27 +148,47 @@ phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有�
 外壳模型/贴图由 `tools/gen_redstone_assets.py` 生成（16³ 外壳外扩 0.01px，贴图是
 **短碎屑均匀铺满整面**的疏松红石纹理，16×16 透明底、约 29% 覆盖、跨格可拼贴）。
 
-#### 剔除面（0.1.9 修）
+#### 剔除面（0.1.10 修，两处根因）
 
-**相覆盖层/红石外壳是叠加层，不参与原版"同种方块共面剔除"**（`BlockState.skipRendering`）。
+**根因 A：内缩覆盖层/外扩外壳不该带 `cullface`。**
+原版 `cullface` 的语义是"邻居把**方块边界上的这一整面**盖住了 → 我省掉这面"，
+它用 `Block.shouldRenderFace(self, neighbour, dir)` 实现，比较的是**方块边界**上的面。
+相覆盖层是 0.25 内缩的立方体（面在 y/z=0.25..15.75），红石外壳是 -0.01..16.01 外扩；
+它们的面**都不在方块边界上**。对台阶/楼梯这类**部分覆盖**的邻居，原版精细化判断会把
+本不该剔的面剔掉——实测 `oak_stairs+obsidian` 对 slab/stairs 邻居 `dir=UP` 返回 false，
+而 y=15.75 处的覆盖层顶面根本没被邻居挡住。这就是"剔除面不正确"的物理根因。
+
+做法：`phase_obsidian/ice/frosted_*`（内缩）与 `redstone_phase`（外扩）模型**全部去掉
+`cullface`**。去掉后 quad 进入 `getQuads(null)`（不可剔除面），原版分块构建器会照常
+绘制（`ModelBlockRenderer` 在方向循环之后单独处理 `null` 方向）。`phase_*_full`
+（0..16 贴边）保留 `cullface`，因为它的面确实在边界上、语义正确。
+回归：`tools/verify_jars.py` 的 `cullface=` 列 + 自检的模型断言。
+
+**根因 B：含相状态不参与原版"同种方块共面剔除"**（`BlockState.skipRendering`）。
 原版这些实现（`LeavesBlock`、`IronBarsBlock`、`HalfTransparentBlock` …）会在邻居是同类方块时
-省掉一面；如果按这条规则处理含相状态，两块相邻的含相同相方块会**各缺一面**（相看起来缺一角），
-两块含红石相的楼梯之间的粉尘也会消失。这就是"被含相的剔除面不正确"。
-
+省掉一面；如果按这条规则处理含相状态，两块相邻的含相同相方块会**各缺一面**（相缺一角）。
 做法：`mixin/PhaseSkipRenderingMixin` 在状态级 `skipRendering` 的 HEAD 上判定，
-**只要本状态或邻居带相就返回 `false`**（不剔除）；不带相的状态完全走原版。
-不要改成"按相区域/合并轮廓比距离"那一类几何判定——相覆盖层的外表面就在方块边界上，比较恒成立。
+**只要本状态或邻居带相就返回 `false`**；不带相的状态完全走原版。
+不要改成"按相区域/合并轮廓比距离"那一类几何判定——相区域的外表面就在方块边界上，比较恒成立。
 
 > ⚠️ **遮挡/透光仍按宿主原形状**，不要把含相状态的遮挡换成整格：覆盖层内缩 0.25px、
 > 外壳只有约 29% 像素，换成整格会让邻居的面凭空消失、还会吃天光。固相（冰/霜冰/黑曜石）
 > 的碰撞已经是整格（决策点 D7），那是碰撞口径，与遮挡形状分开。
 
-#### 渲染层（0.1.9 修）
+#### 渲染层（0.1.10 修）
 
-红石外壳是透明底 cutout 贴图。**只把默认图层为 SOLID 的相容宿主升级成 CUTOUT**，
-半透明宿主（玻璃板、染色玻璃）必须保持 TRANSLUCENT——改成 cutout 会把半透明像素画成不透明。
-客户端遍历全部 `PhaseCapable` 方块用 `ItemBlockRenderTypes.getChunkRenderType` 判断，
-只在 `phaseEnabled` 时才动（关闭时不留任何图层改动）。26.3 由贴图透明度自动推导，不注册。
+红石外壳是透明底 cutout 贴图（约 29% 不透明像素）。**带相状态在 SOLID 层会被直接丢弃
+透明像素**，整格宿主（树叶/铜格栅/红树根）看起来就是"看不到红石外壳"——这是
+0.1.9 修复无效的真正原因。
+
+> ⚠️ **不能在 `ClientModInitializer` 里用 `BlockRenderLayerMap.putBlock`。**
+> 那张表由原版资源重载重建；实测初始化时 `oak_leaves` 被识别为 SOLID 并写入 CUTOUT，
+> 但进入世界后 `getChunkRenderType` 仍返回 SOLID（初始化写入被覆盖）。
+> 正确做法：`mixin/client/PhaseRenderLayerMixin` 直接注入 `ItemBlockRenderTypes.getChunkRenderType`，
+> **带相且原图层为 SOLID → 返回 CUTOUT**；CUTOUT/CUTOUT_MIPPED 保持；
+> TRANSLUCENT（玻璃板/染色玻璃）保持——改 cutout 会让半透明像素变实。
+> 26.3 没有 `ItemBlockRenderTypes`，由贴图透明度自动推导，故 `liquidphase.layer.mixins.json`
+> 只在 1.19.4–1.21.11 接线（`build.gradle.kts` 的 `extra_mixins_layer`）。
 
 #### 双端同步（0.1.9 修）
 
@@ -280,7 +300,7 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 ### 3.4 自动化自检
 
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
-`ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，69 项断言覆盖：
+`ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，87 项断言覆盖（26.3 为 85 项）：
 相枚举/相位属性全覆盖、宿主方块身份、选择框/碰撞/遮挡、面露出判定、
 向红石线 -1 / 向固相满功率 / DOWN 不输出 / 被覆盖面不输出、供电即时性（邻居变化同 tick 生效）、
 红石线格放置（**两层**：无玩家直接 `BlockItem.place` + FakePlayer 走
@@ -288,7 +308,9 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 下落方块落位（相容宿主落进线格带相；沙子仍被弹开）、
 红石线可替换性的精确边界（宿主放行、石头/红石粉仍拒绝）、炼药锅满锅取水门槛、
 **blockstate 渲染资源**（楼梯宿主可见 + 外壳；整格宿主/透明宿主都有外壳）、
+**模型几何**（内缩覆盖层/外扩外壳不带 `cullface`，贴边 `phase_*_full` 保留）、
 **相剔除边界**（含相状态不参与 `skipRendering`，无相状态保持原版）、
+**渲染层 mixin 配置**（仅非 26.3 接线）、
 **双端同步**（客户端默认不支持、握手掩码正确）。
 默认关闭，不进正式玩法路径。**改动红石相形状、渲染或信号语义后请先跑它。**
 
@@ -391,8 +413,11 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    + `ChunkSectionLayer.CUTOUT`，26.3 按贴图透明度自动推导。
    注意 1.21.11 的原版 blockstate/模型 JSON **不支持** `render_type`。
 3. **§3.5 元件相**（中继器/比较器/侦测器）未实现，方案见 `docs/milestone-2.5-repeater-proposal.md`。
-4. 行为层已做服务端自检（6 版本 69 项断言全过）+ 启动冒烟 + 6 版本编译；
-   游戏内逐条手测（冻结、凝固、破坏保留、桶挖、炼药锅转化、**含相剔除面**、**所有宿主的红石外壳渲染**、
+4. 行为层已做服务端自检（6 版本 87/85 项断言全过）+ 启动冒烟 + 6 版本编译；
+   **渲染层与剔除面已在真实客户端（1.21.11 `runClient`）取证修复**：
+   带相状态图层为 CUTOUT（半透明宿主保持 TRANSLUCENT）、内缩覆盖层/外扩外壳的
+   quad 进入不可剔除列表、几何坐标在宿主外侧；
+   游戏内逐条手测（冻结、凝固、破坏保留、桶挖、炼药锅转化、**固定视角目视含相剔除接缝**、
    客户端取水不发本地挖掘包、**连原版服务器时的客户端回退**）仍待做。
 5. **相瞄准的判定口径不能改成"合并轮廓 vs 相区域"**：相区域的外表面就落在方块边界上，与合并轮廓（=整格）的命中点重合，
    比较恒成立 → 任何瞄准都算挖相（历史 bug：含固相方块"怎么都挖不掉"）。现在用宿主轮廓（`phase=none` 兄弟状态）

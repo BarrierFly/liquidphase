@@ -117,6 +117,34 @@
 
 ## 变更记录
 
+- **0.1.10（修 0.1.9 未解决的两个实机问题，已在真实客户端取证）**：
+  - **整格宿主（树叶/铜格栅/红树根）看不到红石外壳**：
+    根因是**渲染层**。红石外壳是透明底 cutout 贴图（约 29% 不透明像素），
+    而带相状态的 `getChunkRenderType` 仍是 `SOLID`——SOLID 层直接丢弃透明像素，
+    外壳等于没画。
+    0.1.9 在 `ClientModInitializer` 里用 `BlockRenderLayerMap.putBlock` 登记，
+    但**那张表会被原版资源重载重建**，初始化写入被覆盖回 SOLID（真实客户端实测：
+    初始化时确实识别为 SOLID 并写入 CUTOUT，进世界后仍读回 SOLID）。
+    改为 `PhaseRenderLayerMixin` 直接注入 `ItemBlockRenderTypes.getChunkRenderType`：
+    **带相且原图层为 SOLID → CUTOUT**；CUTOUT 保持；**半透明宿主（玻璃板/染色玻璃）
+    保持 TRANSLUCENT**。26.3 由贴图透明度自动推导，不接线。
+  - **含相剔除面不正确**：
+    根因是**模型几何带 `cullface`**。`cullface` 的语义是"邻居盖住方块边界上的这一整面"，
+    但相覆盖层是 0.25 内缩立方体、红石外壳是 -0.01..16.01 外扩，**面都不在方块边界上**。
+    对台阶/楼梯这类部分覆盖的邻居，原版会把本该保留的面剔掉
+    （实测 `oak_stairs+obsidian` 对 slab/stairs 邻居 `dir=UP` 返回 false，而 y=15.75 的
+    覆盖层顶面并没被挡住）。
+    改为**内缩覆盖层与红石外壳全部去掉 `cullface`**（变成不可剔除面，照常绘制）；
+    贴边的 `phase_*_full` 保留 `cullface`（语义正确）。
+    另外保留 `PhaseSkipRenderingMixin`：含相状态不参与原版"同种方块共面剔除"。
+  - 自检增至 **87 项（26.3 为 85 项），六版本实测全过**，新增：模型 `cullface` 断言、
+    渲染层 mixin 配置断言。
+  - `tools/verify_jars.py` 增加 `cullface=` 列：内缩覆盖层/外扩外壳一旦带回 `cullface`
+    直接判定 BROKEN。
+  - **验证方式**：在真实 1.21.11 客户端（`runClient`）用 `BlockModelShaper` 烘焙带相状态，
+    确认（a）`oak_leaves/copper_grate/mangrove_roots/oak_stairs/oak_slab/oak_fence`
+    红石相与冰相图层均为 CUTOUT、`glass_pane` 保持 TRANSLUCENT；
+    （b）内缩覆盖层/外壳的 quad 进入不可剔除列表，坐标在宿主外侧。
 - **0.1.9（修 0.1.8 的三个实机问题 + 双端同步复核）**：
   - **部分透明方块所含红石相看不到**：渲染外壳原先只对 `tools/redstone-hosts.txt` 里的
     41 个宿主（楼梯/台阶/墙/栅栏）生成。其余宿主——玻璃板、铁栏杆、梯子、锁链、树叶等
@@ -329,9 +357,13 @@ through redstone-dust/phase-block interactions (either dust on a host, or a host
 through the normal block placement pipeline).
 Signals decay by 1 into neighbouring wires/composites
 but stay at full power for lamps, pistons and other components.
-Phased states never take part in vanilla same-block face culling, so two adjacent phased blocks do not lose the shared face
-(the phase no longer shows a missing corner). The client only upgrades hosts whose layer is SOLID to CUTOUT; translucent hosts
-(glass panes, stained glass) keep TRANSLUCENT.
+Phased states never take part in vanilla same-block face culling, so two adjacent phased blocks do not lose the shared face.
+The inset phase overlay and the redstone shell carry **no** `cullface`: their faces are not on the block boundary, so vanilla
+culling would drop faces against partial neighbours (slabs/stairs) that the overlay actually covers. The full-cube overlays stay on
+the boundary and keep `cullface`.
+Phased states are forced onto the CUTOUT layer via `ItemBlockRenderTypes.getChunkRenderType` (only when the original layer is
+SOLID); translucent hosts (glass panes, stained glass) keep TRANSLUCENT. This must be a mixin: the `BlockRenderLayerMap` table is
+rebuilt by the resource reload and silently loses mappings registered during client init.
 Phased blocks with a solid phase look like a full cube of that material, but collision and mining still follow the host: aim at the exposed host and
 it mines at host speed, aim at the exposed phase and it mines as the phase material (obsidian still needs a diamond pickaxe — that slowness is intended).
 Full-cube hosts (leaves, copper grates, mangrove roots) show the phase material instead of the host texture while phased.

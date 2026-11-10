@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "package": "org.liquidphase.mixin.client",
+  "compatibilityLevel": "JAVA_17",
+  "minVersion": "0.8",
+  "client": [
+    "PhaseRenderLayerMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

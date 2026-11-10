@@ -20,8 +20,15 @@ REQUIRED_MARKERS = {
     'org/liquidphase/sync/PhaseSyncState.class': b'serverSupportsPhases',
     'org/liquidphase/sync/PhaseHandshake.class': b'currentBits',
 }
-# 26.3 按贴图透明度自动推导图层，客户端没有“判断 SOLID 并升级”的代码。
+# 26.3 按贴图透明度自动推导图层，没有 render-layer mixin。
 LAYER_MARKER_VERSIONS = {'1.19.4', '1.20.1', '1.21.1', '1.21.10', '1.21.11'}
+
+# 内缩相覆盖层 / 外扩红石外壳的模型都不能带 cullface（见 AGENTS §3.2）。
+NO_CULLFACE_MODELS = [
+    'phase_obsidian', 'phase_ice',
+    'phase_frosted_0', 'phase_frosted_1', 'phase_frosted_2', 'phase_frosted_3',
+    'redstone_phase',
+]
 
 
 def jars():
@@ -115,7 +122,7 @@ for ver, jar in jars():
         # 新增的渲染/同步实现必须在包里。
         markers = dict(REQUIRED_MARKERS)
         if ver in LAYER_MARKER_VERSIONS:
-            markers['org/liquidphase/client/LiquidPhaseClient.class'] = b'liquidphase$isSolidLayer'
+            markers['org/liquidphase/mixin/client/PhaseRenderLayerMixin.class'] = b'liquidphase$phasedLayer'
         missing_markers = []
         for path, marker in markers.items():
             if path not in names:
@@ -123,6 +130,24 @@ for ver, jar in jars():
                 continue
             if marker not in z.read(path):
                 missing_markers.append(path + ' (marker missing)')
+
+        # 内缩覆盖层/外扩外壳不能带 cullface（0.1.10 实机 bug 的根因）。
+        cullface_models = []
+        for model in NO_CULLFACE_MODELS:
+            path = 'assets/liquidphase/models/block/%s.json' % model
+            if path not in names:
+                cullface_models.append(model + ' (missing)')
+                continue
+            if b'"cullface"' in z.read(path):
+                cullface_models.append(model)
+
+        # 渲染层 mixin 配置必须在 fabric.mod.json 里接线（仅 1.19.4–1.21.11）。
+        mod = json.loads(z.read('fabric.mod.json'))
+        layer_wired = 'liquidphase.layer.mixins.json' in mod.get('mixins', [])
+        if ver in LAYER_MARKER_VERSIONS and not layer_wired:
+            missing_markers.append('layer mixin config not wired')
+        if ver not in LAYER_MARKER_VERSIONS and layer_wired:
+            missing_markers.append('layer mixin config wired on 26.3')
 
         # 整格宿主 + 红石相：blockstate 里必须真有能命中该状态的 part
         # （0.1.8 的"树叶含红石相变隐形"就是这里为 0）。
@@ -144,13 +169,14 @@ for ver, jar in jars():
 
         line_ok = (bad == 0 and has_replace_mixin and has_phase_write
                    and removed_wire_use and removed_wire_ctx
-                   and not missing_markers and not empty_states)
+                   and not missing_markers and not empty_states
+                   and not cullface_models)
         ok = ok and line_ok
         print('%-8s ver=%-8s blockstates=%-5d bad_conds=%-3d replace_mixin=%s '
-              'phase_write=%s render_sync=%s empty_phase_states=%s -> %s'
+              'phase_write=%s render_sync=%s cullface=%s empty_phase_states=%s -> %s'
               % (ver, mod['version'], len(blockstates), bad, has_replace_mixin,
                  has_phase_write, 'ok' if not missing_markers else missing_markers,
-                 empty_states or 'none',
+                 cullface_models or 'none', empty_states or 'none',
                  'OK' if line_ok else 'BROKEN'))
 
 if not jars():

@@ -106,13 +106,16 @@ TEXTURE_ID = "liquidphase:block/redstone_phase"
 SHELL_OVERHANG = 0.01
 SHELL_FACES = ("down", "up", "north", "south", "west", "east")
 
+# NOTE: no cullface on the shell. The shell is 0.01 *outside* the block boundary, so vanilla
+# cullface (which compares the neighbour's face occlusion against the block boundary) misfires
+# against partial neighbours (slabs/stairs) and eats faces the shell actually covers.
 MODEL = {
     "textures": {"particle": TEXTURE_ID, "all": TEXTURE_ID},
     "elements": [
         {
             "from": [-SHELL_OVERHANG, -SHELL_OVERHANG, -SHELL_OVERHANG],
             "to": [16 + SHELL_OVERHANG, 16 + SHELL_OVERHANG, 16 + SHELL_OVERHANG],
-            "faces": {face: {"texture": "#all", "cullface": face} for face in SHELL_FACES},
+            "faces": {face: {"texture": "#all"} for face in SHELL_FACES},
         }
     ],
 }

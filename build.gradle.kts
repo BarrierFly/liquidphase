@@ -70,6 +70,8 @@ tasks.named<ProcessResources>("processResources") {
     val extraMixins = if (!statementEra) ",\"liquidphase.states.mixins.json\"" else ""
     val extraMixins26 = if (unobfuscatedEra) ",\"liquidphase.26.mixins.json\"" else ""
     val extraMixinsWire = if (unobfuscatedEra) "" else ",\"liquidphase.wire.mixins.json\""
+    // 渲染层 mixin 只在 1.19.4–1.21.11 需要（26.3 由贴图透明度自动推导图层）。
+    val extraMixinsLayer = if (unobfuscatedEra) "" else ",\"liquidphase.layer.mixins.json\""
     filesMatching("fabric.mod.json") {
         filter { line -> line
             .replace("\${version}", modVersion)
@@ -84,6 +86,7 @@ tasks.named<ProcessResources>("processResources") {
             .replace("\${extra_mixins}", extraMixins)
             .replace("\${extra_mixins_26}", extraMixins26)
             .replace("\${extra_mixins_wire}", extraMixinsWire)
+            .replace("\${extra_mixins_layer}", extraMixinsLayer)
         }
     }
 }
