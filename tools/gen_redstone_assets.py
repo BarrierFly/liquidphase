@@ -1,28 +1,27 @@
 #!/usr/bin/env python3
-"""为红石相生成 blockstate / 方块模型 / 贴图 / 语言键。
+"""生成红石相外壳的贴图与模型（16 个功率档位各一份）。
 
-红石相 = 宿主方块上的 phase 取值（redstone_0 … redstone_15），不再是独立方块。
-本脚本从客户端 jar 提取宿主原版 blockstate，生成
-"宿主原版 multipart part + 一层 16³ 红石粉尘外壳" 的 multipart：
+红石相 = 宿主方块上的 ``phase = redstone_0 … redstone_15``，不再注册任何方块；
+外壳由 ``gen_phase_blockstates.py`` 以 multipart part 的形式叠加到每个宿主之上。
 
-- 宿主 part 保留原 when（朝向/形状/连接态），并合并 phase 条件
-  `phase = none|lava|obsidian|ice|frosted_0..3`（其它相由各自的覆盖层负责）。
-- 追加 16 个 `when: {phase: redstone_N}` 的 part，全部指向同一个外壳模型
-  （功率只影响信号，不影响外观）。
-- 外壳贴图 = 内置的疏松红石碎屑图案（16×16 透明底，铺满整面）。
-- 外壳整体外扩 0.01px，避免与宿主共面的面片深度冲突。
+**外壳按功率着色**：原版红石线用 ``RedStoneWireBlock.COLORS`` 把功率映射成
+"暗红 → 亮红"，0 档几乎不亮。这里沿用同一条亮度曲线（``f = p/15``，
+``g = f*0.6 + (f>0 ? 0.4 : 0.3)``），把内置的三档红石碎屑调色板整体按 ``g`` 缩放，
+所以 ``redstone_0`` 看起来是熄灭的暗红，``redstone_15`` 才是亮红。
 
-用法:
-    python tools/gen_redstone_assets.py <CompositeFactories 或宿主清单> <assets/liquidphase> <客户端 jar>
+为什么不用 ``tintindex`` + 客户端 BlockColors：tint 是按"模型的贴图索引"生效的，
+而宿主自己的模型大量使用 ``tintindex 0``（树叶的植被着色就是 0）。外壳如果也用 0，
+树叶的绿色会给粉尘染色；用 1 又要求每个宿主都有第二个 tint source，
+1.19.4–1.21.1 的 ``BlockColor`` 接口（单 source，按 index 分派）根本表达不了这个区分。
+静态生成 16 份调色板贴图在任何版本上都一致，也没有 API 差异。
 
-第 1 个参数现在只用来做"41 个宿主"的数量校验（红石相不再有自己的方块类），
-可以传 tools/phase-blocks/<版本>.redstone-hosts 这样的纯 id 清单。
+用法: python tools/gen_redstone_assets.py <assets/liquidphase>
+输出: <assets/liquidphase>/textures/block/redstone_phase_<p>.png
+      <assets/liquidphase>/models/block/redstone_phase_<p>.json
 """
 import json
-import re
 import struct
 import sys
-import zipfile
 import zlib
 from pathlib import Path
 
@@ -48,6 +47,7 @@ TEXTURE = [
     "1200300100000321",
 ]
 
+# 基准调色板（= 满功率 15 档的外观）。
 PALETTE = {
     "0": (0, 0, 0, 0),
     "1": (112, 18, 12, 255),
@@ -55,127 +55,52 @@ PALETTE = {
     "3": (255, 86, 72, 255),
 }
 
-# 中文名按原版译名
-ZH_NAMES = {
-    "oak_stairs": "橡木楼梯",
-    "spruce_stairs": "云杉楼梯",
-    "birch_stairs": "白桦楼梯",
-    "jungle_stairs": "丛林楼梯",
-    "acacia_stairs": "金合欢楼梯",
-    "dark_oak_stairs": "深色橡木楼梯",
-    "cobblestone_stairs": "圆石楼梯",
-    "stone_stairs": "石头楼梯",
-    "brick_stairs": "砖块楼梯",
-    "stone_brick_stairs": "石砖楼梯",
-    "sandstone_stairs": "砂岩楼梯",
-    "quartz_stairs": "石英楼梯",
-    "purpur_stairs": "紫珀楼梯",
-    "oak_slab": "橡木台阶",
-    "spruce_slab": "云杉台阶",
-    "birch_slab": "白桦台阶",
-    "jungle_slab": "丛林台阶",
-    "acacia_slab": "金合欢台阶",
-    "dark_oak_slab": "深色橡木台阶",
-    "stone_slab": "石头台阶",
-    "cobblestone_slab": "圆石台阶",
-    "smooth_stone_slab": "平滑石头台阶",
-    "stone_brick_slab": "石砖台阶",
-    "brick_slab": "砖块台阶",
-    "sandstone_slab": "砂岩台阶",
-    "quartz_slab": "石英台阶",
-    "purpur_slab": "紫珀台阶",
-    "cobblestone_wall": "圆石墙",
-    "cobbled_deepslate_wall": "深板岩圆石墙",
-    "mossy_cobblestone_wall": "苔石墙",
-    "stone_brick_wall": "石砖墙",
-    "brick_wall": "砖块墙",
-    "sandstone_wall": "砂岩墙",
-    "prismarine_wall": "海晶石墙",
-    "oak_fence": "橡木栅栏",
-    "spruce_fence": "云杉栅栏",
-    "birch_fence": "白桦栅栏",
-    "jungle_fence": "丛林栅栏",
-    "acacia_fence": "金合欢栅栏",
-    "dark_oak_fence": "深色橡木栅栏",
-    "nether_brick_fence": "下界砖栅栏",
-}
-
-MODEL_ID = "liquidphase:block/redstone_phase"
-TEXTURE_ID = "liquidphase:block/redstone_phase"
-
+# 外壳整体外扩 0.01px，避免与宿主共面的面片深度冲突。
 SHELL_OVERHANG = 0.01
 SHELL_FACES = ("down", "up", "north", "south", "west", "east")
-
-# NOTE: no cullface on the shell. The shell is 0.01 *outside* the block boundary, so vanilla
-# cullface (which compares the neighbour's face occlusion against the block boundary) misfires
-# against partial neighbours (slabs/stairs) and eats faces the shell actually covers.
-MODEL = {
-    "textures": {"particle": TEXTURE_ID, "all": TEXTURE_ID},
-    "elements": [
-        {
-            "from": [-SHELL_OVERHANG, -SHELL_OVERHANG, -SHELL_OVERHANG],
-            "to": [16 + SHELL_OVERHANG, 16 + SHELL_OVERHANG, 16 + SHELL_OVERHANG],
-            "faces": {face: {"texture": "#all"} for face in SHELL_FACES},
-        }
-    ],
-}
-
-HOST_BLOCKSTATE_ENTRY = "assets/minecraft/blockstates/{host}.json"
-
-# 宿主 part 在**任何**相下都渲染；红石相只是再叠一层粉尘外壳。
-ALL_PHASES = ("none|lava|obsidian|ice|frosted_0|frosted_1|frosted_2|frosted_3|"
-              + "|".join("redstone_%d" % i for i in range(16)))
+POWER_LEVELS = 16
 
 
-def load_host_blockstate(jar: Path, host: str) -> dict:
-    with zipfile.ZipFile(jar) as zf:
-        return json.loads(zf.read(HOST_BLOCKSTATE_ENTRY.format(host=host)).decode("utf-8"))
+def power_shade(power: int) -> float:
+    """原版红石线的亮度曲线（RedStoneWireBlock.COLORS 的红色分量）。"""
+    f = power / 15.0
+    return f * 0.6 + (0.4 if f > 0.0 else 0.3)
 
 
-def host_parts(blockstate: dict):
-    """宿主 blockstate → multipart part 列表（variants 逐个转 when，multipart 原样保留）。"""
-    if "variants" in blockstate:
-        parts = []
-        for key, entry in blockstate["variants"].items():
-            applies = entry if isinstance(entry, list) else [entry]
-            for apply in applies:
-                part = {"apply": dict(apply)}
-                if key.strip():
-                    when = {}
-                    for piece in key.split(","):
-                        prop, _, value = piece.partition("=")
-                        when[prop.strip()] = value.strip()
-                    part["when"] = when
-                parts.append(part)
-        return parts
-    return [dict(part) for part in blockstate["multipart"]]
+def tinted_palette(power: int):
+    shade = power_shade(power)
+    out = {}
+    for key, (r, g, b, a) in PALETTE.items():
+        out[key] = (min(255, round(r * shade)),
+                    min(255, round(g * shade)),
+                    min(255, round(b * shade)),
+                    a)
+    return out
 
 
-def with_phase(when, condition):
-    merged = dict(when) if when else {}
-    merged["phase"] = condition
-    return merged
+def model_id(power: int) -> str:
+    return "liquidphase:block/redstone_phase_%d" % power
 
 
-def composite_blockstate(jar: Path, host: str) -> dict:
-    """宿主原版几何 + 红石外壳（透明处露出里面的宿主材质）。
+def texture_id(power: int) -> str:
+    return "liquidphase:block/redstone_phase_%d" % power
 
-    宿主 part 在**任何**相下都渲染；再追加 16 条 phase=redstone_N 的 part
-    指向同一个外壳模型，叠在宿主之上（对齐旧版组合方块：形状/轮廓保持不变）。
-    """
-    parts = []
-    for part in host_parts(load_host_blockstate(jar, host)):
-        new_part = {
-            "apply": part["apply"],
-            "when": with_phase(part.get("when"), ALL_PHASES),
-        }
-        parts.append(new_part)
-    for power in range(16):
-        parts.append({
-            "when": {"phase": "redstone_%d" % power},
-            "apply": {"model": MODEL_ID},
-        })
-    return {"multipart": parts}
+
+def build_model(power: int) -> dict:
+    # NOTE: no cullface on the shell. The shell is 0.01 *outside* the block boundary, so
+    # vanilla cullface (which compares the neighbour's face occlusion against the block
+    # boundary) misfires against partial neighbours (slabs/stairs) and eats faces the
+    # shell actually covers.
+    return {
+        "textures": {"particle": texture_id(power), "all": texture_id(power)},
+        "elements": [
+            {
+                "from": [-SHELL_OVERHANG, -SHELL_OVERHANG, -SHELL_OVERHANG],
+                "to": [16 + SHELL_OVERHANG, 16 + SHELL_OVERHANG, 16 + SHELL_OVERHANG],
+                "faces": {face: {"texture": "#all"} for face in SHELL_FACES},
+            }
+        ],
+    }
 
 
 def write_png(path: Path, rows) -> None:
@@ -196,73 +121,38 @@ def write_png(path: Path, rows) -> None:
     path.write_bytes(png)
 
 
-def collect_hosts(source: Path):
-    """从 CompositeFactories.java 或纯 id 清单里收集 41 个宿主 id。"""
-    text = source.read_text(encoding="utf-8")
-    ids = re.findall(r"map\.put\(Blocks\.([A-Z0-9_]+),", text)
-    if not ids:
-        ids = [line.strip().upper() for line in text.splitlines() if line.strip() and not line.strip().startswith("#")]
-    hosts = []
-    for upper in ids:
-        host = upper.lower()
-        if host not in hosts:
-            hosts.append(host)
-    return hosts
-
-
-def write_lang(path: Path, keys) -> None:
-    data = {}
-    if path.exists():
-        data = json.loads(path.read_text(encoding="utf-8"))
-    data.update(keys)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def main() -> None:
-    source = Path(sys.argv[1])
-    out = Path(sys.argv[2])
-    jar = Path(sys.argv[3]) if len(sys.argv) >= 4 else None
-    if jar is None:
-        raise SystemExit(
-            "client jar path is required (host blockstates are extracted from it):\n"
-            "  python tools/gen_redstone_assets.py <host-list> <assets/liquidphase> <minecraft-client.jar>"
-        )
-    hosts = collect_hosts(source)
-    if len(hosts) != 41:
-        raise SystemExit(f"expected 41 hosts from {source}, got {len(hosts)}: {hosts}")
-
+def main() -> int:
+    if len(sys.argv) < 2:
+        raise SystemExit("usage: python tools/gen_redstone_assets.py <assets/liquidphase>")
+    out = Path(sys.argv[1])
     for row in TEXTURE:
         if len(row) != 16:
-            raise SystemExit(f"bad texture row: {row!r}")
-    texture_path = out / "textures" / "block" / "redstone_phase.png"
-    texture_path.parent.mkdir(parents=True, exist_ok=True)
-    write_png(texture_path, [[PALETTE[c] for c in row] for row in TEXTURE])
+            raise SystemExit("bad texture row: %r" % row)
 
-    model_path = out / "models" / "block" / "redstone_phase.json"
-    model_path.parent.mkdir(parents=True, exist_ok=True)
-    model_path.write_text(json.dumps(MODEL, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    tex_dir = out / "textures" / "block"
+    model_dir = out / "models" / "block"
+    tex_dir.mkdir(parents=True, exist_ok=True)
+    model_dir.mkdir(parents=True, exist_ok=True)
 
-    blockstates_dir = out / "blockstates"
-    blockstates_dir.mkdir(parents=True, exist_ok=True)
-    en = {}
-    zh = {}
-    for host in hosts:
-        target = blockstates_dir / f"{host}.json"
-        target.write_text(json.dumps(composite_blockstate(jar, host), separators=(",", ":")) + "\n", encoding="utf-8")
-        key = f"block.liquidphase.redstone_{host}"
-        en[key] = "Redstone-Phase " + host.replace("_", " ").title()
-        zh[key] = "红石相" + ZH_NAMES.get(host, host.replace("_", " "))
+    for power in range(POWER_LEVELS):
+        palette = tinted_palette(power)
+        write_png(tex_dir / ("redstone_phase_%d.png" % power),
+                  [[palette[c] for c in row] for row in TEXTURE])
+        (model_dir / ("redstone_phase_%d.json" % power)).write_text(
+            json.dumps(build_model(power), indent=2, sort_keys=False) + "\n", encoding="utf-8")
 
-    write_lang(out / "lang" / "en_us.json", en)
-    write_lang(out / "lang" / "zh_cn.json", zh)
+    # 老版本的单一外壳模型（0.1.10 及以前）已按功率拆分，避免残留的引用指向过时外观。
+    stale_model = model_dir / "redstone_phase.json"
+    if stale_model.exists():
+        stale_model.unlink()
+    stale_texture = tex_dir / "redstone_phase.png"
+    if stale_texture.exists():
+        stale_texture.unlink()
 
-    print(f"hosts: {len(hosts)}")
-    print(f"texture: {texture_path}")
-    print(f"model: {model_path}")
-    print(f"blockstates: {len(list(blockstates_dir.glob('*.json')))} files -> {blockstates_dir}")
-    print(f"lang keys: {len(en)} (en_us + zh_cn)")
+    print("textures: %d -> %s" % (POWER_LEVELS, tex_dir))
+    print("models  : %d -> %s" % (POWER_LEVELS, model_dir))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

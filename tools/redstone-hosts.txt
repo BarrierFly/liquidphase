@@ -1,3 +1,9 @@
+# 早期（0.1.1–0.1.8）红色外壳只覆盖的 41 个代表宿主，仅作历史参考。
+#
+# 0.1.9 起外壳对 tools/phase-blocks/<版本>.ids 里的**全部**相容宿主生成，
+# 本清单不再参与构建或生成（build.gradle.kts 也不再把它声明为任务输入）。
+# 想复核"某个宿主到底有没有外壳"，用 tools/verify_jars.py 的 empty_phase_states 断言，
+# 或直接看构建产物里的 assets/minecraft/blockstates/<id>.json。
 oak_stairs
 spruce_stairs
 birch_stairs

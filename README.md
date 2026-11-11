@@ -78,7 +78,9 @@
 5. 熔岩锅旁边倒水 → 掉黑曜石；水锅上倒熔岩 → 按水位掉石头/圆石/圆石台阶。
 6. 拿红石粉点楼梯 → 楼梯变成**含红石线的楼梯**：方块本身还是那格楼梯，只是多了 `phase` 取值
    （`redstone_0`…`redstone_15` 编码功率）。外面罩一层 16³ 红石粉尘外壳
-   （透明底 cutout，贴图是**短碎屑铺满整面**的疏松红石纹理），形状/碰撞/掉落仍是楼梯自己的。
+   （透明底 cutout，贴图是**短碎屑铺满整面**的疏松红石纹理，
+   **亮度随功率变化**——0 档接近熄灭、15 档满亮，和原版红石线一致），
+   形状/碰撞/掉落仍是楼梯自己的。
    按红石线规则衰减传递信号（对相邻红石线 -1，对灯/活塞等元件满功率），被宿主遮住的面不输出；
    破坏它 → 留下对应功率的红石线。
    也可以反过来：把楼梯/台阶等可含水方块**放进红石线所在的那一格**，那条线就被吸进宿主、
@@ -96,13 +98,16 @@
 - 26.x 的实验性红石评估器（`REDSTONE_EXPERIMENTS`）下，含红石相方块**不保证**与原版红石线行为一致。
 - 红石相是**宿主方块上的 `phase` 取值**（`redstone_0`…`redstone_15`，功率直接编码在取值里），
   不注册任何新方块；方块仍是原版楼梯/台阶/墙/栅栏。渲染外壳对**全部**相容宿主生成
-  （含树叶/格栅/玻璃板/铁栏杆/梯子/锁链等透明方块）。
+  （含树叶/格栅/玻璃板/铁栏杆/梯子/锁链等透明方块），**外壳亮度随功率变化**。
+- **告示牌/箱子/屏障/光源方块等原生"不渲染方块模型"的宿主也能显示相**：带相状态一律按
+  方块模型渲染，宿主本体仍由各自的原版渲染路径绘制。
 - **状态数会明显增加**：`phase` 从 8 个取值变成 24 个，1.21.11 加载后的总状态数约 51 万
   （0.1.4 约 17.6 万），启动注入时间相应变长；低内存环境请留意。
 - 含固相方块的**相覆盖层会让方块看起来像整格黑曜石/冰**（内缩 0.25px 的立方体），但碰撞与挖掘仍按宿主：
   准星落在宿主露出的部分就挖宿主，落在相露出的部分就挖相。黑曜石相需要钻石镐才能挖动相本身
   （没有钻石镐时按黑曜石速度计算，非常慢——这是有意的设计，不是卡死）。
-- 整格宿主（树叶/铜格栅/红树根）含黑曜石/冰相时整格显示相材质，不再显示宿主贴图。
+- 整格模型宿主（树叶/铜格栅/红树根）含黑曜石/冰相时整格显示相材质，不再显示宿主贴图。
+  哪些宿主算"整格"由构建时按模型几何自动判定（不再手写清单），新版本新增的树叶会被自动识别。
 - 状态数会随宿主数量增长（每宿主 ×23 相取值，其中 16 个 redstone 值编码功率）；
   已在各版本实测编译与加载，1.19.4 这类低内存环境请留意内存占用。
 - 1.19.4/1.20.1 的状态注入使用 **Statement** 依赖（会自动随 mod 提供）。
@@ -117,6 +122,50 @@
 
 ## 变更记录
 
+- **0.1.11（含红石相方块的显示问题全面收口）**：
+  这一版把"某些宿主含相后看不见"归结到的四个独立根因全部修掉。
+  - **原生不渲染方块模型的宿主，含相后什么都不显示**：
+    根因是 `RenderShape`。区块构建器只在"该渲染方块模型"时才请求模型——1.19.4/1.20.1 用
+    `!= INVISIBLE`，1.21.1 起用 `== MODEL`。而 `barrier`、`light`、告示牌/悬挂告示牌全家
+    （全版本 `INVISIBLE`）、`decorated_pot`（1.20.1–1.21.1）、
+    `chest`/`trapped_chest`/`ender_chest`/`conduit`（1.19.4–1.21.1 为 `ENTITYBLOCK_ANIMATED`）
+    都不满足条件。给它们写入 `phase=redstone_15` 或冰相，数据在、模型从没被请求过，
+    界面上当然什么都没有。
+    新增 `PhaseRenderShapeMixin`：**带相且原值不是 MODEL → 返回 MODEL**。
+    宿主本体仍由方块实体渲染器绘制（那条路径与 RenderShape 无关），
+    它们自己的模型只有 particle 贴图、没有 `elements`，所以多出来的只有相覆盖层/外壳。
+  - **红石外壳 16 个功率档位长得一模一样**：之前都指向同一个恒定亮红的外壳，
+    于是 `redstone_0`（未通电）看起来和满功率没区别。现在生成 **16 份调色板贴图**，
+    亮度沿用原版 `RedStoneWireBlock.COLORS` 的曲线：0 档 (76,26,22)、15 档 (255,86,72)。
+    没有用 `tintindex` + 客户端 `BlockColors`，因为宿主自己的模型大量使用 `tintindex 0`
+    （树叶植被着色），外壳会跟着变绿；用 1 又要求每宿主有第二个 tint source，
+    1.19.4–1.21.1 的单 source `BlockColor` 接口表达不了。
+  - **整格宿主的判定从手写白名单改成按模型几何自动判定**：
+    26.3 新增的白杨树叶（`orange/red/yellow_poplar_leaves`）是整格模型却没登记，
+    含冰相时走的是内缩覆盖层——藏在完整立方体内部，**完全看不见**（与 0.1.2 同一类 bug）。
+    现在按「无 rotation + 包围盒 0..16 + 六个边界面被完全覆盖」自动识别；
+    台阶/楼梯虽然包围盒也是整格，但边界面没铺满，仍走内缩路径。
+  - **宿主 part 不再带恒真 `phase` 条件**：
+    以前每个宿主的原版 part 都补上"全部 24 个相"的条件，原版
+    `KeyValueCondition.instantiate` 会判定它覆盖了属性全部取值、返回恒真谓词并打
+    `Condition ... is always true` 警告——**每个方块状态一条**，1.21.10+ 加载日志被刷屏。
+    普通宿主的覆盖层与外壳本来就是叠加层，根本不需要这个条件（整格宿主保留
+    `none|lava|<redstone>` 的必要子集）。
+  - **下落/被活塞推动的含相方块渲染成不透明方块**：
+    `getMovingBlockRenderType` 走的是原始图层，SOLID 时同样丢弃透明像素。
+    `PhaseRenderLayerMixin` 现在同时注入 `getChunkRenderType` 与 `getMovingBlockRenderType`。
+  - **顺带清理**：
+    - 删掉 0.1.1 时代生成、永远不会被加载的 41 个 `assets/liquidphase/blockstates/*.json`
+      与 41 个指向不存在方块的 lang 键（0.1.5 起红石相不再注册方块）；
+    - `gen_redstone_assets.py` 收敛成"只出贴图 + 外壳模型"，blockstate 统一由
+      `gen_phase_blockstates.py` 生成；`redstone-hosts.txt` 不再参与构建；
+    - 删掉已无对应实现的 `gen_redstone_composites.py` / `clean_composites.py` / `regen_all.sh`；
+    - 修复 `assets/minecraft/lang/zh_cn.json` 里被截断的两个中文译名。
+  - 自检增至 **113 / 116 / 116 / 97 / 97 / 96 项（1.19.4 → 26.3），六版本实测全过**；
+    新增：外壳按功率分档、宿主无恒真条件、整格宿主自动判定、含相状态强制 MODEL
+    （含 1.19.4–1.21.1 的告示牌/箱子家族逐个验证）。
+  - `tools/verify_jars.py` 增加 `always_true=` 与 `shell=` 两列，并断言
+    `barrier`/`oak_sign` 的 `redstone_15`、`oak_leaves` 的 `ice` 都至少命中一个 part。
 - **0.1.10（修 0.1.9 未解决的两个实机问题，已在真实客户端取证）**：
   - **整格宿主（树叶/铜格栅/红树根）看不到红石外壳**：
     根因是**渲染层**。红石外壳是透明底 cutout 贴图（约 29% 不透明像素），
@@ -362,11 +411,17 @@ The inset phase overlay and the redstone shell carry **no** `cullface`: their fa
 culling would drop faces against partial neighbours (slabs/stairs) that the overlay actually covers. The full-cube overlays stay on
 the boundary and keep `cullface`.
 Phased states are forced onto the CUTOUT layer via `ItemBlockRenderTypes.getChunkRenderType` (only when the original layer is
-SOLID); translucent hosts (glass panes, stained glass) keep TRANSLUCENT. This must be a mixin: the `BlockRenderLayerMap` table is
-rebuilt by the resource reload and silently loses mappings registered during client init.
+SOLID); translucent hosts (glass panes, stained glass) keep TRANSLUCENT. The same mixin also fixes
+`getMovingBlockRenderType`, so falling blocks and piston-moved phased blocks are not drawn on the opaque layer.
+This must be a mixin: the `BlockRenderLayerMap` table is rebuilt by the resource reload and silently loses mappings
+registered during client init.
 Phased blocks with a solid phase look like a full cube of that material, but collision and mining still follow the host: aim at the exposed host and
 it mines at host speed, aim at the exposed phase and it mines as the phase material (obsidian still needs a diamond pickaxe — that slowness is intended).
-Full-cube hosts (leaves, copper grates, mangrove roots) show the phase material instead of the host texture while phased.
+Full-cube hosts (leaves, copper grates, mangrove roots, poplar leaves) show the phase material instead of the host texture while phased.
+Which hosts count as full-cube is decided from the model geometry at build time, not from a hand-maintained list.
+The redstone shell's brightness follows its power level (0 = nearly dark, 15 = full bright), matching the vanilla wire colour ramp.
+Hosts whose vanilla `RenderShape` is not `MODEL` (barriers, light blocks, all sign blocks, and chest/pot families before 1.21.10) still render
+the phase: phased states are forced back to `MODEL`, while the host itself keeps being drawn by its own vanilla render path.
 Feature 3 is client driven but server authoritative, so the server announces itself with a `liquidphase:handshake` packet on join and the client
 only enables its phase features after receiving it. A vanilla server never sends it, so the client falls back to vanilla behaviour there
 (single player works because the integrated server still sends the handshake).

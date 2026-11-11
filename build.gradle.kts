@@ -103,7 +103,6 @@ val convertBlockstates = tasks.register<Exec>("convertPhaseBlockstates") {
     onlyIf { phaseBlocksFile.exists() }
     inputs.file(phaseBlocksFile)
     inputs.file(rootDir.resolve("tools/gen_phase_blockstates.py"))
-    inputs.file(rootDir.resolve("tools/redstone-hosts.txt"))
     outputs.dir(blockstateOutDir)
     doFirst {
         val loomCache = gradle.gradleUserHomeDir.resolve("caches/fabric-loom/${mcVersion}")
@@ -116,8 +115,7 @@ val convertBlockstates = tasks.register<Exec>("convertPhaseBlockstates") {
             rootDir.resolve("tools/gen_phase_blockstates.py").absolutePath,
             jar.absolutePath,
             phaseBlocksFile.absolutePath,
-            blockstateOutDir.get().asFile.absolutePath,
-            rootDir.resolve("tools/redstone-hosts.txt").absolutePath
+            blockstateOutDir.get().asFile.absolutePath
         )
     }
 }
