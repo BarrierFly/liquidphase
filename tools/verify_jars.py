@@ -15,9 +15,8 @@ VERSIONS = sys.argv[1:]
 # jar 里的类已 remap 成 intermediary，不能按 Mojang 名查字符串，
 # 只能查我们自己写的、不会被 remap 的 handler/方法名。
 REQUIRED_MARKERS = {
-    'org/liquidphase/mixin/PhaseSkipRenderingMixin.class': b'liquidphase$dontCullPhasedFaces',
     'org/liquidphase/mixin/PhaseRenderShapeMixin.class': b'liquidphase$phasedRenderShape',
-    'org/liquidphase/phase/PhaseRenderSupport.class': b'allowVanillaCulling',
+    'org/liquidphase/phase/PhaseRenderSupport.class': b'hasPhase',
     'org/liquidphase/sync/PhaseSyncState.class': b'serverSupportsPhases',
     'org/liquidphase/sync/PhaseHandshake.class': b'currentBits',
 }
@@ -65,38 +64,6 @@ def bad_conditions(data):
                     bad += 1
         walk(part.get('when') or {})
     return bad
-
-
-def matches(cond, state):
-    if not cond:
-        return True
-    for key, value in cond.items():
-        if key in ('AND', 'OR'):
-            subs = value if isinstance(value, list) else []
-            rs = [matches(s, state) for s in subs]
-            if key == 'AND' and not all(rs):
-                return False
-            if key == 'OR' and not any(rs):
-                return False
-            continue
-        actual = state.get(key)
-        if actual is None:
-            return False
-        raw = str(value)
-        neg = raw.startswith('!')
-        terms = [t.lstrip('!') for t in raw.split('|')]
-        ok = str(actual) in terms
-        if neg:
-            ok = not ok
-        if not ok:
-            return False
-    return True
-
-
-def host_parts(data, phase):
-    """按原版 multipart 语义数出某个相下命中的 part 数（0 = 该状态没有模型）。"""
-    return sum(1 for part in (data.get('multipart') or [])
-               if matches(part.get('when') or {}, {'phase': phase}))
 
 
 def always_true_conditions(data):
@@ -196,39 +163,56 @@ for ver, jar in jars():
         if ver not in LAYER_MARKER_VERSIONS and layer_wired:
             missing_markers.append('layer mixin config wired on 26.3')
 
-        # 整格宿主 + 红石相：blockstate 里必须真有能命中该状态的 part
-        # （0.1.8 的"树叶含红石相变隐形"就是这里为 0）。
+        # 红石相：**每一个**被本 mod 改写过的 blockstate 都必须真的有一条
+        # `phase=redstone_N` 的外壳 part，否则那个方块含红石相时界面上什么都不画。
+        #
+        # 这里不只抽查几个代表方块，而是扫全部生成产物：历史上出现过
+        # `tools/phase-blocks/*.ids` 漏登记（1.21.10/11 漏 24 个铜方块、26.3 漏 197 个、
+        # 1.19.4/1.20.1 各漏 barrier），表现就是"部分含红石方块不显示红石相"，
+        # 而按代表方块抽查恰好漏掉了它们。
         empty_states = []
-        for block, phase in [('oak_leaves', 'redstone_15'),
-                             ('glass_pane', 'redstone_15'),
-                             ('iron_bars', 'redstone_15'),
-                             ('oak_stairs', 'redstone_15'),
-                             ('barrier', 'redstone_15'),
-                             ('oak_sign', 'redstone_15'),
-                             ('oak_leaves', 'ice')]:
-            path = 'assets/minecraft/blockstates/%s.json' % block
-            if path not in names:
-                continue
+        for path in blockstates:
+            block = path[len('assets/minecraft/blockstates/'):-len('.json')]
             try:
                 data = json.loads(z.read(path))
             except Exception:
                 empty_states.append(block)
                 continue
-            if host_parts(data, phase) == 0:
-                empty_states.append('%s@%s' % (block, phase))
+            # 只检查我们生成的那份（原版 blockstate 里不会有 liquidphase 的模型引用）。
+            if not any('liquidphase:block/' in json.dumps(part.get('apply') or {})
+                       for part in (data.get('multipart') or [])):
+                continue
+            # 必须有一条 `phase=redstone_N` 且指向该档位外壳模型的 part。
+            for power in (0, 15):
+                wanted = 'liquidphase:block/redstone_phase_%d' % power
+                if not any(part.get('when') == {'phase': 'redstone_%d' % power}
+                           and wanted in json.dumps(part.get('apply') or {})
+                           for part in (data.get('multipart') or [])):
+                    empty_states.append('%s@redstone_%d' % (block, power))
+                    break
+
+        # 反向：拿不到 phase 属性的方块不能出现在生成清单里，否则原版解析器会报
+        # `Unknown property 'phase'`，整份 blockstate 加载失败（该方块全部状态变 missing model）。
+        ids_file = 'tools/phase-blocks/%s.ids' % ver
+        missing_blockstates = []
+        if os.path.exists(ids_file):
+            ids = [line.strip() for line in open(ids_file, encoding='utf-8') if line.strip()]
+            missing_blockstates = [i for i in ids
+                                   if 'assets/minecraft/blockstates/%s.json' % i not in names]
 
         line_ok = (bad == 0 and has_replace_mixin and has_phase_write
                    and removed_wire_use and removed_wire_ctx
-                   and not missing_markers and not empty_states
+                   and not missing_markers and not empty_states and not missing_blockstates
                    and not cullface_models and not shell_gaps
                    and always_true == 0)
         ok = ok and line_ok
         print('%-8s ver=%-8s blockstates=%-5d bad_conds=%-3d always_true=%-4d replace_mixin=%s '
-              'phase_write=%s render_sync=%s cullface=%s shell=%s empty_phase_states=%s -> %s'
+              'phase_write=%s render_sync=%s cullface=%s shell=%s empty_phase_states=%s '
+              'unrendered_ids=%s -> %s'
               % (ver, mod['version'], len(blockstates), bad, always_true, has_replace_mixin,
                  has_phase_write, 'ok' if not missing_markers else missing_markers,
                  cullface_models or 'none', shell_gaps or 'ok',
-                 empty_states or 'none',
+                 empty_states or 'none', missing_blockstates or 'none',
                  'OK' if line_ok else 'BROKEN'))
 
 if not jars():

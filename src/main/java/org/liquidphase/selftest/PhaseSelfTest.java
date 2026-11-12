@@ -20,7 +20,6 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import org.liquidphase.LiquidPhase;
 import org.liquidphase.phase.Phase;
 import org.liquidphase.phase.PhaseHelper;
-import org.liquidphase.phase.PhaseRenderSupport;
 import org.liquidphase.phase.PhaseTargeting;
 import org.liquidphase.redstone.RedstoneBlocks;
 
@@ -103,16 +102,37 @@ public final class PhaseSelfTest {
 
     private static void checkPhasePropertyCoverage() {
         java.util.List<String> missing = new java.util.ArrayList<>();
+        java.util.List<String> unrendered = new java.util.ArrayList<>();
         for (Block block : net.minecraft.core.registries.BuiltInRegistries.BLOCK) {
             if (!(block instanceof org.liquidphase.phase.PhaseCapable)) {
                 continue;
             }
+            String id = String.valueOf(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block));
             if (!block.defaultBlockState().hasProperty(PhaseHelper.PHASE)) {
-                missing.add(String.valueOf(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block)));
+                missing.add(id);
+                continue;
+            }
+            // 每一个拿到 phase 属性的方块都必须有一份被我们改写过的 blockstate：
+            // 改写后的那份带 16 条 `phase=redstone_N` 的外壳 part。原版 blockstate 里
+            // 不会有 `liquidphase:block/redstone_phase_`，所以它就是"这个方块含相时
+            // 画得出东西"的直接证据。
+            //
+            // 这是 0.1.12 的根因：`tools/phase-blocks/*.ids` 漏登记时，方块照样能在运行时
+            // 拿到 phase 属性、照样能被写入 phase=redstone_*，但客户端仍用原版 blockstate，
+            // 没有任何 part 匹配这个状态 —— 表现为"含红石相了但什么都不显示"。
+            String resource = id.startsWith("minecraft:")
+                ? "/assets/minecraft/blockstates/" + id.substring("minecraft:".length()) + ".json"
+                : null;
+            String json = resource == null ? null : liquidphase$resource(resource);
+            if (json == null || !json.contains("liquidphase:block/redstone_phase_")) {
+                unrendered.add(id);
             }
         }
         assertTrue("every PhaseCapable block has the phase property (missing: " + missing + ")",
             missing.isEmpty());
+        assertTrue("every phased block has a blockstate that can draw the redstone shell "
+                + "(missing: " + unrendered + ")",
+            unrendered.isEmpty());
     }
 
     private static void checkShapeAndBlockIdentity(ServerLevel level, BlockPos base) {
@@ -719,32 +739,27 @@ public final class PhaseSelfTest {
     // ------------------------------------------------------------------
 
     /**
-     * 相邻面剔除：含相状态不得参与原版"同种方块共面剔除"。
+     * 相邻面剔除：含相状态**不**需要任何干预。
      * <p>
-     * 否则两块相邻的含相同相方块会在贴合处各少一面（相缺一角），
-     * 两块含红石相的楼梯之间的粉尘也会消失。
+     * 相覆盖层与红石外壳都不带 {@code cullface}（几何内缩/外扩，不在方块边界上），
+     * 所以它们根本不会进入 {@code Block.shouldRenderFace} 的剔除判定；宿主的带
+     * {@code cullface} 面属于宿主自己的事，原版怎么剔就怎么剔。
+     * <p>
+     * 这里断言的是"我们生成的模型里确实没有 {@code cullface}"这条前提——
+     * 一旦有人给覆盖层/外壳加回 {@code cullface}，相才会开始被错误剔除。
+     * 曾经为此加过 {@code PhaseSkipRenderingMixin}（强制含相状态不参与剔除），
+     * 那只会让含相楼梯/栅栏对本该剔除的邻居面也照画，属于改坏原版语义，已删除。
      */
     private static void checkPhaseRenderCulling(ServerLevel level, BlockPos base) {
-        BlockState iceStairs = PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.ICE);
-        BlockState redStairs = PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.REDSTONE_15);
-        BlockState plainStairs = Blocks.OAK_STAIRS.defaultBlockState();
-
-        assertTrue("phased state never culls its own faces",
-            !iceStairs.skipRendering(iceStairs, Direction.NORTH)
-                && !redStairs.skipRendering(redStairs, Direction.UP));
-        assertTrue("a plain neighbour may not cull against a phased block",
-            !plainStairs.skipRendering(iceStairs, Direction.NORTH)
-                && !plainStairs.skipRendering(redStairs, Direction.UP));
-        assertTrue("unphased states keep vanilla culling",
-            PhaseRenderSupport.allowVanillaCulling(plainStairs, plainStairs));
-
-        // Leaves are the classic "same block culls faces" case; make sure such a host also
-        // refuses to cull once phased (skip the check if this version has no leaves).
-        if (Blocks.OAK_LEAVES != null) {
-            BlockState leaves = Blocks.OAK_LEAVES.defaultBlockState();
-            BlockState iceLeaves = PhaseHelper.withPhase(leaves, Phase.ICE);
-            assertTrue("phased leaves do not cull against each other",
-                !iceLeaves.skipRendering(iceLeaves, Direction.NORTH));
+        for (String model : new String[]{
+            "phase_obsidian", "phase_ice", "phase_frosted_0", "phase_frosted_3",
+            "redstone_phase_0", "redstone_phase_15"}) {
+            String json = liquidphase$resource("/assets/liquidphase/models/block/" + model + ".json");
+            assertTrue("phase model " + model + " exists", json != null);
+            if (json != null) {
+                assertTrue("phase model " + model + " carries no cullface (so vanilla never culls it)",
+                    !json.contains("\"cullface\""));
+            }
         }
     }
 

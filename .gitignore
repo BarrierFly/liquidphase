@@ -5,3 +5,5 @@ test-server/
 run/
 *.log
 .idea/
+__pycache__/
+*.pyc

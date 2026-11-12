@@ -381,6 +381,7 @@ def main():
     full_cube_hosts = []
     missing = []
     problems = []
+    written = set()
     known = {}
     with zipfile.ZipFile(jar) as zf:
         geometry = ModelGeometry(zf)
@@ -408,9 +409,26 @@ def main():
             target = out_dir / "assets" / "minecraft" / "blockstates" / ("%s.json" % block_id)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(json.dumps(result, separators=(",", ":"), sort_keys=False), encoding="utf-8")
+            written.add(target.name)
             converted += 1
             if full_cube:
                 full_cube_hosts.append(block_id)
+
+    # 删掉上一次生成、这一次不再产出的 blockstate。
+    # 不清理的话，从 `<版本>.ids` 里移除某个 id 后旧文件仍留在输出目录里、继续被打进 jar：
+    # 如果那个方块其实拿不到 `phase` 属性，客户端就会报 `Unknown property 'phase'`，
+    # 整份 blockstate 加载失败、该方块全部状态退化成 missing model。
+    stale = []
+    state_dir = out_dir / "assets" / "minecraft" / "blockstates"
+    if state_dir.is_dir():
+        for path in state_dir.glob("*.json"):
+            if path.name not in written:
+                path.unlink()
+                stale.append(path.name)
+
+    if stale:
+        print("removed %d stale blockstates: %s%s"
+              % (len(stale), stale[:10], "..." if len(stale) > 10 else ""))
 
     if missing:
         print("WARNING: %d ids missing blockstates in jar: %s%s"

@@ -21,7 +21,6 @@
     "MultifaceShapeMixin",
     "PhaseCapableMixin",
     "PhaseRenderShapeMixin",
-    "PhaseSkipRenderingMixin",
     "PlacementMixin",
     "RedstoneWireReplaceMixin",
     "ServerLevelMixin",

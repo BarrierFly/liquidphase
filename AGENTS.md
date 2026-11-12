@@ -43,6 +43,11 @@
 
 ```bash
 # 1) 相容方块 id 清单（从 guardian 反编译源码解析 Blocks.java）
+#    ⚠️ 这份清单必须与"运行时真的拿到 phase 属性的方块"逐版本严格一致：
+#    运行时给每一个 `instanceof PhaseCapable` 的方块注入 phase，而 PhaseCapable 挂在
+#    PhaseCapableMixin 的一组基类上、全部子类都会继承。清单少一个 → 那个方块含红石相
+#    时没有任何 part 可画（0.1.12 的根因）；多一个 → 原版解析器报 Unknown property 'phase'，
+#    整份 blockstate 加载失败。脚本用 EXPECTED_COUNTS（各版本运行时注入数）硬校验。
 python tools/gen_phase_blocks.py "<guardian 仓库路径>" tools/phase-blocks tools/phase-blocks
 
 # 2) （0.1.5 起不再有组合方块生成步骤；红石相走 phase 取值）
@@ -67,7 +72,29 @@ python tools/gen_redstone_assets.py src/main/resources/assets/liquidphase
 0.15.0 起 loader 自带 MixinExtras，`CacheShapeGuardMixin` 依赖它）。两者别混用；
 改 `fabric_loader_min` 时 `processResources` 已把它声明为输入，不会因增量判定漏更新。
 
-`tools/phase-blocks/<版本>.ids` 是相容方块 id 清单；`<版本>.closure.txt` 是"直接实现 SimpleWaterloggedBlock 的类 + 继承闭包"。
+`tools/phase-blocks/<版本>.ids` 是相容方块 id 清单；`<版本>.closure.txt` 是 `PhaseCapableMixin`
+的 `@Mixin` 目标类清单（标记接口就是挂在这些类上，其全部已注册子类都会继承）。
+**两者都要与 mixin 源码保持一致**：`closure.txt` 漏一个类名，那个族就等于没登记
+（0.1.12 的 `barrier` 就是这么漏的：`BarrierBlock` 在 mixin 里、却不在 1.19.4/1.20.1 的
+closure 清单里）。
+
+### 2.2 id 清单完整性（0.1.12 起硬校验）
+
+`tools/gen_phase_blocks.py` 结尾用 `EXPECTED_COUNTS` 对比各版本
+`injected phase property into N blocks` 的实测值（309 / 311 / 337 / 410 / 410 / 505），
+数量不符直接失败。**做版本升级时这两个数就是验收口径**：先跑一次服务端拿到新的注入数，
+把 `EXPECTED_COUNTS` 改掉，再重跑生成器。它同时会打印"closure 里没有任何注册方块的类"，
+那说明闭包清单写进了不存在的类名（或解析器又漏了一种注册形式）。
+
+生成器还必须处理这些批量注册形式（历史上逐个踩过）：
+`register` / `registerSlab` / `registerLegacyStair` / `registerStair` / `registerWall`、
+`ColorCollection.registerBlocks`、`ColorCollection.zipMap`（id 在**第二个**参数位）、
+`WeatheringCopperCollection.registerBlocks`、`WeatheringCopperBlocks.create`。
+`ColorCollection` 展开成 16 色，`WeatheringCopper*` 展开成 8 个氧化/打蜡变体。
+
+生成器会**删除本次未产出的旧 blockstate**。不清理的话，从清单里移除某个 id 后旧文件仍在
+输出目录、继续被打进 jar，那个方块若拿不到 `phase` 属性就会让客户端报
+`Unknown property 'phase'`、整份 blockstate 退成 missing model。
 
 ### 2.1 发布前静态校验（0.1.7 起）
 
@@ -122,7 +149,7 @@ phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有�
 | 红粉点宿主 / 宿主放进线格 | `mixin/BlockItemMixin` + `mixin/RedstoneWireReplaceMixin` |
 | 下落方块落进线格 | `mixin/FallingBlockIntoWireMixin` |
 | 含相状态强制 MODEL 渲染（隐形/方块实体宿主也能显示相） | `mixin/PhaseRenderShapeMixin` |
-| 相邻面剔除（含相状态不参与 `skipRendering`） | `mixin/PhaseSkipRenderingMixin` + `phase/PhaseRenderSupport.java` |
+| 相渲染谓词（是否带相 / 宿主状态） | `phase/PhaseRenderSupport.java` |
 | 渲染层（带相状态强制 CUTOUT，含移动方块） | `mixin/client/PhaseRenderLayerMixin` + `liquidphase.layer.mixins.json` |
 | 双端能力握手 | `sync/PhaseHandshake.java` + `sync/PhaseHandshakeClient.java` + `sync/PhaseSyncState.java` |
 
@@ -152,12 +179,14 @@ phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有�
 > 1.19.4–1.21.1 的 `BlockColor` 接口（单 source、按 index 分派）表达不了这个区分。
 > 静态生成 16 份调色板贴图在任何版本上一致，也没有 API 差异。
 
-> ⚠️ **0.1.9 起外壳对全部宿主生成，不再只限 41 个**。之前只给楼梯/台阶/墙/栅栏生成外壳，
-> 其余宿主（玻璃板、铁栏杆、梯子、锁链、树叶……**这些透明方块最明显**）都能被写入
-> `phase=redstone_*`，但没有外壳 part，于是"含相了却看不到红石"。整格宿主
-> （树叶/铜格栅/红树根）同样要外壳——相本身需要一层粉尘才可见。
-> 回归检查见 `tools/verify_jars.py` 的 `empty_phase_states`（断言 `oak_leaves`/`glass_pane`/
-> `iron_bars`/`oak_stairs`/`barrier`/`oak_sign` 在 `redstone_15` 与 `ice` 下至少命中一个 part）。
+> ⚠️ **外壳覆盖面 = 运行时真的拿到 `phase` 属性的方块**（0.1.12 起硬校验）。
+> 0.1.9 把"只给 41 个代表宿主生成"改成"全部宿主生成"，但当时的 id 清单本身漏登记了
+> 一批方块（1.21.10/11 漏 24 个铜方块、26.3 漏 197 个、1.19.4/1.20.1 各漏 `barrier`），
+> 于是那些方块**依然**没有外壳 part、含相了却什么都看不到——这就是 0.1.12 修的根因。
+> 现在 `tools/gen_phase_blocks.py` 用各版本运行时注入数（309/311/337/410/410/505）硬校验清单，
+> 少一个直接让构建失败。回归检查见 `tools/verify_jars.py` 的 `empty_phase_states`：
+> 它扫描 jar 内**全部**生成产物，逐个断言 `phase=redstone_0/15` 都有对应档位的外壳 part，
+> 并反向断言清单里每个 id 都有产物（`unrendered_ids` 列）。
 
 > ⚠️ **红石相是"宿主 + 外壳叠加"，不是"外壳取代宿主"**（0.1.7 的实机 bug）。
 > 曾经把宿主 part 限制成 `phase != redstone_*`，结果含红石相时**宿主根本不渲染**，
@@ -196,12 +225,17 @@ phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有�
 （0..16 贴边）保留 `cullface`，因为它的面确实在边界上、语义正确。
 回归：`tools/verify_jars.py` 的 `cullface=` 列 + 自检的模型断言。
 
-**根因 B：含相状态不参与原版"同种方块共面剔除"**（`BlockState.skipRendering`）。
-原版这些实现（`LeavesBlock`、`IronBarsBlock`、`HalfTransparentBlock` …）会在邻居是同类方块时
-省掉一面；如果按这条规则处理含相状态，两块相邻的含相同相方块会**各缺一面**（相缺一角）。
-做法：`mixin/PhaseSkipRenderingMixin` 在状态级 `skipRendering` 的 HEAD 上判定，
-**只要本状态或邻居带相就返回 `false`**；不带相的状态完全走原版。
-不要改成"按相区域/合并轮廓比距离"那一类几何判定——相区域的外表面就在方块边界上，比较恒成立。
+**根因 B（0.1.9 的判断是错的，0.1.12 已删除对应 mixin）：`skipRendering` 与本问题无关。**
+`BlockState.skipRendering` 只在**带 `cullface` 的 quad** 上参与判定
+（`ModelBlockRenderer` 只对 `getQuads(direction)` 里的 culled quad 问
+`Block.shouldRenderFace`；`getQuads(null)` 的无剔除 quad 直接绘制）。
+相覆盖层与红石外壳从根因 A 起**全部不带 `cullface`**，所以它们根本不会进入这条路径。
+0.1.9 曾加 `PhaseSkipRenderingMixin` 强制"含相状态不参与剔除"，那唯一的效果是让
+**宿主自己**的带 `cullface` 面（楼梯 29 面、栅栏 4 面……）在含相时不再被邻居剔除，
+属于改坏原版语义且与本问题无关——**0.1.12 已删除该 mixin 与
+`PhaseRenderSupport.allowVanillaCulling`**。不要重新加回来。
+回归：自检断言所有相覆盖层/外壳模型都没有 `cullface`
+（`checkPhaseRenderCulling`），这才是"相不会被错误剔除"的唯一前提。
 
 > ⚠️ **遮挡/透光仍按宿主原形状**，不要把含相状态的遮挡换成整格：覆盖层内缩 0.25px、
 > 外壳只有约 29% 像素，换成整格会让邻居的面凭空消失、还会吃天光。固相（冰/霜冰/黑曜石）
@@ -363,7 +397,7 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
 `ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，断言数按版本为
-**113（1.19.4）/ 116（1.20.1、1.21.1）/ 97（1.21.10、1.21.11）/ 96（26.3）**——
+**122（1.19.4）/ 125（1.20.1、1.21.1）/ 106（1.21.10、1.21.11）/ 105（26.3）**——
 差异来自"方块实体宿主含相后能渲染"这组断言：早期版本里告示牌/箱子家族的 RenderShape
 不是 MODEL，需要逐个验证，1.21.10 起原版已改成 MODEL，断言自然减少。覆盖内容：
 相枚举/相位属性全覆盖、宿主方块身份、选择框/碰撞/遮挡、面露出判定、
@@ -372,6 +406,9 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 `ServerPlayerGameMode.useItemOn`）、统一用例，脚手架堆叠（物品自己搜索落点那一类）、
 下落方块落位（相容宿主落进线格带相；沙子仍被弹开）、
 红石线可替换性的精确边界（宿主放行、石头/红石粉仍拒绝）、炼药锅满锅取水门槛、
+**每个 phase 方块都画得出红石外壳**（遍历全部 `PhaseCapable`，断言它的 blockstate
+里含 `liquidphase:block/redstone_phase_`——这是 0.1.12 根因的回归断言，
+清单漏登记时立刻失败并打印漏掉的方块 id）、
 **blockstate 渲染资源**（楼梯宿主可见 + 外壳；整格宿主/透明宿主都有外壳）、
 **模型几何**（内缩覆盖层/外扩外壳不带 `cullface`，贴边 `phase_*_full` 保留）、
 **外壳按功率分档**（16 份模型/贴图互不相同，0 档与 15 档不同）、
@@ -379,7 +416,8 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 **整格宿主自动判定**（白杨树叶走整格、台阶走内缩）、
 **含相状态强制 MODEL**（barrier 这类 INVISIBLE 宿主带相后能渲染；1.19.4–1.21.1 的
 告示牌/箱子家族逐个验证）、
-**相剔除边界**（含相状态不参与 `skipRendering`，无相状态保持原版）、
+**相剔除**（相覆盖层/外壳模型都不带 `cullface`，原版不会剔除它们；
+   **不要**再加"含相状态不参与 `skipRendering`"那类 mixin——0.1.12 已删除）、
 **渲染层 mixin 配置**（仅非 26.3 接线）、
 **双端同步**（客户端默认不支持、握手掩码正确）。
 默认关闭，不进正式玩法路径。**改动红石相形状、渲染或信号语义后请先跑它。**
@@ -474,8 +512,11 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 1. **红石相不再是独立方块**（0.1.5 起）：改成 `phase = redstone_0..15`，宿主方块本身不变。
    不再有组合方块注册、`COMPOSITE_TO_HOST` 表、`RedstonePhaseBlock` 标记接口。
    代价是 `phase` 取值 8 → 24，状态数约 ×3（1.21.11：175,607 → 509,175）。
-2. **红石相宿主覆盖面（0.1.9 起已补全）**：渲染外壳对**全部**相容宿主生成
-   （约 386 个 id，含树叶/格栅/玻璃板/铁栏杆/梯子/锁链等透明方块）；
+2. **红石相宿主覆盖面**：渲染外壳对**全部**相容宿主生成——口径是"运行时真的拿到 `phase`
+   属性的方块"，各版本为 **309 / 311 / 337 / 410 / 410 / 505 个**
+   （0.1.12 起由 `tools/gen_phase_blocks.py` 的 `EXPECTED_COUNTS` 硬校验；
+   0.1.9–0.1.11 的清单实际少登记了一批，见 §2.2 与 README 0.1.12 条目）。
+   含树叶/格栅/玻璃板/铁栏杆/梯子/锁链/铜栏杆/铜锁链/铜灯笼/墙告示牌/羊毛楼梯等。
    整格宿主（树叶/铜格栅/红树根/白杨树叶）也带外壳。
    透明底走 cutout：客户端只把**默认图层为 SOLID** 的宿主升级成 CUTOUT，
    半透明宿主（玻璃板/染色玻璃）保持 TRANSLUCENT；下落方块与活塞推动走
@@ -484,13 +525,14 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    26.3 没有该类，按贴图透明度自动推导。
    注意 1.21.11 的原版 blockstate/模型 JSON **不支持** `render_type`。
 3. **§3.5 元件相**（中继器/比较器/侦测器）未实现，方案见 `docs/milestone-2.5-repeater-proposal.md`。
-4. 行为层已做服务端自检（6 版本 113/116/116/97/97/96 项断言全过）+ 启动冒烟 + 6 版本编译；
+4. 行为层已做服务端自检（6 版本 122/125/125/106/106/105 项断言全过）+ 启动冒烟 + 6 版本编译；
    **渲染层与剔除面已在真实客户端（1.21.11 `runClient`）取证修复**：
    带相状态图层为 CUTOUT（半透明宿主保持 TRANSLUCENT）、内缩覆盖层/外扩外壳的
    quad 进入不可剔除列表、几何坐标在宿主外侧；
    游戏内逐条手测（冻结、凝固、破坏保留、桶挖、炼药锅转化、**固定视角目视含相剔除接缝**、
    客户端取水不发本地挖掘包、**连原版服务器时的客户端回退**、
-   **隐形宿主/告示牌箱子含相后的外观**、**0 档与 15 档外壳的颜色差异**）仍待做。
+   **隐形宿主/告示牌箱子含相后的外观**、**0 档与 15 档外壳的颜色差异**、
+   **0.1.12 补全后的铜栏杆/铜锁链/铜灯笼/ wool 楼梯/墙告示牌等新补宿主的红石相外观**）仍待做。
 5. **相瞄准的判定口径不能改成"合并轮廓 vs 相区域"**：相区域的外表面就落在方块边界上，与合并轮廓（=整格）的命中点重合，
    比较恒成立 → 任何瞄准都算挖相（历史 bug：含固相方块"怎么都挖不掉"）。现在用宿主轮廓（`phase=none` 兄弟状态）
    与相区域比距离，并保证形状表型宿主不会因查不到含相状态而退化成空形状。

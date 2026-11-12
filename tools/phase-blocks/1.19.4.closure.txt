@@ -4,6 +4,7 @@ BaseCoralPlantBlock
 BaseCoralPlantTypeBlock
 BaseCoralWallFanBlock
 BaseRailBlock
+BarrierBlock
 BigDripleafBlock
 BigDripleafStemBlock
 CampfireBlock

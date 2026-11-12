@@ -99,6 +99,9 @@
 - 红石相是**宿主方块上的 `phase` 取值**（`redstone_0`…`redstone_15`，功率直接编码在取值里），
   不注册任何新方块；方块仍是原版楼梯/台阶/墙/栅栏。渲染外壳对**全部**相容宿主生成
   （含树叶/格栅/玻璃板/铁栏杆/梯子/锁链等透明方块），**外壳亮度随功率变化**。
+  外壳跟着"运行时真的拿到 `phase` 属性的方块"走：清单由 `tools/gen_phase_blocks.py`
+  从原版 `Blocks.java` 推导，并用运行时注入数硬校验，漏一个就会让那个方块含红石相时
+  什么都不显示（0.1.12 修的就是这个）。
 - **告示牌/箱子/屏障/光源方块等原生"不渲染方块模型"的宿主也能显示相**：带相状态一律按
   方块模型渲染，宿主本体仍由各自的原版渲染路径绘制。
 - **状态数会明显增加**：`phase` 从 8 个取值变成 24 个，1.21.11 加载后的总状态数约 51 万
@@ -122,6 +125,54 @@
 
 ## 变更记录
 
+- **0.1.12（部分含红石方块不显示红石相：真正根因）**：
+  - **根因：`tools/phase-blocks/<版本>.ids`（生成 blockstate 用的 id 清单）漏登记了运行时
+    真的会被注入 `phase` 的方块。**
+    运行时 `LiquidPhase.injectPhaseProperty` 遍历 `BuiltInRegistries.BLOCK`，给**每一个**
+    `instanceof PhaseCapable` 的方块加 `phase` 属性；标记接口挂在 `PhaseCapableMixin` 的
+    一组原版基类上，**这些基类的全部已注册子类都会继承到它**。而 blockstate（相覆盖层 +
+    红石外壳）是按 `.ids` 逐 id 生成的。两边不一致时，那些"拿到了 `phase` 却不在清单里"的
+    方块含相后仍用原版 blockstate——里面没有任何 `phase` 条件、也没有外壳 part，
+    于是**红石相完全不显示**（固相也只剩原版外观）。
+    实测缺口（运行时注入数 − 生成数）：
+
+    | 版本 | 注入 | 生成 | 缺口 | 漏掉的代表方块 |
+    | --- | --- | --- | --- | --- |
+    | 1.19.4 | 309 | 308 | 1 | `barrier`（closure 清单漏 `BarrierBlock`） |
+    | 1.20.1 | 311 | 310 | 1 | 同上 |
+    | 1.21.1 | 337 | 337 | 0 | — |
+    | 1.21.10 | 410 | 386 | 24 | 铜栏杆/铜锁链/铜灯笼全家 |
+    | 1.21.11 | 410 | 386 | 24 | 同上 |
+    | 26.3 | **505** | 308 | **197** | 染色玻璃板、墙告示牌、墙珊瑚扇、羊毛/混凝土楼梯与台阶、氧化铜全家…… |
+
+    三处解析缺陷（`tools/gen_phase_blocks.py`）：
+    1. 只认 `public static final Block X = register(...)`，于是
+       `WeatheringCopperBlocks.create("copper_bars", ...)`（1.21.10/1.21.11）整类漏掉；
+    2. 26.3 改成 `ColorCollection.registerBlocks` / `WeatheringCopperCollection.registerBlocks`
+       批量注册（id 常量在 `references/BlockItemIds.java`），旧解析器只覆盖了前者；
+    3. 26.3 的 `ColorCollection.zipMap(VALUES, BlockItemIds.WOOL_STAIRS, ...)` 里 id 常量在
+       **第二个**参数位，而不是第一位。
+    生成器现在会展开本地静态工厂、解析 id 常量（含 `createSimpleColored` /
+    `createSimpleCopper`）、按"注册形式 × 颜色/氧化态"展开真实 id，并用
+    `EXPECTED_COUNTS`（= 各版本运行时日志里的注入数）**硬校验**，数量不符直接让构建失败。
+  - **配套修掉"输出目录不清理"**：生成器原先只写不删，从清单里移除某个 id 后旧 blockstate
+    仍会留在输出目录、继续被打进 jar。那个方块若拿不到 `phase` 属性，客户端就会报
+    `Unknown property 'phase'`，整份 blockstate 加载失败、该方块所有状态退成 missing model。
+    现在每次生成后删掉本次未产出的 blockstate。
+  - **撤回 `PhaseSkipRenderingMixin`**（0.1.9 加的）：`skipRendering` 只作用于带
+    `cullface` 的 quad，而相覆盖层与红石外壳从 0.1.10 起**全部不带 `cullface`**，
+    它们根本不会进入那条判定。这个 mixin 唯一还能起作用的地方，是让**宿主自己**的
+    带 `cullface` 面（楼梯 29 面、栅栏 4 面……）在含相时不再被邻居剔除——
+    那是改了原版剔除语义，与本问题无关，也已由去 `cullface` 的模型几何修掉。
+    随之删除 `PhaseRenderSupport.allowVanillaCulling` 及其断言。
+  - **新增根因级回归断言**：自检遍历所有 `PhaseCapable` 方块，断言每一个都有
+    "含 `liquidphase:block/redstone_phase_` 的 blockstate"；`tools/verify_jars.py`
+    不再抽查几个代表方块，而是扫描 jar 内**全部**生成产物，逐个断言
+    `phase=redstone_0/15` 都有对应档位的外壳 part，并反向断言清单里每个 id 都有产物。
+    已实测：把 1.21.11 的清单回退到 0.1.11 的 386 条，自检立刻报出那 24 个铜方块。
+  - 自检断言数变为 **122 / 125 / 125 / 106 / 106 / 105（1.19.4 → 26.3），六版本实测全过**。
+  - 版本号 0.1.11 → 0.1.12，六版本重新构建并替换 dist。
+    （26.3 的 jar 从 322 KB 涨到 433 KB：多生成 197 份 blockstate 属于必要开销。）
 - **0.1.11（含红石相方块的显示问题全面收口）**：
   这一版把"某些宿主含相后看不见"归结到的四个独立根因全部修掉。
   - **原生不渲染方块模型的宿主，含相后什么都不显示**：
@@ -185,7 +236,8 @@
     覆盖层顶面并没被挡住）。
     改为**内缩覆盖层与红石外壳全部去掉 `cullface`**（变成不可剔除面，照常绘制）；
     贴边的 `phase_*_full` 保留 `cullface`（语义正确）。
-    另外保留 `PhaseSkipRenderingMixin`：含相状态不参与原版"同种方块共面剔除"。
+    当时还加/保留过 `PhaseSkipRenderingMixin`（让含相状态不参与"同种方块共面剔除"），
+    但去掉 `cullface` 之后它已无事可做，**0.1.12 已删除**。
   - 自检增至 **87 项（26.3 为 85 项），六版本实测全过**，新增：模型 `cullface` 断言、
     渲染层 mixin 配置断言。
   - `tools/verify_jars.py` 增加 `cullface=` 列：内缩覆盖层/外扩外壳一旦带回 `cullface`
@@ -200,10 +252,12 @@
     **透明方块最容易看出来**——也能被写入 `phase=redstone_*`，但 blockstate 里没有外壳 part，
     于是"含相了却看不到红石"。现在**外壳对全部相容宿主生成**；整格宿主（树叶/铜格栅/红树根）
     同样带外壳（它们原版 part 已放开到全部相，但相本身需要一层粉尘才可见）。
-  - **含相状态的剔除面不正确**：相覆盖层/红石外壳是叠加层，原版 `BlockState.skipRendering`
-    的"同种方块省一面"会把两块相邻含相方块贴合处各剔一面（相看起来缺一角），
-    两块含红石相的楼梯之间的粉尘也会消失。新增 `PhaseSkipRenderingMixin`：
-    **只要本状态或邻居带相就不走原版剔除**；不带相的状态完全不受影响。
+  - **含相状态的剔除面不正确**（当时的判断）：相覆盖层/红石外壳是叠加层，当时认为原版
+    `BlockState.skipRendering` 的"同种方块省一面"会把两块相邻含相方块贴合处各剔一面。
+    于是加了 `PhaseSkipRenderingMixin`（只要本状态或邻居带相就不走原版剔除）。
+    > ⚠️ 这条判断是错的：`skipRendering` 只作用于**带 `cullface`** 的 quad，而真正的
+    > 问题是相覆盖层/外壳自己带了 `cullface`（0.1.10 才查出）。0.1.10 把它们全部去掉
+    > `cullface` 之后，这个 mixin 已无事可做、只会改坏原版剔除语义，**0.1.12 已删除**。
   - **渲染层升级口径**：红石外壳是透明底 cutout。客户端现在只把**默认图层为 SOLID** 的
     相容宿主升级成 CUTOUT，**半透明宿主（玻璃板/染色玻璃）保持 TRANSLUCENT**——
     之前统一 `putBlock(cutout)` 会把半透明像素画成半不透明。
