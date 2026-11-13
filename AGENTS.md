@@ -86,6 +86,18 @@ closure 清单里）。
 把 `EXPECTED_COUNTS` 改掉，再重跑生成器。它同时会打印"closure 里没有任何注册方块的类"，
 那说明闭包清单写进了不存在的类名（或解析器又漏了一种注册形式）。
 
+> ⚠️ **数量相等 ≠ 集合相等**。清单两边各错一个时数量一样，漏掉的那个方块仍然不显示
+> 红石相。所以真正的验收是**双向集合比对**，有两处：
+> 1. 自检 `checkPhaseBlockListMatchesRuntime`：把随 jar 发布的 `phase-blocks.ids`
+>    （`build.gradle.kts` 的 `copyPhaseBlockIds` 任务打进资源根目录）与运行时
+>    `BuiltInRegistries.BLOCK` 里所有 `instanceof PhaseCapable` 的方块做双向差集，
+>    任一方向非空即失败并直接打印差集（`phased but not listed` / `listed but not phased`）。
+> 2. `tools/verify_jars.py`：断言 jar 内的 blockstate 集合与 `tools/phase-blocks/<版本>.ids`
+>    完全相等（多一个少一个都 BROKEN），并核对 jar 里随包的 `phase-blocks.ids` 与仓库清单一致。
+>
+> 已实测：把 1.21.11 的清单改成"删掉 `barrier` + 加一个不存在的 id"（总数仍是 410），
+> 两条断言都立刻失败并点名 `barrier`。
+
 生成器还必须处理这些批量注册形式（历史上逐个踩过）：
 `register` / `registerSlab` / `registerLegacyStair` / `registerStair` / `registerWall`、
 `ColorCollection.registerBlocks`、`ColorCollection.zipMap`（id 在**第二个**参数位）、
@@ -397,7 +409,7 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
 `ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，断言数按版本为
-**122（1.19.4）/ 125（1.20.1、1.21.1）/ 106（1.21.10、1.21.11）/ 105（26.3）**——
+**123（1.19.4）/ 126（1.20.1、1.21.1）/ 107（1.21.10、1.21.11）/ 106（26.3）**——
 差异来自"方块实体宿主含相后能渲染"这组断言：早期版本里告示牌/箱子家族的 RenderShape
 不是 MODEL，需要逐个验证，1.21.10 起原版已改成 MODEL，断言自然减少。覆盖内容：
 相枚举/相位属性全覆盖、宿主方块身份、选择框/碰撞/遮挡、面露出判定、
@@ -409,6 +421,7 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 **每个 phase 方块都画得出红石外壳**（遍历全部 `PhaseCapable`，断言它的 blockstate
 里含 `liquidphase:block/redstone_phase_`——这是 0.1.12 根因的回归断言，
 清单漏登记时立刻失败并打印漏掉的方块 id）、
+**随包清单 == 运行时集合**（双向集合差，防止"清单两边各错一个、数量仍相等"）、
 **blockstate 渲染资源**（楼梯宿主可见 + 外壳；整格宿主/透明宿主都有外壳）、
 **模型几何**（内缩覆盖层/外扩外壳不带 `cullface`，贴边 `phase_*_full` 保留）、
 **外壳按功率分档**（16 份模型/贴图互不相同，0 档与 15 档不同）、
@@ -524,8 +537,18 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    1.19.4–1.21.11 由 `PhaseRenderLayerMixin` 直接注入 `ItemBlockRenderTypes`；
    26.3 没有该类，按贴图透明度自动推导。
    注意 1.21.11 的原版 blockstate/模型 JSON **不支持** `render_type`。
-3. **§3.5 元件相**（中继器/比较器/侦测器）未实现，方案见 `docs/milestone-2.5-repeater-proposal.md`。
-4. 行为层已做服务端自检（6 版本 122/125/125/106/106/105 项断言全过）+ 启动冒烟 + 6 版本编译；
+3. **§3.5 元件相**（中继器/比较器/侦测器）未实现。方案见
+   `docs/milestone-2.5-repeater-proposal.md`，**状态预算与替代方案的实测核对见
+   `docs/state-budget-analysis.md`**。
+   > ⚠️ **元件参数只能并进 `phase` 一个属性的取值域，不许新增属性。**
+   > 状态数是**相乘**的：`24 × 33 × 17 × 13` = 36.7 亿，越过 `int` 状态 id 空间。
+   > 口径：`总状态数 = (N − B) + B × V`，1.21.11 实测 `N = 29,671`、`B = 20,976`、
+   > 每个新增状态 ≈ 779 B、注入 ≈ 43.5 µs。
+   > 1.21.11 现状（`V=24`）= 512,119 状态 / 506 MiB 堆 / 注入 ≈21 s；
+   > 并集 `V=84` 全宿主 = 1,770,679 / ≈1.4 GiB；并集 `V=84` + 按方块裁剪
+   > （白名单 = 楼梯+台阶 5,012 基础状态）= 812,839 / 730 MiB。
+   > **扩取值前先确认白名单，墙（26 个方块、8,424 基础状态）必须排除。**
+4. 行为层已做服务端自检（6 版本 123/126/126/107/107/106 项断言全过）+ 启动冒烟 + 6 版本编译；
    **渲染层与剔除面已在真实客户端（1.21.11 `runClient`）取证修复**：
    带相状态图层为 CUTOUT（半透明宿主保持 TRANSLUCENT）、内缩覆盖层/外扩外壳的
    quad 进入不可剔除列表、几何坐标在宿主外侧；
@@ -537,7 +560,12 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    比较恒成立 → 任何瞄准都算挖相（历史 bug：含固相方块"怎么都挖不掉"）。现在用宿主轮廓（`phase=none` 兄弟状态）
    与相区域比距离，并保证形状表型宿主不会因查不到含相状态而退化成空形状。
 6. **红石相与固相共用 `phase` 属性**：`isFrosted()` / `isSolid()` / `redstonePower()` 都用显式区间判断，
-   不能再用 `ordinal()` 与 `FROSTED_0` 简单比较（红石取值排在后面）。新增相取值时务必同步这三个方法。
+   不能再用 `ordinal()` 与 `FROSTED_0` 简单比较（红石取值排在后面）。新增相取值时务必同步这三个方法，
+   以及 §7 第 3 条的状态预算口径。
+   > ⚠️ 追加元件取值后，这条**一定会踩**：现在 `isRedstone()` 是
+   > `ordinal() >= REDSTONE_0.ordinal()`（无上界），元件取值追加在 `redstone_15` 之后，
+   > 于是 `repeater_*` 会被判成红石相（`redstonePower()` 返回 16 以上）。
+   > **一律用"显式区间 + 上界"或 `switch`，不要用无上界的相对序关系。**
 7. **`Unknown property 'phase'`（已修复）**：1.21.10+ 的多面体家族
    （glow_lichen / sculk_vein / resin_clump）统一成 `MultifaceBlock`，早期
    `PhaseCapableMixin` 的 stonecutter 分支仍写着旧的 `GlowLichenBlock`/`SculkVeinBlock`，
