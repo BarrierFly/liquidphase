@@ -191,14 +191,29 @@ for ver, jar in jars():
                     empty_states.append('%s@redstone_%d' % (block, power))
                     break
 
-        # 反向：拿不到 phase 属性的方块不能出现在生成清单里，否则原版解析器会报
-        # `Unknown property 'phase'`，整份 blockstate 加载失败（该方块全部状态变 missing model）。
+        # 反向：清单里每个 id 都要有产物，且产物集合不能有清单之外的多余项。
+        # 只比数量不够——清单两边各错一个、数量一样，漏掉的那个方块仍然不显示红石相。
         ids_file = 'tools/phase-blocks/%s.ids' % ver
         missing_blockstates = []
         if os.path.exists(ids_file):
             ids = [line.strip() for line in open(ids_file, encoding='utf-8') if line.strip()]
             missing_blockstates = [i for i in ids
                                    if 'assets/minecraft/blockstates/%s.json' % i not in names]
+            generated = {path[len('assets/minecraft/blockstates/'):-len('.json')]
+                         for path in blockstates}
+            unlisted = sorted(generated - set(ids))
+            if unlisted:
+                missing_blockstates.append('unlisted: %s' % unlisted[:5])
+
+        # 随 jar 发布的清单必须与这里读到的清单一致（防止打包漏带资源）。
+        shipped = 'phase-blocks.ids'
+        if shipped in names:
+            bundled = {line.strip() for line in z.read(shipped).decode('utf-8').splitlines()
+                       if line.strip() and not line.startswith('#')}
+            if bundled != set(ids if os.path.exists(ids_file) else ()):
+                missing_blockstates.append('bundled phase-blocks.ids != tools/phase-blocks/%s.ids' % ver)
+        else:
+            missing_blockstates.append('bundled phase-blocks.ids missing')
 
         line_ok = (bad == 0 and has_replace_mixin and has_phase_write
                    and removed_wire_use and removed_wire_ctx

@@ -103,11 +103,14 @@ public final class PhaseSelfTest {
     private static void checkPhasePropertyCoverage() {
         java.util.List<String> missing = new java.util.ArrayList<>();
         java.util.List<String> unrendered = new java.util.ArrayList<>();
+        // 运行时真实集合：所有 instanceof PhaseCapable 的方块（= 真的拿到 phase 属性的方块）。
+        java.util.Set<String> runtime = new java.util.LinkedHashSet<>();
         for (Block block : net.minecraft.core.registries.BuiltInRegistries.BLOCK) {
             if (!(block instanceof org.liquidphase.phase.PhaseCapable)) {
                 continue;
             }
             String id = String.valueOf(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block));
+            runtime.add(id);
             if (!block.defaultBlockState().hasProperty(PhaseHelper.PHASE)) {
                 missing.add(id);
                 continue;
@@ -120,10 +123,7 @@ public final class PhaseSelfTest {
             // 这是 0.1.12 的根因：`tools/phase-blocks/*.ids` 漏登记时，方块照样能在运行时
             // 拿到 phase 属性、照样能被写入 phase=redstone_*，但客户端仍用原版 blockstate，
             // 没有任何 part 匹配这个状态 —— 表现为"含红石相了但什么都不显示"。
-            String resource = id.startsWith("minecraft:")
-                ? "/assets/minecraft/blockstates/" + id.substring("minecraft:".length()) + ".json"
-                : null;
-            String json = resource == null ? null : liquidphase$resource(resource);
+            String json = liquidphase$blockState(id);
             if (json == null || !json.contains("liquidphase:block/redstone_phase_")) {
                 unrendered.add(id);
             }
@@ -133,6 +133,49 @@ public final class PhaseSelfTest {
         assertTrue("every phased block has a blockstate that can draw the redstone shell "
                 + "(missing: " + unrendered + ")",
             unrendered.isEmpty());
+        checkPhaseBlockListMatchesRuntime(runtime);
+    }
+
+    /**
+     * 生成清单（`tools/phase-blocks/&lt;版本&gt;.ids`，随 jar 一起发布）必须与运行时真实集合
+     * **完全相等**。
+     * <p>
+     * 只比数量是不够的：清单两边各错一个、数量仍然相同，漏掉的那个方块就是"含红石相
+     * 却什么都不显示"。这里做双向集合差，并直接打印差集，方便一眼定位。
+     * <p>
+     * 清单来自构建产物（`phase-blocks.ids`）；读不到时不断言，避免把"资源没打进 jar"
+     * 误报成"清单不一致"。
+     */
+    private static void checkPhaseBlockListMatchesRuntime(java.util.Set<String> runtime) {
+        String raw = liquidphase$resource("/phase-blocks.ids");
+        if (raw == null) {
+            assertTrue("shipped phase-block list is present", false);
+            return;
+        }
+        java.util.Set<String> listed = new java.util.LinkedHashSet<>();
+        for (String line : raw.split("\\R")) {
+            String id = line.trim();
+            if (id.isEmpty() || id.startsWith("#")) {
+                continue;
+            }
+            listed.add(id.startsWith("minecraft:") ? id : "minecraft:" + id);
+        }
+        java.util.Set<String> runtimeOnly = new java.util.LinkedHashSet<>(runtime);
+        runtimeOnly.removeAll(listed);
+        java.util.Set<String> listedOnly = new java.util.LinkedHashSet<>(listed);
+        listedOnly.removeAll(runtime);
+        assertTrue("shipped phase-block list == runtime phase-capable set "
+                + "(phased but not listed: " + runtimeOnly + "; listed but not phased: " + listedOnly + ")",
+            runtimeOnly.isEmpty() && listedOnly.isEmpty());
+    }
+
+    /** {@return 该方块改写后的 blockstate 内容；不是 minecraft 命名空间或读不到时返回 null} */
+    private static String liquidphase$blockState(String blockId) {
+        if (!blockId.startsWith("minecraft:")) {
+            return null;
+        }
+        return liquidphase$resource("/assets/minecraft/blockstates/"
+            + blockId.substring("minecraft:".length()) + ".json");
     }
 
     private static void checkShapeAndBlockIdentity(ServerLevel level, BlockPos base) {
@@ -521,35 +564,57 @@ public final class PhaseSelfTest {
     }
 
     private static void checkRedstoneRenderParts() {
-        java.io.InputStream in = LiquidPhase.class.getResourceAsStream(
-            "/assets/minecraft/blockstates/oak_stairs.json");
-        if (in == null) {
-            assertTrue("stair blockstate resource is present", false);
-            return;
+        // 全量：**每一个**被我们改写过的 blockstate 都必须同时满足
+        //   (a) 16 个功率档位各有一条外壳 part（0 档熄灭、15 档满亮互不相同）；
+        //   (b) 不是全格宿主时，宿主 part 不带 phase 条件（否则红石相下宿主消失）。
+        // 只抽查 oak_stairs/oak_leaves/glass_pane 曾经放过了整批漏登记的方块（0.1.12 的根因）。
+        String raw = liquidphase$resource("/phase-blocks.ids");
+        assertTrue("shipped phase-block list is present", raw != null);
+        java.util.List<String> noShell = new java.util.ArrayList<>();
+        java.util.List<String> badHost = new java.util.ArrayList<>();
+        java.util.List<String> fullCubeBroken = new java.util.ArrayList<>();
+        int scanned = 0;
+        if (raw != null) {
+            for (String line : raw.split("\\R")) {
+                String id = line.trim();
+                if (id.isEmpty() || id.startsWith("#")) {
+                    continue;
+                }
+                String json = liquidphase$blockState(id.startsWith("minecraft:") ? id : "minecraft:" + id);
+                if (json == null) {
+                    noShell.add(id + " (no blockstate)");
+                    continue;
+                }
+                scanned++;
+                if (!liquidphase$hasShellForEveryPower(json)) {
+                    noShell.add(id);
+                }
+                // 全格宿主会把宿主 part 限制在"宿主可见"的相上；其余宿主不该带 phase 条件。
+                boolean fullCube = json.contains("phase_ice_full");
+                if (!fullCube && !hostPartsCarryNoPhaseCondition(json)) {
+                    badHost.add(id);
+                }
+                // 全格宿主的宿主 part 必须保留 redstone_* —— 一旦删掉，含红石相就整块隐形
+                // （0.1.8 的实机 bug）。
+                if (fullCube && !json.contains("redstone_15")) {
+                    fullCubeBroken.add(id);
+                }
+            }
         }
-        String json;
-        try (java.io.InputStream stream = in) {
-            json = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-        } catch (java.io.IOException e) {
-            assertTrue("stair blockstate resource is readable", false);
-            return;
-        }
-        assertTrue("stair blockstate keeps rendering the host under redstone phase",
-            json.contains("\"shape\":\"straight\"")
-                && hostPartsCarryNoPhaseCondition(json));
-        assertTrue("stair blockstate adds a redstone shell overlay for every power level",
-            liquidphase$hasShellForEveryPower(json));
+        assertTrue("scanned more than just a handful of blockstates (" + scanned + " scanned)", scanned > 10);
+        assertTrue("every phased blockstate has one shell part per power level (broken: " + noShell + ")",
+            noShell.isEmpty());
+        assertTrue("non-full-cube hosts carry no phase condition on the host part (broken: " + badHost + ")",
+            badHost.isEmpty());
+        assertTrue("full-cube hosts keep their host part visible under redstone phases "
+                + "(broken: " + fullCubeBroken + ")", fullCubeBroken.isEmpty());
 
-        // Full-cube hosts (leaves / grates / mangrove roots): the host part must stay visible
-        // under redstone phases and the shell must be added. 0.1.8 limited the host part to
-        // none|lava, so redstone-phase leaves rendered nothing at all.
+        // 整格宿主（树叶/铜格栅/红树根）单独确认：宿主 part 在红石相下仍然渲染。
         String leaves = liquidphase$resource("/assets/minecraft/blockstates/oak_leaves.json");
         assertTrue("leaves blockstate resource is present", leaves != null);
         if (leaves != null) {
             assertTrue("leaves host part still renders under redstone phase",
                 leaves.contains("redstone_15") && leaves.contains("minecraft:block/oak_leaves"));
-            assertTrue("leaves blockstate adds a redstone shell overlay",
-                leaves.contains("liquidphase:block/redstone_phase_"));
         }
 
         // Transparent hosts previously got no shell at all (only the 41 redstone hosts did),
@@ -649,49 +714,50 @@ public final class PhaseSelfTest {
             Blocks.BARRIER.defaultBlockState().getRenderShape()
                 != net.minecraft.world.level.block.RenderShape.MODEL);
 
-        // 方块实体宿主（告示牌/箱子）：它们的可见几何来自方块实体渲染器，blockstate 模型
-        // 只有 particle 贴图。凡是在本版本原生不是 MODEL 的，含相后都必须能请求到模型，
-        // 否则相完全不可见。1.21.10 起原版把告示牌/箱子改成了 MODEL，这时无需干预，
-        // 断言退化成"原值就是 MODEL"。
-        liquidphase$assertNonModelHostsRenderPhases(new Block[]{
-            Blocks.OAK_SIGN, Blocks.OAK_HANGING_SIGN, Blocks.CHEST, Blocks.ENDER_CHEST,
-            Blocks.DECORATED_POT, Blocks.CONDUIT,
-        });
+        // 原生不是 MODEL 的宿主，含相后必须能请求到方块模型，否则相完全不可见。
+        // 不写死候选清单（那样只会覆盖当时想到的几个）：遍历**全部** phase 方块，
+        // 凡是原生 RenderShape 不是 MODEL 的，逐个断言"带相 → MODEL、不带相 → 原值"。
+        liquidphase$assertNonModelHostsRenderPhases();
     }
 
     /**
-     * 对"原生不是 MODEL"的宿主逐个断言：带相后 RenderShape 变成 MODEL，不带相时保持原值。
-     * 本版本里原生就是 MODEL 的宿主跳过（原版自己已经会渲染模型）。
+     * 遍历**全部** phase 方块，对"原生不是 MODEL"的那些逐个断言：带相后 RenderShape 变成
+     * MODEL，不带相时保持原值。本版本里原生就是 MODEL 的宿主跳过（原版自己已经会渲染模型）。
+     * <p>
+     * 用全量扫描而不是写死几个候选：告示牌/悬挂告示牌全家、箱子系列、`decorated_pot`、
+     * `conduit`、`barrier`、`light` 等等在每个版本里清单都不一样，写死必然漏
+     * （写死版本只覆盖了 6 个方块，而实际原生非 MODEL 的 phase 宿主远多于此）。
      */
-    private static void liquidphase$assertNonModelHostsRenderPhases(Block[] candidates) {
+    private static void liquidphase$assertNonModelHostsRenderPhases() {
         int checked = 0;
-        for (Block block : candidates) {
-            if (block == null) {
+        java.util.List<String> broken = new java.util.ArrayList<>();
+        for (Block block : net.minecraft.core.registries.BuiltInRegistries.BLOCK) {
+            if (!(block instanceof org.liquidphase.phase.PhaseCapable)) {
                 continue;
             }
             BlockState plain = block.defaultBlockState();
-            // 不是相容宿主（拿不到 phase 属性）或原生就是 MODEL 的，都不需要本 mixin。
             if (!PhaseHelper.hasPhaseProperty(plain)
                 || plain.getRenderShape() == net.minecraft.world.level.block.RenderShape.MODEL) {
                 continue;
             }
             checked++;
             String name = String.valueOf(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block));
-            assertTrue("phased " + name + " renders its model so the phase becomes visible",
-                PhaseHelper.withPhase(plain, Phase.REDSTONE_15).getRenderShape()
-                    == net.minecraft.world.level.block.RenderShape.MODEL);
-            assertTrue("phased " + name + " also renders for a solid phase",
-                PhaseHelper.withPhase(plain, Phase.ICE).getRenderShape()
-                    == net.minecraft.world.level.block.RenderShape.MODEL);
-            assertTrue("unphased " + name + " keeps its vanilla render shape",
-                plain.getRenderShape() != net.minecraft.world.level.block.RenderShape.MODEL);
+            boolean phasedRedstone = PhaseHelper.withPhase(plain, Phase.REDSTONE_15).getRenderShape()
+                == net.minecraft.world.level.block.RenderShape.MODEL;
+            boolean phasedIce = PhaseHelper.withPhase(plain, Phase.ICE).getRenderShape()
+                == net.minecraft.world.level.block.RenderShape.MODEL;
+            boolean vanillaKept = plain.getRenderShape()
+                != net.minecraft.world.level.block.RenderShape.MODEL;
+            if (!phasedRedstone || !phasedIce || !vanillaKept) {
+                broken.add(name);
+            }
         }
-        //? if 1.19.4 || 1.20.1 || 1.21.1 {
-        /*// 这三个版本里告示牌/箱子家族不是 MODEL（1.19.4/1.20.1 判据是 != INVISIBLE，
-        // 所以 ENTITYBLOCK_ANIMATED 仍会渲染；告示牌的 INVISIBLE 才是真问题）。
-        assertTrue("at least one non-MODEL block-entity host exists to check (" + checked + " checked)",
+        assertTrue("every host whose vanilla RenderShape is not MODEL renders its phase "
+                + "(" + checked + " checked, broken: " + broken + ")",
+            broken.isEmpty());
+        // 这条能确保扫描真的命中了东西（barrier/light 全版本都是 INVISIBLE）。
+        assertTrue("the non-MODEL RenderShape scan actually inspected some hosts (" + checked + " checked)",
             checked > 0);
-         *///?}
     }
 
     private static String liquidphase$resource(String path) {

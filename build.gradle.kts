@@ -120,16 +120,28 @@ val convertBlockstates = tasks.register<Exec>("convertPhaseBlockstates") {
     }
 }
 
+// 把本版本的相容方块清单也打进 jar：自检要用它跟运行时真实集合做**精确集合比对**
+// （只比数量不行——清单两边各错一个、数量一样，仍然会漏块）。
+val copyPhaseBlockIds = tasks.register<Copy>("copyPhaseBlockIds") {
+    group = "liquidphase"
+    description = "Ships tools/phase-blocks/<version>.ids so the selftest can diff it against the runtime set."
+    onlyIf { phaseBlocksFile.exists() }
+    from(phaseBlocksFile)
+    into(layout.buildDirectory.dir("liquidphase-phase-ids"))
+    rename { "phase-blocks.ids" }
+}
+
 sourceSets.main {
     resources.srcDir(blockstateOutDir)
+    resources.srcDir(layout.buildDirectory.dir("liquidphase-phase-ids"))
 }
 
 tasks.named<ProcessResources>("processResources") {
-    dependsOn(convertBlockstates)
+    dependsOn(convertBlockstates, copyPhaseBlockIds)
 }
 // 生成的 blockstate 只属于运行时资源；为 jar/sourcesJar 声明显式依赖（sourcesJar 可能尚未注册）。
 tasks.matching { it.name == "sourcesJar" || it.name == "jar" }.configureEach {
-    dependsOn(convertBlockstates)
+    dependsOn(convertBlockstates, copyPhaseBlockIds)
 }
 
 tasks.withType<JavaCompile>().configureEach {
