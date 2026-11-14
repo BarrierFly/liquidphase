@@ -121,7 +121,26 @@ python tools/check_mixin_targets.py
 
 # 3) dist/ 里的 jar 内部资源抽查（版本号、坏条件数、关键 mixin 是否真的在包里）
 python tools/verify_jars.py
+
+# 4) 相容宿主覆盖面审计（A/B/C/S 四个集合的差集；改 mixin 目标、ids 清单、
+#    生成器门控、或做版本升级后各跑一次）
+python tools/audit_host_coverage.py "<guardian 仓库路径>" .
 ```
+
+`tools/audit_host_coverage.py` 把"哪些方块应当能含相"和"实际覆盖了哪些"拆成四条链路，
+差集必须全空（详见 `docs/host-coverage-audit.md`）：
+
+| 记号 | 含义 | 差集含义 |
+| --- | --- | --- |
+| A | `Blocks.java` 里类（或祖先）实现 `SimpleWaterloggedBlock` 的方块 | `A-B`：应能含相但拿不到 `phase` |
+| B | `PhaseCapableMixin` 的 `@Mixin` 目标闭包 ∩ 注册表 | `B-C`：有属性但没有 blockstate（含相看不见） |
+| C | `tools/phase-blocks/<版本>.ids` | `C-B`：有 blockstate 但拿不到属性（`Unknown property 'phase'`） |
+| S | 真正生成红石外壳的方块 | `C-S`：有清单但没外壳 |
+
+它还会顺带报出"能力被宿主覆写遮蔽"的三类缺口（`PhaseCapable` 的
+`canPlaceLiquid`/`placeLiquid`/`pickupBlock`、块级 `getCollisionShape`、
+`getStateForPlacement`）——这些不是清单问题，只按清单生成的断言测不出来。
+`--history` 会逐提交重算，用于核对历史补丁是否真的覆盖了全部宿主。
 
 `tools/validate_blockstates.py` 会在构建时被 `gen_phase_blockstates.py` 的
 `validate_result()` 再查一遍（非法条件直接让 `convertPhaseBlockstates` 失败），
@@ -575,3 +594,32 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    客户端 `BlockStateModelLoader` 于是报 `Unknown property 'phase'` 并退化成 missing model。
    已把 1.21.10+ 分支改成 `MultifaceBlock`（注入数 409 → 410），
    `tools/check_mixin_targets.py` 会拦住这类回归。
+8. **相容宿主覆盖面仍有 7 处缺口**（清单层面已全绿，但"能力层"未覆盖）：
+   详见 `docs/host-coverage-audit.md`，逐版本数字由
+   `python tools/audit_host_coverage.py <guardian> .` 复现。摘要：
+   - **P0** `barrier` 在 1.19.4 / 1.20.1 上拿到了 `phase`（`PhaseCapableMixin` 列了
+     `BarrierBlock`），但这两个版本的 `BarrierBlock` 既没实现 `SimpleWaterloggedBlock`
+     也没有 `WATERLOGGED` 属性，于是 `PhaseCapable` 默认方法里的
+     `blockState.getValue(WATERLOGGED)` 会抛 `IllegalArgumentException`：
+     水桶倒、空桶取、水流灌入三条路径都能触发。0.1.12 给这两个版本补了 `barrier` 的
+     blockstate，反而让它变得"看得见、一碰就崩"。
+   - **P1** 台阶的 `type=double` 变体：方块级 `all(...)` 整格判定必然判否（其余变体是半砖），
+     而 double 变体引用的是 0..16 整块模型 → 内缩覆盖层完全藏在宿主内部，
+     **含固相看不见**。57 / 57 / 60 / 62 / 62 / 101 个宿主。
+     双台阶靠"已有半砖的 `getStateForPlacement` 保留 `phase` 再叠一块"获得相。
+   - **P1** `SlabBlock` / `CandleBlock` / `CampfireBlock` / `DriedGhastBlock` 自己覆写了
+     `canPlaceLiquid` / `placeLiquid`，把 `PhaseCapable` 的熔岩分支整个遮住 →
+     **相邻熔岩灌不进这些宿主**（76–122 个）。桶/发射器/放置吸收仍可用。
+   - **P2** 固相"整格碰撞"（D7）只对不覆写块级 `getCollisionShape` 的宿主成立：
+     栅栏/玻璃板/铁栏杆、墙、墙悬挂告示牌、脚手架、`sculk_shrieker`、`big_dripleaf`
+     共 66–88 个宿主的固相碰撞仍是宿主形状。与 README 的"冰/黑曜石整格实心"表述冲突。
+   - **P2** 带 `offsetType` 的 4–5 个宿主（`hanging_roots` / `mangrove_propagule` /
+     `pointed_dripstone` / `small_dripleaf` / 26.3 `sulfur_spike`）被
+     `!state.hasOffsetFunction()` 排除在"破坏保留"和"整格碰撞"之外 →
+     破坏它们**不留下相**。这条限制没有写进 README。
+   - **P3** `PlacementMixin` 的 `MultifaceBlock.class` 被包在
+     `//? if 1.21.10 || 1.21.11 || 26.3` 里，但 1.19.4–1.21.1 的 `glow_lichen` /
+     `sculk_vein` 也继承它的 `getStateForPlacement` → 这三个版本上放进熔岩源格不吸收相。
+   - **P3** 1.21.1+ 起活板门/箱子/末影箱/光源方块的 `useWithoutItem` 会消费掉右键
+     （`BucketUseMixin` 只挂了 `useItemOn`）→ 熔岩桶右键这些宿主不再灌入，
+     ≤1.20.1 则可以。行为跨版本不一致，需明确取舍。
