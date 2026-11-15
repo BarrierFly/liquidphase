@@ -153,6 +153,21 @@
 
 ## 变更记录
 
+- **0.1.14（26.3 相覆盖层/红石外壳不显示：修复 bake 出界）**：
+  - **根因**：26.3 的 `FaceBakery` 会按每个 quad 的 UV 区域调用
+    `SpriteContents.computeTransparency` 计算贴图透明度；红石外壳模型为了防 z-fighting
+    采用 -0.01..16.01 的外扩几何，自动 UV（=元素包围盒）落到像素 [-1,17] 出界，
+    `NativeImage.computeTransparency` 直接抛 `IllegalArgumentException`。26.3 上任一
+    state 的 quad 失败会让**整个 blockstate bake 失败**，该宿主全部状态回退——
+    相覆盖层与红石外壳全部不渲染（宿主本体与熔岩相不受影响：前者是原版模型，
+    后者走流体渲染）。1.19.4–1.21.11 没有这条按 UV 计算透明度的路径，不受影响。
+  - **修复**：外壳模型的每个面补显式 `uv: [0,0,16,16]`——命中
+    `SpriteContents.computeTransparency` 的整图快速路径（不逐像素扫描），几何保持外扩，
+    其余版本视觉与行为不变。由 `tools/gen_redstone_assets.py` 生成时写入。
+  - **验证**：26.3 实机探针（全部 505 宿主逐相：固相覆盖层 quad、红石外壳 quad、
+    RenderShape、逐 quad 图层）修复前 1010 项 BROKEN、bake 警告 639,600 条；
+    修复后 0 BROKEN、0 条。1.21.11/1.20.1 回归探针 0 BROKEN。
+
 - **0.1.13（相容宿主覆盖面：审计 + 7 处缺口全部收口）**：
   - **审计**：新增 `tools/audit_host_coverage.py` 与 `docs/host-coverage-audit.md`，把
     "哪些方块应当能含相"与"实际覆盖了哪些"拆成四条链路（A 原版真值 / B 注入 phase /

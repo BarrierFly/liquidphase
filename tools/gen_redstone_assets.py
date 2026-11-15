@@ -97,7 +97,11 @@ def build_model(power: int) -> dict:
             {
                 "from": [-SHELL_OVERHANG, -SHELL_OVERHANG, -SHELL_OVERHANG],
                 "to": [16 + SHELL_OVERHANG, 16 + SHELL_OVERHANG, 16 + SHELL_OVERHANG],
-                "faces": {face: {"texture": "#all"} for face in SHELL_FACES},
+                # 显式 uv=整张贴图：26.3 的 FaceBakery 按 quad UV 区域计算贴图透明度，
+                # 自动 UV（=元素包围盒）会因 -0.01..16.01 的外扩几何出界 [-1,17] 而抛
+                # IllegalArgumentException，导致整个 blockstate bake 失败、相全部不渲染。
+                # 显式 (0,0,16,16) 命中 SpriteContents.computeTransparency 的整图快速路径。
+                "faces": {face: {"texture": "#all", "uv": [0, 0, 16, 16]} for face in SHELL_FACES},
             }
         ],
     }

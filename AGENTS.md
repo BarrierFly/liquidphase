@@ -249,6 +249,13 @@ phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有�
 > 相覆盖层（`when` 里已带 `phase`）不要参与"排除红石相"的合并，否则条件取交集后永远不成立、
 > 覆盖层不渲染。
 
+> ⚠️ **外壳模型必须带显式 `uv: [0,0,16,16]`（0.1.14 修）**：26.3 的
+> `FaceBakery` 按 quad 的 UV 区域计算贴图透明度，自动 UV（=元素包围盒）会因
+> -0.01..16.01 的外扩几何出界抛 `IllegalArgumentException`，整个 blockstate bake
+> 失败、该宿主全部状态回退，相覆盖层与红石外壳全部不渲染（26.3 实测 639,600 条
+> bake 警告）。显式整图 UV 命中 `SpriteContents.computeTransparency` 的快速路径。
+> 渲染探针必须逐 API 时代实跑（见 docs/host-coverage-audit-v2.md §3.6）。
+
 外壳模型/贴图由 `tools/gen_redstone_assets.py` 生成（16³ 外壳外扩 0.01px，贴图是
 **短碎屑均匀铺满整面**的疏松红石纹理，16×16 透明底、约 29% 覆盖、跨格可拼贴；
 每个功率档位一份调色板）。
