@@ -14,6 +14,7 @@ import net.minecraft.world.level.block.SlabBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.SlabType;
+import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
@@ -69,6 +70,13 @@ public final class PhaseSelfTest {
             checkPhaseRenderCulling(level, base);
             checkSyncState();
             checkCauldron(level, base);
+            // 相容宿主覆盖面（docs/host-coverage-audit.md §4 的逐项回归，0.1.13）
+            checkSolidPhaseCollision(level, base);
+            checkBreakRetainEverywhere(level, base);
+            checkAdjacentLavaFilling(level, base);
+            checkPlacementAbsorption(level, base);
+            checkBucketInteraction(level, base);
+            checkSlabVariantRendering();
         } catch (Throwable t) {
             failed++;
             LiquidPhase.LOGGER.error("[Liquid Phase][selftest] crashed", t);
@@ -701,17 +709,28 @@ public final class PhaseSelfTest {
      * 给它们写入相以后界面上什么都不显示（相的数据在，模型从没被请求过）。
      */
     private static void checkPhasedRenderShape() {
-        BlockState phasedBarrier = PhaseHelper.withPhase(Blocks.BARRIER.defaultBlockState(), Phase.REDSTONE_15);
-        assertTrue("barrier is invisible without a phase",
-            Blocks.BARRIER.defaultBlockState().getRenderShape() != net.minecraft.world.level.block.RenderShape.MODEL);
-        assertTrue("phased barrier renders its model (otherwise the phase would be invisible)",
-            phasedBarrier.getRenderShape() == net.minecraft.world.level.block.RenderShape.MODEL);
-        assertTrue("phased solid-state barrier also renders",
-            PhaseHelper.withPhase(Blocks.BARRIER.defaultBlockState(), Phase.ICE).getRenderShape()
+        // 1.19.4 / 1.20.1 的 barrier 不再是相容宿主（audit §4.2：这两个版本的 BarrierBlock
+        // 没有 WATERLOGGED 属性，注入 PhaseCapable 会在默认方法里抛 IllegalArgumentException），
+        // 改用同为 INVISIBLE 且全版本相容的 light 顶上；1.21.1+ 继续用 barrier
+        // （它是 0.1.12 清单修复的回归样本）。
+        //? if 1.19.4 || 1.20.1 {
+        /*Block invisibleHost = Blocks.LIGHT;
+        String hostName = "light";
+         *///?} else {
+        Block invisibleHost = Blocks.BARRIER;
+        String hostName = "barrier";
+        //?}
+        BlockState phasedHost = PhaseHelper.withPhase(invisibleHost.defaultBlockState(), Phase.REDSTONE_15);
+        assertTrue(hostName + " is invisible without a phase",
+            invisibleHost.defaultBlockState().getRenderShape() != net.minecraft.world.level.block.RenderShape.MODEL);
+        assertTrue("phased " + hostName + " renders its model (otherwise the phase would be invisible)",
+            phasedHost.getRenderShape() == net.minecraft.world.level.block.RenderShape.MODEL);
+        assertTrue("phased solid-state " + hostName + " also renders",
+            PhaseHelper.withPhase(invisibleHost.defaultBlockState(), Phase.ICE).getRenderShape()
                 == net.minecraft.world.level.block.RenderShape.MODEL);
-        // 反向：不带相的状态必须保持原值（否则 barrier 会凭空显出方块模型）。
+        // 反向：不带相的状态必须保持原值（否则宿主会凭空显出方块模型）。
         assertTrue("unphased states keep their vanilla render shape",
-            Blocks.BARRIER.defaultBlockState().getRenderShape()
+            invisibleHost.defaultBlockState().getRenderShape()
                 != net.minecraft.world.level.block.RenderShape.MODEL);
 
         // 原生不是 MODEL 的宿主，含相后必须能请求到方块模型，否则相完全不可见。
@@ -850,6 +869,321 @@ public final class PhaseSelfTest {
     }
 
     // ------------------------------------------------------------------
+    // 相容宿主覆盖面（docs/host-coverage-audit.md §4 的逐项回归，0.1.13）
+    // ------------------------------------------------------------------
+
+    /**
+     * 固相"整格碰撞"（决策点 D7）对**全部**相容宿主成立（audit §4.4，0.1.13 修）。
+     * 0.1.12 及以前挂在块级 {@code BlockBehaviour.getCollisionShape}，被
+     * {@code CrossCollisionBlock}（栅栏/玻璃板/铁栏杆/铜栏杆）、{@code WallBlock}、
+     * {@code WallHangingSignBlock}、{@code ScaffoldingBlock}、{@code SculkShriekerBlock}、
+     * {@code BigDripleafBlock} 自己覆写且不转调 super，这 66–88 个宿主的固相碰撞仍是宿主形状。
+     * 现在挂在状态级 {@code BlockStateBase.getCollisionShape} 的 RETURN 上：
+     * 三参覆盖实体碰撞主路径，两参覆盖 {@code Cache.collisionShape} 缓存路径
+     * （{@code isCollisionShapeFullBlock} 走它）。
+     */
+    private static void checkSolidPhaseCollision(ServerLevel level, BlockPos base) {
+        BlockPos pos = base.offset(0, 1, 0);
+        // 代表宿主逐个断言：形状表宿主（栅栏/墙/墙悬挂告示牌）、自建形状宿主（脚手架/大垂滴叶）、
+        // 以及基类分发的普通宿主（楼梯/台阶）。既查三参（实体碰撞），也查两参（缓存路径）。
+        for (Block block : new Block[]{Blocks.OAK_FENCE, Blocks.BRICK_WALL, Blocks.OAK_WALL_HANGING_SIGN,
+                Blocks.SCAFFOLDING, Blocks.BIG_DRIPLEAF, Blocks.OAK_STAIRS, Blocks.STONE_SLAB}) {
+            BlockState solid = PhaseHelper.withPhase(block.defaultBlockState(), Phase.OBSIDIAN);
+            assertTrue("solid phase collision is a full cube via the 3-arg query (" + block + ")",
+                Block.isShapeFullBlock(solid.getCollisionShape(level, pos, CollisionContext.empty())));
+            assertTrue("solid phase collision is a full cube via the cached 2-arg query (" + block + ")",
+                Block.isShapeFullBlock(solid.getCollisionShape(level, pos)));
+        }
+        // 全量：每个相容宿主的固相碰撞都必须是整格（新增宿主自动被扫进来）。
+        java.util.List<String> broken = new java.util.ArrayList<>();
+        for (Block block : net.minecraft.core.registries.BuiltInRegistries.BLOCK) {
+            if (!(block instanceof org.liquidphase.phase.PhaseCapable)
+                || !PhaseHelper.hasPhaseProperty(block.defaultBlockState())) {
+                continue;
+            }
+            BlockState solid = PhaseHelper.withPhase(block.defaultBlockState(), Phase.OBSIDIAN);
+            if (!Block.isShapeFullBlock(solid.getCollisionShape(level, pos, CollisionContext.empty()))
+                || !Block.isShapeFullBlock(solid.getCollisionShape(level, pos))) {
+                broken.add(String.valueOf(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block)));
+            }
+        }
+        assertTrue("every phase host has full-cube solid-phase collision (broken: " + broken + ")",
+            broken.isEmpty());
+        // 反向：红石相不参与整格碰撞，保持宿主形状。
+        BlockState redstoneFence = PhaseHelper.withPhase(Blocks.OAK_FENCE.defaultBlockState(), Phase.REDSTONE_15);
+        assertTrue("redstone phase keeps the host collision shape",
+            !Block.isShapeFullBlock(redstoneFence.getCollisionShape(level, pos, CollisionContext.empty())));
+    }
+
+    /**
+     * 破坏保留对**全部**相容宿主成立，包括带 offsetType 的 4–5 个
+     * （audit §4.5，0.1.13 修：0.1.12 及以前 {@code !state.hasOffsetFunction()} 把
+     * hanging_roots / mangrove_propagule / pointed_dripstone / small_dripleaf
+     * （26.3 另有 sulfur_spike）排除在外，破坏它们相直接消失）。
+     */
+    private static void checkBreakRetainEverywhere(ServerLevel level, BlockPos base) {
+        // 对照：普通宿主（楼梯）破坏 → 原地留冰。
+        BlockPos pos = base.offset(20, 1, 0);
+        level.setBlock(pos, PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.ICE), Block.UPDATE_ALL);
+        level.destroyBlock(pos, false);
+        assertTrue("breaking a phased stairs leaves the ice behind (got "
+                + level.getBlockState(pos).getBlock() + ")",
+            level.getBlockState(pos).is(Blocks.ICE));
+        level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+        // 带 offsetType 的宿主逐个验证：破坏后必须留下相实体化的方块。
+        java.util.List<String> broken = new java.util.ArrayList<>();
+        int checked = 0;
+        for (Block block : net.minecraft.core.registries.BuiltInRegistries.BLOCK) {
+            if (!(block instanceof org.liquidphase.phase.PhaseCapable)
+                || !PhaseHelper.hasPhaseProperty(block.defaultBlockState())
+                || !block.defaultBlockState().hasOffsetFunction()) {
+                continue;
+            }
+            checked++;
+            BlockState solid = PhaseHelper.withPhase(block.defaultBlockState(), Phase.ICE);
+            level.setBlock(pos, solid, Block.UPDATE_ALL);
+            level.destroyBlock(pos, false);
+            if (!level.getBlockState(pos).is(Blocks.ICE)) {
+                broken.add(String.valueOf(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block))
+                    + " (got " + level.getBlockState(pos).getBlock() + ")");
+            }
+            level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        }
+        assertTrue("offset-type hosts still retain their phase on break ("
+                + checked + " checked, broken: " + broken + ")",
+            broken.isEmpty());
+        // 反向：这条扫描必须真的命中了 offset 宿主（每版本 4–5 个），否则断言落空。
+        assertTrue("the offset-host scan actually inspected some hosts (" + checked + " checked)",
+            checked >= 4);
+    }
+
+    /**
+     * 台阶/蜡烛/营火（1.21.10+ 另有干化恶魂）自己覆写 {@code canPlaceLiquid}/{@code placeLiquid}，
+     * 遮住了 {@code PhaseCapable} 的熔岩分支（audit §4.3，0.1.13 修）：
+     * "相邻熔岩按形状灌入"必须重新成立。这里直接调宿主的遮蔽方法——
+     * 与 {@code FlowingFluid.canHoldFluid}/{@code spreadTo} 同一条引擎路径。
+     */
+    private static void checkAdjacentLavaFilling(ServerLevel level, BlockPos base) {
+        // (1) 台阶：canPlaceLiquid 对熔岩放行（0.1.12 及以前恒拒 → 引擎层面熔岩灌不进）。
+        BlockPos slabPos = base.offset(22, 1, 0);
+        BlockState slab = Blocks.STONE_SLAB.defaultBlockState();
+        level.setBlock(slabPos, slab, Block.UPDATE_ALL);
+        assertTrue("slab accepts adjacent lava (canPlaceLiquid is no longer shadowed)",
+            liquidphase$canPlaceLava((net.minecraft.world.level.block.LiquidBlockContainer) Blocks.STONE_SLAB,
+                level, slabPos, slab));
+        assertTrue("slab placeLiquid fills the lava phase (got "
+                + PhaseHelper.getPhase(level.getBlockState(slabPos)) + ")",
+            ((net.minecraft.world.level.block.LiquidBlockContainer) Blocks.STONE_SLAB)
+                .placeLiquid(level, slabPos, slab, Fluids.LAVA.getSource(false))
+                && PhaseHelper.isLava(level.getBlockState(slabPos)));
+        level.setBlock(slabPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+        // (2) 蜡烛 / 营火：placeLiquid 遮蔽只处理水、对熔岩返回 false → 引擎每 tick 重试、永久灌不进。
+        BlockPos candlePos = base.offset(23, 1, 0);
+        BlockState candle = Blocks.CANDLE.defaultBlockState();
+        level.setBlock(candlePos, candle, Block.UPDATE_ALL);
+        assertTrue("candle placeLiquid fills the lava phase (got "
+                + PhaseHelper.getPhase(level.getBlockState(candlePos)) + ")",
+            ((net.minecraft.world.level.block.LiquidBlockContainer) Blocks.CANDLE)
+                .placeLiquid(level, candlePos, candle, Fluids.LAVA.getSource(false))
+                && PhaseHelper.isLava(level.getBlockState(candlePos)));
+        level.setBlock(candlePos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+        BlockPos campfirePos = base.offset(24, 1, 0);
+        BlockState campfire = Blocks.CAMPFIRE.defaultBlockState();
+        level.setBlock(campfirePos, campfire, Block.UPDATE_ALL);
+        assertTrue("campfire placeLiquid fills the lava phase (got "
+                + PhaseHelper.getPhase(level.getBlockState(campfirePos)) + ")",
+            ((net.minecraft.world.level.block.LiquidBlockContainer) Blocks.CAMPFIRE)
+                .placeLiquid(level, campfirePos, campfire, Fluids.LAVA.getSource(false))
+                && PhaseHelper.isLava(level.getBlockState(campfirePos)));
+        level.setBlock(campfirePos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+        //? if 1.21.10 || 1.21.11 || 26.3 {
+        /*BlockPos ghastPos = base.offset(25, 1, 0);
+        BlockState ghast = Blocks.DRIED_GHAST.defaultBlockState();
+        level.setBlock(ghastPos, ghast, Block.UPDATE_ALL);
+        assertTrue("dried ghast placeLiquid fills the lava phase (got "
+                + PhaseHelper.getPhase(level.getBlockState(ghastPos)) + ")",
+            ((net.minecraft.world.level.block.LiquidBlockContainer) Blocks.DRIED_GHAST)
+                .placeLiquid(level, ghastPos, ghast, Fluids.LAVA.getSource(false))
+                && PhaseHelper.isLava(level.getBlockState(ghastPos)));
+        level.setBlock(ghastPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+         *///?}
+
+        // 反向：已含水的台阶仍拒绝熔岩（水与相互斥的语义不变）。
+        BlockPos wetSlabPos = base.offset(22, 1, 2);
+        BlockState wetSlab = Blocks.STONE_SLAB.defaultBlockState()
+            .setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED, true);
+        level.setBlock(wetSlabPos, wetSlab, Block.UPDATE_ALL);
+        assertTrue("waterlogged slab still refuses lava",
+            !((net.minecraft.world.level.block.LiquidBlockContainer) Blocks.STONE_SLAB)
+                .placeLiquid(level, wetSlabPos, level.getBlockState(wetSlabPos), Fluids.LAVA.getSource(false))
+                && !PhaseHelper.isLava(level.getBlockState(wetSlabPos)));
+        level.setBlock(wetSlabPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+    }
+
+    /** {@return 宿主能否接受熔岩（签名按版本分支，与 {@code FlowingFluid.canHoldFluid} 同参）} */
+    private static boolean liquidphase$canPlaceLava(net.minecraft.world.level.block.LiquidBlockContainer container,
+                                                    net.minecraft.world.level.BlockGetter level, BlockPos pos,
+                                                    BlockState state) {
+        //? if 1.19.4 || 1.20.1 {
+        /*return container.canPlaceLiquid(level, pos, state, Fluids.LAVA);
+         *///?} elif 1.21.1 {
+        /*return container.canPlaceLiquid(null, level, pos, state, Fluids.LAVA);
+         *///?} else {
+        return container.canPlaceLiquid(null, level, pos, state, Fluids.LAVA);
+        //?}
+    }
+
+    /**
+     * glow_lichen / sculk_vein 的 {@code getStateForPlacement} 由 {@code MultifaceBlock} 声明
+     * （全版本如此），PlacementMixin 0.1.12 及以前只在 1.21.10+ 挂它 → 1.19.4–1.21.1
+     * 放进熔岩源格不吸收相（audit §4.6，0.1.13 修）。
+     */
+    /**
+     * glow_lichen / sculk_vein 的 {@code getStateForPlacement} 由 {@code MultifaceBlock} 声明
+     * （全版本如此），PlacementMixin 0.1.12 及以前只在 1.21.10+ 挂它 → 1.19.4–1.21.1
+     * 放进熔岩源格不吸收相（audit §4.6，0.1.13 修）。
+     * <p>
+     * 场景按真实放置姿势摆：点熔岩源格**旁边**的石头侧面（原版 context 的 clickedPos
+     * 会落到熔岩源格上），宿主状态算出来后应带上熔岩相。
+     */
+    private static void checkPlacementAbsorption(ServerLevel level, BlockPos base) {
+        BlockPos lavaPos = base.offset(26, 1, 0);
+        BlockPos stonePos = lavaPos.west();
+        level.setBlock(lavaPos, Fluids.LAVA.defaultFluidState().createLegacyBlock(), Block.UPDATE_ALL);
+        level.setBlock(stonePos, Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        net.minecraft.server.level.ServerPlayer player = liquidphase$fakePlayer(level);
+        for (Block block : new Block[]{Blocks.GLOW_LICHEN, Blocks.SCULK_VEIN}) {
+            // 点石头的东侧面（朝熔岩格）：clicked 块不可替换 → context 落点 = 熔岩格。
+            Vec3 hitVec = new Vec3(stonePos.getX() + 1.5, stonePos.getY() + 0.5, stonePos.getZ() + 0.5);
+            BlockHitResult hit = new BlockHitResult(hitVec, Direction.EAST, stonePos, false);
+            BlockPlaceContext context = new BlockPlaceContext(level, player,
+                net.minecraft.world.InteractionHand.MAIN_HAND, new ItemStack(block), hit);
+            assertTrue("placement context targets the lava source tile (got " + context.getClickedPos() + ")",
+                context.getClickedPos().equals(lavaPos));
+            BlockState placed = block.getStateForPlacement(context);
+            assertTrue(block + " absorbs the lava phase when placed into a lava source (got "
+                    + (placed == null ? "null" : PhaseHelper.getPhase(placed)) + ")",
+                placed != null && PhaseHelper.getPhase(placed) == Phase.LAVA);
+        }
+        level.setBlock(lavaPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(stonePos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+    }
+
+    /**
+     * 熔岩桶右键按**原版倒水**的交互优先级（audit §4.7，0.1.13 修）：
+     * 原版交互不消费右键的宿主（楼梯）→ 灌入；原版交互消费右键的宿主（活板门开关、
+     * 光源方块调亮度）→ 原版行为优先、不灌入。0.1.12 及以前 {@code BucketUseMixin} 在
+     * use/useItemOn 上强制灌入（连箱子/告示牌都灌），≤1.20.1 与 ≥1.21.1 的目标清单还不一致；
+     * 0.1.13 删除该 mixin，让灌入完全走原版桶路径（useItemOn 通过 → useItem →
+     * emptyContents → BucketItemMixin），与"用水桶点活板门只会开关它"的语义对齐。
+     * 潜行右键（原版绕过方块交互）仍可灌入，发射器/放置吸收不受影响。
+     */
+    private static void checkBucketInteraction(ServerLevel level, BlockPos base) {
+        net.minecraft.server.level.ServerPlayer player = liquidphase$fakePlayer(level);
+
+        // (1) 楼梯：原版不消费右键 → 熔岩灌入。useItemOn 返回 PASS 时，
+        // 真实客户端会补发 UseItem 包（useItem → BucketItem.use），这里走同一条链。
+        BlockPos stairPos = base.offset(18, 1, 0);
+        level.setBlock(stairPos.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(stairPos, Blocks.OAK_STAIRS.defaultBlockState(), Block.UPDATE_ALL);
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
+            new ItemStack(net.minecraft.world.item.Items.LAVA_BUCKET));
+        liquidphase$lookAt(player, stairPos);
+        BlockHitResult stairHit = new BlockHitResult(Vec3.atCenterOf(stairPos), Direction.UP, stairPos, false);
+        net.minecraft.world.InteractionResult interactionResult = player.gameMode.useItemOn(player, level,
+            player.getItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND),
+            net.minecraft.world.InteractionHand.MAIN_HAND, stairHit);
+        if (!interactionResult.consumesAction()) {
+            player.gameMode.useItem(player, level,
+                player.getItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND),
+                net.minecraft.world.InteractionHand.MAIN_HAND);
+        }
+        assertTrue("lava bucket pours into stairs (vanilla interaction does not consume the click; got "
+                + PhaseHelper.getPhase(level.getBlockState(stairPos)) + ")",
+            PhaseHelper.isLava(level.getBlockState(stairPos)));
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+        level.setBlock(stairPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(stairPos.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+        // (2) 活板门：原版 useWithoutItem 消费右键（开关）→ 不灌入、方块被开关。
+        BlockPos trapPos = base.offset(18, 1, 2);
+        level.setBlock(trapPos, Blocks.OAK_TRAPDOOR.defaultBlockState(), Block.UPDATE_ALL);
+        boolean openBefore = level.getBlockState(trapPos)
+            .getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.OPEN);
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
+            new ItemStack(net.minecraft.world.item.Items.LAVA_BUCKET));
+        liquidphase$lookAt(player, trapPos);
+        BlockHitResult trapHit = new BlockHitResult(Vec3.atCenterOf(trapPos), Direction.UP, trapPos, false);
+        player.gameMode.useItemOn(player, level,
+            player.getItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND),
+            net.minecraft.world.InteractionHand.MAIN_HAND, trapHit);
+        BlockState trapAfter = level.getBlockState(trapPos);
+        assertTrue("lava bucket on a trapdoor toggles it instead of pouring (got phase "
+                + PhaseHelper.getPhase(trapAfter) + ")",
+            !PhaseHelper.isLava(trapAfter)
+                && trapAfter.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.OPEN) != openBefore);
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+        level.setBlock(trapPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+        // (3) 光源方块：原版 useWithoutItem 消费右键（非管理员 → CONSUME）→ 不灌入、亮度不变。
+        BlockPos lightPos = base.offset(18, 1, 4);
+        level.setBlock(lightPos, Blocks.LIGHT.defaultBlockState(), Block.UPDATE_ALL);
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
+            new ItemStack(net.minecraft.world.item.Items.LAVA_BUCKET));
+        liquidphase$lookAt(player, lightPos);
+        BlockHitResult lightHit = new BlockHitResult(Vec3.atCenterOf(lightPos), Direction.UP, lightPos, false);
+        player.gameMode.useItemOn(player, level,
+            player.getItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND),
+            net.minecraft.world.InteractionHand.MAIN_HAND, lightHit);
+        BlockState lightAfter = level.getBlockState(lightPos);
+        assertTrue("lava bucket on a light block keeps the vanilla interaction (got phase "
+                + PhaseHelper.getPhase(lightAfter) + ")",
+            !PhaseHelper.isLava(lightAfter));
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+        level.setBlock(lightPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+    }
+
+    /** 把假玩家放到目标正上方、俯视它（桶的 use 路径按玩家视角射线取目标格）。 */
+    private static void liquidphase$lookAt(net.minecraft.server.level.ServerPlayer player, BlockPos pos) {
+        // 1.21.10+ 的 Entity.moveTo 改名 snapTo（guardian 逐版本核对）。
+        //? if 1.21.10 || 1.21.11 || 26.3 {
+        player.snapTo(pos.getX() + 0.5, pos.getY() + 3.0, pos.getZ() + 0.5, 0.0F, 90.0F);
+        //?} else {
+        /*player.moveTo(pos.getX() + 0.5, pos.getY() + 3.0, pos.getZ() + 0.5, 0.0F, 90.0F);
+         *///?}
+    }
+
+    /**
+     * 台阶的整格判定按**变体**（audit §4.1，0.1.13 修）：type=double 引用整块模型，
+     * 固体相换整格相材质；type=bottom/top 保持宿主常驻 + 内缩覆盖层。0.1.12 及以前
+     * 整格判定按方块（all(...)），混合模型必然判否 → 双台阶的覆盖层整个藏在宿主模型里。
+     */
+    private static void checkSlabVariantRendering() {
+        String slab = liquidphase$resource("/assets/minecraft/blockstates/stone_slab.json");
+        assertTrue("stone slab blockstate resource is present", slab != null);
+        if (slab == null) {
+            return;
+        }
+        // 双台阶变体：整格相材质，宿主 part 限制在"宿主可见"的相（none|lava|redstone_*）。
+        assertTrue("double slab swaps in the full phase material for solid phases",
+            slab.contains("phase_ice_full") && slab.contains("phase_obsidian_full"));
+        assertTrue("the full overlay is conditioned on the double variant",
+            slab.contains("\"type\":\"double\",\"phase\":\"obsidian\""));
+        assertTrue("the double slab host part keeps rendering under redstone phases",
+            slab.contains("\"type\":\"double\",\"phase\":\"none|lava|redstone_0|\"")
+                || slab.contains("\"type\":\"double\",\"phase\":\"none|lava|"));
+        // 半砖变体：内缩覆盖层，且限定在非 double 变体（避免双台阶同时叠两种覆盖层）。
+        assertTrue("non-double slab variants keep the inset overlay",
+            slab.contains("\"type\":\"!double\",\"phase\":\"obsidian\"")
+                && slab.contains("liquidphase:block/phase_obsidian\""));
+        // 反向：部分覆盖宿主（楼梯）不应突然获得整格层（现有断言已在 checkRedstoneRenderParts 覆盖）。
+    }
+
+    // ------------------------------------------------------------------
     // 炼药锅
     // ------------------------------------------------------------------
 
@@ -871,7 +1205,7 @@ public final class PhaseSelfTest {
     }
 
     private static void clearArea(ServerLevel level, BlockPos base) {
-        for (int x = -1; x <= 18; x++) {
+        for (int x = -1; x <= 26; x++) {
             for (int y = 0; y <= 2; y++) {
                 for (int z = -1; z <= 9; z++) {
                     level.setBlock(base.offset(x, y, z), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);

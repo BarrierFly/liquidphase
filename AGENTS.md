@@ -32,7 +32,7 @@
 | 瞄准与直接挖相（含整格宿主/形状表宿主的命中判定） | `phase/PhaseTargeting.java` |
 | 状态级核心 mixin（流体态/光照/随机刻/破坏保留/邻居） | `mixin/BlockStateBaseMixin.java` |
 | 自带状态注入器（1.21.1+） | `state/PhaseStateRefresher.java` + `mixin/state/*` + `state/*Duck` |
-| 桶/放置/交互 mixin | `mixin/BucketItem*Mixin.java`、`mixin/BucketUseMixin.java`、`mixin/PlacementMixin.java`、`mixin/BlockItemMixin.java` |
+| 桶/放置/交互 mixin | `mixin/BucketItem*Mixin.java`、`mixin/PlacementMixin.java`、`mixin/BlockItemMixin.java`；遮蔽宿主的熔岩分支在 `mixin/SlabLiquidMixin.java` + `mixin/HostPlaceLiquidMixin.java`（0.1.13，audit §4.3）。原 `BucketUseMixin` 已删除（0.1.13，audit §4.7：桶交互完全走原版路径） |
 | 冻结接线 | `mixin/ServerLevelMixin.java`（`tickChunk` ≤1.20.1 / `tickPrecipitation` 1.21.1+） |
 | 炼药锅 | `cauldron/CauldronBehaviors.java`、`CauldronBehaviorRegistration.java`、`CauldronHopperTransfer.java`、`ConcreteMappings.java` |
 | 发射器/漏斗 | `interact/LiquidInteractions.java`、`mixin/HopperTransferMixin.java` |
@@ -81,7 +81,9 @@ closure 清单里）。
 ### 2.2 id 清单完整性（0.1.12 起硬校验）
 
 `tools/gen_phase_blocks.py` 结尾用 `EXPECTED_COUNTS` 对比各版本
-`injected phase property into N blocks` 的实测值（309 / 311 / 337 / 410 / 410 / 505），
+`injected phase property into N blocks` 的实测值（308 / 310 / 337 / 410 / 410 / 505；
+0.1.13 起 1.19.4/1.20.1 不含 `barrier`——那两个版本的 `BarrierBlock` 没有 `WATERLOGGED`，
+见 §7 第 8 条与 `docs/host-coverage-audit.md` §4.2），
 数量不符直接失败。**做版本升级时这两个数就是验收口径**：先跑一次服务端拿到新的注入数，
 把 `EXPECTED_COUNTS` 改掉，再重跑生成器。它同时会打印"closure 里没有任何注册方块的类"，
 那说明闭包清单写进了不存在的类名（或解析器又漏了一种注册形式）。
@@ -146,12 +148,15 @@ python tools/audit_host_coverage.py "<guardian 仓库路径>" .
 `validate_result()` 再查一遍（非法条件直接让 `convertPhaseBlockstates` 失败），
 但单独跑一次可以对任意产物（含已经拷进 `dist/` 的 jar）复核。
 
-### 3.1 相覆盖层的两类宿主
+### 3.1 相覆盖层的两类宿主（判定粒度 = part/变体）
 
 `tools/gen_phase_blockstates.py` 会**按模型几何自动判定**整格宿主（不再手写白名单）：
-宿主 blockstate 能引用的**每一个**模型都满足「无 rotation + 包围盒恰好 0..16 + 六个边界面
-被面片段完全覆盖」时，它含固相时**整格换成相材质**，宿主原版 part 的 when 合并
+宿主 blockstate 的每个 **part（变体）** 引用的模型都满足「无 rotation + 包围盒恰好 0..16 +
+六个边界面被面片段完全覆盖」时，该 part 含固相时**整格换成相材质**，宿主 part 的 when 合并
 `phase: none|lava|<redstone>`；其余宿主保持"原版模型 + 内缩 0.25px 覆盖层"。
+三个分支：全部 part 整格（树叶/格栅/红树根）→ 原整格行为；全部 part 非整格 → 原内缩行为；
+**混合**（0.1.13 起，audit §4.1）→ 整格 part 换整格相材质、非整格 part 保持内缩
+（内缩层的 when 加上整格 part 条件的**取反**，如台阶的 `"type": "!double"`）。
 
 > ⚠️ **不能退回手写 `FULL_CUBE_HOSTS` 白名单**。26.3 新增的白杨树叶
 > （`orange/red/yellow_poplar_leaves`）是整格模型，手写清单漏登记 → 含冰相时用的是内缩
@@ -161,9 +166,17 @@ python tools/audit_host_coverage.py "<guardian 仓库路径>" .
 > 但六个边界面远没有被铺满；只按包围盒判会把所有楼梯误判成整格宿主。
 > 原版 `mangrove_roots` 则是"外皮 + 内部十字"：包围盒整格且六面被 0.002 薄板铺满，
 > 所以它**应该**走整格路径（旧白名单恰好是对的）。
+>
+> ⚠️ **判定粒度不能是方块**（0.1.12 及以前的教训，audit §4.1）：台阶是"混合模型"宿主
+> ——`type=bottom/top` 引用半砖模型（非整格）、`type=double` 引用整块模型（整格），
+> 方块级 `all(...)` 必然判否 → 双台阶含固相时整格宿主模型 + 内缩覆盖层，覆盖层完全
+> 藏在宿主内部、一点看不见（57–101 个宿主）。逐版本混合模型宿主实测 100% 是台阶。
+> 取反条件用**单值否定**（`"!double"`）或 AND/OR 组合，不要写 `"!a|b"` 这种多值否定
+> ——1.19.4 与 1.21.2+ 的 `KeyValueCondition` 对它的语义相反。
 
 新增整格型宿主不需要改代码；跑一次生成器就会自动识别。要复核识别结果，看
-`convertPhaseBlockstates` 打印的 `full-cube hosts:` 列表。
+`convertPhaseBlockstates` 打印的 `full-cube hosts:`（全部整格）与
+`mixed-model hosts:`（按变体拆分）列表。
 
 ### 3.2 红石相的表示与渲染
 
@@ -334,8 +347,10 @@ phase 取值；形状、碰撞、掉落、破坏保留全部沿用宿主原有�
   `PayloadTypeRegistry` 改名为 `clientboundPlay()`）。
 - 客户端收到就置 `PhaseSyncState.serverSupportsPhases()`；`DISCONNECT`/`JOIN` 都复位。
 - 所有**会改世界状态**的客户端路径都用 `PhaseSyncState.canMutateWorld(level)` 门控
-  （`BlockItemMixin`、`PlacementMixin`、`BucketItemMixin`、`BucketItemUseMixin`、`BucketUseMixin`、
+  （`BlockItemMixin`、`PlacementMixin`、`BucketItemMixin`、`BucketItemUseMixin`、
   `RedstoneWireReplaceMixin`、`FallingBlockIntoWireMixin`、`ClientLiquidMineMixin`、`EntityPickMixin`）。
+  `SlabLiquidMixin`/`HostPlaceLiquidMixin` 不需要门控：它们接的是
+  `FlowingFluid.spreadTo` 这条服务端专属引擎路径，客户端预测不会走到。
   服务端侧永远为真（自己的配置就是权威），所以**单人/多人/原版服务器都不影响方块状态同步**。
 - 新增 `selftest` 断言：握手掩码、默认不支持、渲染剔除边界。
 
@@ -428,10 +443,11 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
 `ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，断言数按版本为
-**111（1.19.4–1.21.11）/ 110（26.3）**——
+**147（1.19.4 / 1.20.1 / 1.21.1 / 1.21.11 / 26.3）/ 148（1.21.10，多一个干化恶魂断言）**——
 各版本已经收敛到几乎相同，因为断言改成**全量扫描**而不是写死几个代表方块：
 凡是"原生 RenderShape 不是 MODEL 的 phase 宿主"都会被逐个验证，各版本有几个就查几个
-（实测 1.20.1 有 **51** 个，1.21.11 只有 **2** 个（`barrier`/`light`）——原版 1.21.10 起
+（实测 1.20.1 有 **51** 个，1.21.11 只有 **2** 个（1.21.11 起是 `barrier`/`light`；1.19.4/1.20.1
+用 `light` 顶上，这两个版本的 barrier 不再是宿主，见 §7 第 8 条）——原版 1.21.10 起
 把告示牌/箱子改成了 MODEL）。写死候选清单时只查了 6 个，漏掉的就是这类。覆盖内容：
 相枚举/相位属性全覆盖、宿主方块身份、选择框/碰撞/遮挡、面露出判定、
 向红石线 -1 / 向固相满功率 / DOWN 不输出 / 被覆盖面不输出、供电即时性（邻居变化同 tick 生效）、
@@ -447,13 +463,19 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 **模型几何**（内缩覆盖层/外扩外壳不带 `cullface`，贴边 `phase_*_full` 保留）、
 **外壳按功率分档**（16 份模型/贴图互不相同，0 档与 15 档不同）、
 **宿主 part 不带恒真 phase 条件**（否则 `Condition ... is always true` 刷屏）、
-**整格宿主自动判定**（白杨树叶走整格、台阶走内缩）、
-**含相状态强制 MODEL**（barrier 这类 INVISIBLE 宿主带相后能渲染；1.19.4–1.21.1 的
-告示牌/箱子家族逐个验证）、
+**整格宿主自动判定**（白杨树叶走整格、台阶按变体拆分：double 整格、半砖内缩）、
+**含相状态强制 MODEL**（INVISIBLE 宿主带相后能渲染；告示牌/箱子家族逐个验证）、
 **相剔除**（相覆盖层/外壳模型都不带 `cullface`，原版不会剔除它们；
    **不要**再加"含相状态不参与 `skipRendering`"那类 mixin——0.1.12 已删除）、
 **渲染层 mixin 配置**（仅非 26.3 接线）、
-**双端同步**（客户端默认不支持、握手掩码正确）。
+**双端同步**（客户端默认不支持、握手掩码正确）、
+**覆盖面回归（0.1.13，对应 audit §4）**：
+  固相整格碰撞（全量扫描，两参缓存路径 + 三参实体路径）、
+  offsetType 宿主破坏保留（全量扫描）、台阶/蜡烛/营火/干化恶魂的遮蔽方法熔岩灌入
+  （直接调 `canPlaceLiquid`/`placeLiquid`，与引擎同参）、
+  glow_lichen/sculk_vein 放置吸收、熔岩桶右键优先级（FakePlayer 走
+  `useItemOn`→（PASS 时）`useItem`：楼梯灌入、活板门被原版开关、光源方块保持原版交互）、
+  台阶 blockstate 的变体拆分资源断言。
 默认关闭，不进正式玩法路径。**改动红石相形状、渲染或信号语义后请先跑它。**
 
 > 加 `-Dliquidphase.selftest.stop=true`（或 `LIQUIDPHASE_SELFTEST_STOP=true`）会在跑完后
@@ -487,6 +509,8 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 | --- | --- |
 | 启动服务端 | 日志出现 `injected phase property into … blocks` 与 `redstone phase uses phase=redstone_0..15 (no extra blocks registered)`，无 mixin 报错 |
 | 熔岩桶 → 楼梯 | 出现含熔岩相；整格发光 15；可流出/被流入 |
+| 熔岩桶 → 活板门 / 箱子 / 光源方块 | **原版交互优先**（开关活板门/开箱/调亮度），不灌入——与原版水桶同规则；潜行右键灌入；各版本一致（0.1.13 起，audit §4.7） |
+| 熔岩贴着台阶/蜡烛/营火 | 按形状灌入（0.1.13 起，audit §4.3）；含水的仍拒绝 |
 | 水 → 含熔岩 | 变为含黑曜石相 + 嘶声 |
 | 破坏含冰楼梯 | 掉楼梯 + 原地留冰；准星瞄楼梯就按楼梯速度挖，瞄相才按冰算 |
 | 破坏含黑曜石楼梯 | 瞄露出的黑曜石部分需钻石镐；瞄楼梯本体正常速度；破坏后留黑曜石 |
@@ -547,7 +571,7 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    不再有组合方块注册、`COMPOSITE_TO_HOST` 表、`RedstonePhaseBlock` 标记接口。
    代价是 `phase` 取值 8 → 24，状态数约 ×3（1.21.11：175,607 → 509,175）。
 2. **红石相宿主覆盖面**：渲染外壳对**全部**相容宿主生成——口径是"运行时真的拿到 `phase`
-   属性的方块"，各版本为 **309 / 311 / 337 / 410 / 410 / 505 个**
+   属性的方块"，各版本为 **308 / 310 / 337 / 410 / 410 / 505 个**
    （0.1.12 起由 `tools/gen_phase_blocks.py` 的 `EXPECTED_COUNTS` 硬校验；
    0.1.9–0.1.11 的清单实际少登记了一批，见 §2.2 与 README 0.1.12 条目）。
    含树叶/格栅/玻璃板/铁栏杆/梯子/锁链/铜栏杆/铜锁链/铜灯笼/墙告示牌/羊毛楼梯等。
@@ -569,7 +593,7 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    > 并集 `V=84` 全宿主 = 1,770,679 / ≈1.4 GiB；并集 `V=84` + 按方块裁剪
    > （白名单 = 楼梯+台阶 5,012 基础状态）= 812,839 / 730 MiB。
    > **扩取值前先确认白名单，墙（26 个方块、8,424 基础状态）必须排除。**
-4. 行为层已做服务端自检（6 版本 111/111/111/111/111/110 项断言全过）+ 启动冒烟 + 6 版本编译；
+4. 行为层已做服务端自检（6 版本 147/147/147/148/147/147 项断言全过）+ 启动冒烟 + 6 版本编译；
    **渲染层与剔除面已在真实客户端（1.21.11 `runClient`）取证修复**：
    带相状态图层为 CUTOUT（半透明宿主保持 TRANSLUCENT）、内缩覆盖层/外扩外壳的
    quad 进入不可剔除列表、几何坐标在宿主外侧；
@@ -594,32 +618,27 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    客户端 `BlockStateModelLoader` 于是报 `Unknown property 'phase'` 并退化成 missing model。
    已把 1.21.10+ 分支改成 `MultifaceBlock`（注入数 409 → 410），
    `tools/check_mixin_targets.py` 会拦住这类回归。
-8. **相容宿主覆盖面仍有 7 处缺口**（清单层面已全绿，但"能力层"未覆盖）：
-   详见 `docs/host-coverage-audit.md`，逐版本数字由
-   `python tools/audit_host_coverage.py <guardian> .` 复现。摘要：
-   - **P0** `barrier` 在 1.19.4 / 1.20.1 上拿到了 `phase`（`PhaseCapableMixin` 列了
-     `BarrierBlock`），但这两个版本的 `BarrierBlock` 既没实现 `SimpleWaterloggedBlock`
-     也没有 `WATERLOGGED` 属性，于是 `PhaseCapable` 默认方法里的
-     `blockState.getValue(WATERLOGGED)` 会抛 `IllegalArgumentException`：
-     水桶倒、空桶取、水流灌入三条路径都能触发。0.1.12 给这两个版本补了 `barrier` 的
-     blockstate，反而让它变得"看得见、一碰就崩"。
-   - **P1** 台阶的 `type=double` 变体：方块级 `all(...)` 整格判定必然判否（其余变体是半砖），
-     而 double 变体引用的是 0..16 整块模型 → 内缩覆盖层完全藏在宿主内部，
-     **含固相看不见**。57 / 57 / 60 / 62 / 62 / 101 个宿主。
-     双台阶靠"已有半砖的 `getStateForPlacement` 保留 `phase` 再叠一块"获得相。
-   - **P1** `SlabBlock` / `CandleBlock` / `CampfireBlock` / `DriedGhastBlock` 自己覆写了
-     `canPlaceLiquid` / `placeLiquid`，把 `PhaseCapable` 的熔岩分支整个遮住 →
-     **相邻熔岩灌不进这些宿主**（76–122 个）。桶/发射器/放置吸收仍可用。
-   - **P2** 固相"整格碰撞"（D7）只对不覆写块级 `getCollisionShape` 的宿主成立：
-     栅栏/玻璃板/铁栏杆、墙、墙悬挂告示牌、脚手架、`sculk_shrieker`、`big_dripleaf`
-     共 66–88 个宿主的固相碰撞仍是宿主形状。与 README 的"冰/黑曜石整格实心"表述冲突。
-   - **P2** 带 `offsetType` 的 4–5 个宿主（`hanging_roots` / `mangrove_propagule` /
-     `pointed_dripstone` / `small_dripleaf` / 26.3 `sulfur_spike`）被
-     `!state.hasOffsetFunction()` 排除在"破坏保留"和"整格碰撞"之外 →
-     破坏它们**不留下相**。这条限制没有写进 README。
-   - **P3** `PlacementMixin` 的 `MultifaceBlock.class` 被包在
-     `//? if 1.21.10 || 1.21.11 || 26.3` 里，但 1.19.4–1.21.1 的 `glow_lichen` /
-     `sculk_vein` 也继承它的 `getStateForPlacement` → 这三个版本上放进熔岩源格不吸收相。
-   - **P3** 1.21.1+ 起活板门/箱子/末影箱/光源方块的 `useWithoutItem` 会消费掉右键
-     （`BucketUseMixin` 只挂了 `useItemOn`）→ 熔岩桶右键这些宿主不再灌入，
-     ≤1.20.1 则可以。行为跨版本不一致，需明确取舍。
+8. **相容宿主覆盖面 7 处缺口已在 0.1.13 全部收口**（清单与能力层都绿）：
+   详见 `docs/host-coverage-audit.md`（§4 逐项 + §6 修复记录），逐版本数字由
+   `python tools/audit_host_coverage.py <guardian> .` 复现。要点与余留：
+   - `barrier`（1.19.4/1.20.1）：从 mixin 目标与 `.ids` 移除（运行时注入数 308/310），
+     崩溃面消失；1.21.1+ 的 `barrier` 仍是宿主，但原版"创造模式限定接受流体"的语义
+     使相充入路径（探测时拿不到玩家身份）对它一律拒绝——红石相不受影响。
+   - 台阶 `type=double`：整格判定改到变体粒度，混合模型宿主按变体拆分
+     （见 §3.1）；`tools/gen_phase_blockstates.py` 打印 `mixed-model hosts:`。
+   - 台阶/蜡烛/营火/干化恶魂：`SlabLiquidMixin` + `HostPlaceLiquidMixin` 接管
+     遮蔽的 `canPlaceLiquid`/`placeLiquid` 熔岩分支（只接管熔岩，水走原版）。
+     1.21.1+ 的 `barrier` 也遮蔽这两个方法，但原版语义是创造模式限定 → **有意不接管**。
+   - 固相整格碰撞：移到状态级 `ShapeFallbackMixin`（两参缓存路径 + 三参），与 D7 一致；
+     块级只留 null 兜底（`Cache.<init>` 直接调块级方法，兜底必须留在那）。
+   - offsetType 宿主：删除 `!hasOffsetFunction()` guard，破坏保留/整格碰撞对它们照常生效。
+   - `PlacementMixin` 的 `MultifaceBlock` 改为全版本目标（`getStateForPlacement` 全版本由它声明）。
+   - 熔岩桶右键：删除 `BucketUseMixin`，桶交互完全走原版路径（`useItemOn` 通过 →
+     `useItem` → `emptyContents` → `BucketItemMixin`）——原版交互消费右键的宿主
+     （活板门/箱子/末影箱/光源/告示牌/装饰陶罐/搁物架/雕像）不灌入，与原版水桶同规则；
+     审计文档对"1.21.1+ 不再灌入"的推断是错的（基类钩子本就覆盖未声明交互的宿主），
+     §4.7 的真实问题是"强制灌入凌驾原版交互"，不是"灌不进"。
+     顺带修复 `BucketItemUseMixin` 在 ≤1.21.1 的 CCE（CIR 类型写成了 1.21.10+ 的）。
+   - 验收口径固定为四个差集全零（A-B / B-C / C-B / C-S），提交后跑
+     `python tools/audit_host_coverage.py <guardian> .` 复核；"覆写遮蔽"清单里
+     已被新 mixin 接管的条目会标为"覆写已接管"。

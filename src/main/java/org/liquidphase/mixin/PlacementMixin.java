@@ -73,12 +73,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
         LightningRodBlock.class,
         MangrovePropaguleBlock.class,
         MangroveRootsBlock.class,
-        //? if 1.21.10 || 1.21.11 || 26.3 {
-        //? if 1.21.10 || 1.21.11 || 26.3 {
+        // 多面体家族全部版本都继承 MultifaceBlock、且 getStateForPlacement 全版本都由它声明
+        //（guardian 逐版本核对过）。0.1.12 及以前这里被包在 1.21.10+ 分支里，1.19.4–1.21.1 的
+        // glow_lichen / sculk_vein 放进熔岩源格不吸收相（audit §4.6；0.1.13 修）。
         MultifaceBlock.class,
-        //?}
-
-        //?}
         //? if 1.19.4 || 1.20.1 || 1.21.1 || 1.21.10 || 1.21.11 {
         PointedDripstoneBlock.class,
         //?} else {

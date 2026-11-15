@@ -116,24 +116,29 @@
   方块模型渲染，宿主本体仍由各自的原版渲染路径绘制。
 - **状态数会明显增加**：`phase` 从 8 个取值变成 24 个，1.21.11 加载后的总状态数约 51 万
   （0.1.4 约 17.6 万），启动注入时间相应变长；低内存环境请留意。
-- 含固相方块的**相覆盖层会让方块看起来像整格黑曜石/冰**（内缩 0.25px 的立方体），但碰撞与挖掘仍按宿主：
-  准星落在宿主露出的部分就挖宿主，落在相露出的部分就挖相。黑曜石相需要钻石镐才能挖动相本身
+- 含固相方块的**相覆盖层会让方块看起来像整格黑曜石/冰**，碰撞也是**整格实心**（对所有宿主一致，
+  0.1.13 起"整格碰撞"挂在状态级，栅栏/玻璃板/铁栏杆、墙、墙悬挂告示牌、脚手架这些
+  自己覆写碰撞的宿主也生效）；挖掘按双口径：准星落在宿主露出的部分就挖宿主，
+  落在相露出的部分就挖相。黑曜石相需要钻石镐才能挖动相本身
   （没有钻石镐时按黑曜石速度计算，非常慢——这是有意的设计，不是卡死）。
-- 整格模型宿主（树叶/铜格栅/红树根）含黑曜石/冰相时整格显示相材质，不再显示宿主贴图。
-  哪些宿主算"整格"由构建时按模型几何自动判定（不再手写清单），新版本新增的树叶会被自动识别。
-- ⚠️ **已核实的覆盖面缺口（0.1.12 仍未修）**，逐条见 `docs/host-coverage-audit.md`：
-  - 台阶/双砖的 `type=double` 变体：整格判定是方块级的，双台阶必然走内缩覆盖层，
-    **含固相看不见**（57–101 个宿主）。已知获得途径是"半砖已有相 → 再叠一块"。
-  - 台阶/蜡烛/营火/干化恶魂自己覆写了 `placeLiquid`/`canPlaceLiquid`，
-    遮住了"熔岩相被相邻熔岩灌入"这条路径（桶、发射器、放置吸收不受影响）。
-  - 固相的"整格碰撞"只对不覆写块级 `getCollisionShape` 的宿主成立；
-    栅栏/玻璃板/铁栏杆、墙、墙悬挂告示牌、脚手架的固相碰撞仍是宿主形状。
-  - 带 `offsetType` 的 4–5 个宿主（`hanging_roots`/`mangrove_propagule`/`pointed_dripstone`/
-    `small_dripleaf`/26.3 `sulfur_spike`）破坏时**不留下相**。
-  - 1.19.4 / 1.20.1 的 `barrier` 拿到了 `phase` 但原版没有 `WATERLOGGED` 属性，
-    水桶/空桶/水流可能抛 `IllegalArgumentException`（`barrier` 在这两个版本建议不用）。
-  - 1.21.1+ 起活板门/箱子/末影箱/光源方块的 `useWithoutItem` 会消费右键，
-    熔岩桶右键这些宿主不再灌入（≤1.20.1 可以）。
+- 整格模型宿主（树叶/铜格栅/红树根）与台阶的 `type=double` 变体含黑曜石/冰相时整格显示相材质，
+  不再显示宿主贴图；台阶的半砖变体仍是"宿主 + 内缩覆盖层"。哪些变体算"整格"由构建时按
+  模型几何自动判定（不再手写清单），新版本新增的树叶会被自动识别。
+- **熔岩桶右键按原版倒水优先级**（0.1.13 起，与原版"水桶点方块"完全同规则）：
+  原版交互不消费右键的宿主（楼梯/台阶/栅栏/玻璃板/树叶等）→ 右键直接灌入；
+  原版交互消费右键的宿主（**活板门开关、箱子/末影箱开箱、光源方块调亮度、告示牌开编辑、
+  装饰陶罐收纳、搁物架/铜傀儡雕像交互**）→ 原版行为优先、不灌入，
+  和"水桶点活板门只会开关它"一样。要给这些宿主灌相：**潜行右键**（原版绕过方块交互）、
+  发射器、或放置吸收（拿方块放进熔岩源格）。各版本行为一致（0.1.12 及以前 ≤1.20.1
+  会无视原版交互强制灌入）。
+- **覆盖面缺口已在 0.1.13 全部收口**（审计与修复过程见 `docs/host-coverage-audit.md`）：
+  双台阶含固相看不见、台阶/蜡烛/营火/干化恶魂灌不进相邻熔岩、固相整格碰撞只覆盖一半宿主、
+  带 `offsetType` 的宿主破坏不留相、`PlacementMixin` 在 1.19.4–1.21.1 漏 `MultifaceBlock`、
+  1.19.4/1.20.1 `barrier` 的 `IllegalArgumentException` 崩溃面（这两个版本的 `barrier`
+  不再是相容宿主，本就不含水）、熔岩桶右键的版本不一致——全部按上文两条说明处理。
+  1.21.1+ 的 `barrier` 仍是相容宿主（红石相正常显示），但桶/放置吸收/相邻熔岩充不进相：
+  原版对 barrier 的流体接受是"创造模式限定"，而相充入的探测调用不携带玩家身份
+  （0.1.12 起如此，非本次改动；熔岩桶点 barrier 只是拒绝，不会崩）。
 - 状态数会随宿主数量增长（每宿主 ×23 相取值，其中 16 个 redstone 值编码功率）；
   已在各版本实测编译与加载，1.19.4 这类低内存环境请留意内存占用。
 - 1.19.4/1.20.1 的状态注入使用 **Statement** 依赖（会自动随 mod 提供）。
@@ -148,22 +153,53 @@
 
 ## 变更记录
 
-- **未发布（覆盖面审计：历史补丁哪些宿主没覆盖到）**：
-  新增 `tools/audit_host_coverage.py` 与 `docs/host-coverage-audit.md`，把"哪些方块应当能含相"
-  与"实际覆盖了哪些"拆成四条链路（A 原版真值 / B 注入 phase / C 生成清单 / S 红石外壳）逐版本、
-  逐提交做差集，并顺带检查"能力被宿主覆写遮蔽"的三类缺口。结论摘要：
-  - **历史**：`B-C`（有 `phase` 属性、无 blockstate）从 0.1.0 到 0.1.11 一直是
-    1 / 1 / 0 / 24 / 24 / 197，**0.1.9、0.1.10、0.1.11 三次"显示修复"都建立在同一份错误清单上**，
-    当时的回归断言只抽查清单里确实存在的代表方块，所以三次都自证通过；0.1.12 的
-    `EXPECTED_COUNTS` + 双向集合比对才真正消掉。另有 `C-S`（无红石外壳）0.1.5–0.1.8 为
-    267 / 269 / 296 / 345 / 345 / 267，0.1.9 起归零。
-  - **现存 7 处**（详见文档，按风险排序）：`barrier` 在 1.19.4/1.20.1 会因缺 `WATERLOGGED`
-    抛 `IllegalArgumentException`；双台阶含固相看不见（57–101 个）；台阶/蜡烛/营火/干化恶魂
-    灌不进相邻熔岩（76–121 个）；固相整格碰撞只覆盖一半宿主（66–88 个）；带 `offsetType` 的
-    4–5 个宿主破坏不留相；`PlacementMixin` 在 1.19.4–1.21.1 漏 `MultifaceBlock`；
-    1.21.1+ 熔岩桶右键活板门/箱子/光源不再灌入。
-  - 本次只产出审计，**未改动任何行为代码**；上述缺口需要逐项确认取舍后再修
-    （尤其 `barrier` 与"整格碰撞"两项涉及设计口径，不是纯粹补漏）。
+- **0.1.13（相容宿主覆盖面：审计 + 7 处缺口全部收口）**：
+  - **审计**：新增 `tools/audit_host_coverage.py` 与 `docs/host-coverage-audit.md`，把
+    "哪些方块应当能含相"与"实际覆盖了哪些"拆成四条链路（A 原版真值 / B 注入 phase /
+    C 生成清单 / S 红石外壳）逐版本、逐提交做差集，并检查"能力被宿主覆写遮蔽"的三类缺口。
+    历史结论：`B-C`（有 `phase` 属性、无 blockstate）从 0.1.0 到 0.1.11 一直是
+    1 / 1 / 0 / 24 / 24 / 197，**0.1.9、0.1.10、0.1.11 三次"显示修复"都建立在同一份错误清单上**；
+    `C-S`（无红石外壳）0.1.5–0.1.8 为 267 / 269 / 296 / 345 / 345 / 267，0.1.9 起归零。
+  - **修复 ①（1.19.4/1.20.1 `barrier` 崩溃面，audit §4.2）**：这两个版本的 `BarrierBlock`
+    没有 `WATERLOGGED` 属性，注入 `PhaseCapable` 后水桶/空桶/水流一碰就在默认方法里抛
+    `IllegalArgumentException`。`BarrierBlock` 从这两个版本的 mixin 目标与 `.ids` 清单移除
+    （运行时注入数 309→308、311→310，`EXPECTED_COUNTS` 同步更新）。
+  - **修复 ②（双台阶含固相看不见，audit §4.1）**：整格判定从方块粒度改到**变体（part）粒度**
+    ——台阶是"混合模型"宿主（`type=double` 引用整块模型），方块级 `all(...)` 必然判否，
+    覆盖层整个藏在宿主模型里。现在整格变体换 `phase_*_full` 相材质、半砖变体保持
+    "宿主 + 内缩覆盖层"（条件用 `!double` 取反）。62 个台阶（1.21.11）受益。
+  - **修复 ③（台阶/蜡烛/营火/干化恶魂灌不进相邻熔岩，audit §4.3）**：这四类宿主自己
+    覆写 `canPlaceLiquid`/`placeLiquid`，遮住了 `PhaseCapable` 的熔岩分支。新增
+    `SlabLiquidMixin`（台阶：两个方法都接管）与 `HostPlaceLiquidMixin`（蜡烛/营火/
+    干化恶魂：`placeLiquid`），只接管熔岩分支，水仍走宿主原版逻辑。
+  - **修复 ④（固相整格碰撞只覆盖一半宿主，audit §4.4）**：整格碰撞从块级
+    `BlockBehaviour.getCollisionShape`（被栅栏/玻璃板/铁栏杆、墙、墙悬挂告示牌、脚手架、
+    `sculk_shrieker`、`big_dripleaf` 自己覆写而失效）移到**状态级**
+    `BlockStateBase.getCollisionShape` 的 RETURN（三参 + 走 `Cache` 的两参都挂），
+    对全部宿主一致生效，与"整格碰撞（D7）"的文档口径终于一致。
+  - **修复 ⑤（offsetType 宿主破坏不留相，audit §4.5）**：删掉 `!state.hasOffsetFunction()`
+    保护——`hanging_roots` / `mangrove_propagule` / `pointed_dripstone` / `small_dripleaf`
+    （26.3 另有 `sulfur_spike`）破坏后同样留下相实体化的方块。
+  - **修复 ⑥（放置吸收漏多面体，audit §4.6）**：`PlacementMixin` 的 `MultifaceBlock`
+    改为全版本目标（它的 `getStateForPlacement` 全版本由它声明），1.19.4–1.21.1 的
+    `glow_lichen` / `sculk_vein` 放进熔岩源格重新吸收相。
+  - **修复 ⑦（熔岩桶右键按原版倒水优先级，audit §4.7）**：删除 `BucketUseMixin`——
+    它在块级 `use`/`useItemOn` 上强制灌入，会凌驾原版方块交互（≤1.20.1 连箱子/告示牌都灌），
+    且审计文档对"1.21.1+ 不再灌入"的推断有误（`BlockBehaviour.useItemOn` 基类钩子
+    本就覆盖未声明交互的宿主）。现在熔岩桶右键与原版水桶完全同规则：
+    原版交互消费右键的宿主（活板门/箱子/末影箱/光源/告示牌/装饰陶罐/搁物架/雕像）不灌入，
+    其余宿主经 `useItem → emptyContents → BucketItemMixin` 灌入；潜行右键绕过交互照常灌入，
+    发射器/放置吸收不受影响。
+  - **顺带修复（潜伏 CCE）**：`BucketItemUseMixin` 在 ≤1.21.1 的 `CallbackInfoReturnable`
+    类型写成了 1.21.10+ 的 `InteractionResult`（宿主方法返回 `InteractionResultHolder`），
+    `setReturnValue` 后强转必崩。以前被 `BucketUseMixin` 提前消费右键而很少走到，
+    修复 ⑦ 后桶走原版路径，故按版本分支修正返回类型。
+  - **自检**：新增 6 组覆盖面回归断言（固相整格碰撞全量扫描两参+三参、offset 宿主破坏保留
+    全量扫描、遮蔽方法熔岩灌入、多面体放置吸收、真实玩家姿势的熔岩桶交互优先级、
+    台阶变体渲染资源），自检断言数 **147（1.19.4/1.20.1/1.21.1/26.3）/ 148（1.21.10）**，
+    六版本实测全过；`tools/audit_host_coverage.py` 的覆写遮蔽清单会标注已被新 mixin
+    接管的条目。
+  - 版本号 0.1.12 → 0.1.13，六版本重新构建并替换 dist。
 - **0.1.12（部分含红石方块不显示红石相：真正根因）**：
   - **根因：`tools/phase-blocks/<版本>.ids`（生成 blockstate 用的 id 清单）漏登记了运行时
     真的会被注入 `phase` 的方块。**
@@ -517,18 +553,23 @@ SOLID); translucent hosts (glass panes, stained glass) keep TRANSLUCENT. The sam
 `getMovingBlockRenderType`, so falling blocks and piston-moved phased blocks are not drawn on the opaque layer.
 This must be a mixin: the `BlockRenderLayerMap` table is rebuilt by the resource reload and silently loses mappings
 registered during client init.
-Phased blocks with a solid phase look like a full cube of that material, but collision and mining still follow the host: aim at the exposed host and
-it mines at host speed, aim at the exposed phase and it mines as the phase material (obsidian still needs a diamond pickaxe — that slowness is intended).
-Full-cube hosts (leaves, copper grates, mangrove roots, poplar leaves) show the phase material instead of the host texture while phased.
-Which hosts count as full-cube is decided from the model geometry at build time, not from a hand-maintained list.
-⚠️ That decision is **per block**, so a slab's `type=double` variant (which reuses the full block model) is still treated as a partial host →
-double slabs **do not show a solid phase at all** (57–101 hosts). See `docs/host-coverage-audit.md` §4.1.
-⚠️ Known host-coverage gaps are audited by `python tools/audit_host_coverage.py <guardian> .` and listed with per-version counts in
-`docs/host-coverage-audit.md`: lava fed from a neighbouring lava source does not work on slabs/candles/campfires/dried ghasts
-(they override `placeLiquid`), full-cube collision only applies to hosts that do not override the block-level `getCollisionShape`
-(fences, panes, bars, walls, wall hanging signs, scaffolding), `offsetType` hosts do not leave a phase behind when broken,
-`barrier` on 1.19.4/1.20.1 has no `WATERLOGGED` property and can throw on bucket/fluid interaction, and since 1.21.1
-right-clicking trapdoors/chests/light blocks with a lava bucket opens them instead of filling the phase.
+Phased blocks with a solid phase look like a full cube of that material, and the full-cube collision applies to **every** host
+(state-level since 0.1.13, including fences, panes, bars, walls, wall hanging signs and scaffolding that override the block-level
+shape); mining is two-lane: aim at the exposed host and it mines at host speed, aim at the exposed phase and it mines as the phase
+material (obsidian still needs a diamond pickaxe — that slowness is intended).
+Full-cube hosts (leaves, copper grates, mangrove roots, poplar leaves) show the phase material instead of the host texture while
+phased, and since 0.1.13 the decision is **per variant**: a slab's `type=double` swaps to the full phase material while its half-slab
+variants keep the host + inset overlay (previously double slabs hid the phase completely, 57–101 hosts).
+Lava buckets follow the vanilla water-bucket interaction priority (0.1.13): hosts whose vanilla interaction consumes the click
+(trapdoors toggle, chests/ender chests open, light blocks cycle, signs open the editor, decorated pots store the item, shelves/statues
+act) are not filled by a plain right-click — sneak right-click, dispensers and placing a block into a lava source still fill them;
+every other host fills on right-click through the vanilla `useItem` path, identical on all six versions.
+`barrier` is no longer a phase host on 1.19.4/1.20.1 (those versions have no `WATERLOGGED` on it — the old crash is gone); on 1.21.1+
+it stays a host, but bucket/placement filling is refused there (vanilla only accepts fluids on barriers in creative mode, unchanged).
+Slabs/candles/campfires/dried ghasts accept lava from neighbouring lava sources again (their shadowed `placeLiquid`/`canPlaceLiquid`
+lava branch is restored by dedicated mixins), and `offsetType` hosts leave their phase behind when broken.
+Known host-coverage invariants are audited by `python tools/audit_host_coverage.py <guardian> .` and documented with the 0.1.13
+fixes in `docs/host-coverage-audit.md` (§4 analysis, §6 resolution).
 The redstone shell's brightness follows its power level (0 = nearly dark, 15 = full bright), matching the vanilla wire colour ramp.
 Hosts whose vanilla `RenderShape` is not `MODEL` (barriers, light blocks, all sign blocks, and chest/pot families before 1.21.10) still render
 the phase: phased states are forced back to `MODEL`, while the host itself keeps being drawn by its own vanilla render path.

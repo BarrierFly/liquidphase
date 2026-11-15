@@ -52,9 +52,12 @@ COMMITS = {
 # 运行时实际注入的方块数（各版本 runServer 日志
 # `[Liquid Phase] injected phase property into N blocks`）。这是本脚本的验收口径：
 # 清单必须与"真的拿到 phase 属性的方块"一一对应，多一个少一个都会造成显示问题。
+# 1.19.4/1.20.1 不含 barrier：这两个版本的 BarrierBlock 没有 WATERLOGGED 属性，
+# 注入 PhaseCapable 会在默认方法里抛 IllegalArgumentException（audit §4.2，0.1.13 起
+# BarrierBlock 只进 1.21.1+ 的目标清单）。
 EXPECTED_COUNTS = {
-    "1.19.4": 309,
-    "1.20.1": 311,
+    "1.19.4": 308,
+    "1.20.1": 310,
     "1.21.1": 337,
     "1.21.10": 410,
     "1.21.11": 410,

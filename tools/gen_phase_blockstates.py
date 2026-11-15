@@ -24,6 +24,11 @@
 26.3 新增的白杨树叶就是靠这条自动判定才被正确识别的（手写清单会漏，漏了就等于
 "含冰相完全看不见"）。
 
+判定粒度是 **part（变体）**（0.1.13 修，audit §4.1）：台阶这类"混合模型"宿主里，
+`type=double` 变体引用整块模型（整格），`type=bottom/top` 引用半砖模型（非整格）——
+整格变体按整格宿主处理（宿主 part 限制在"宿主可见"的相 + 固体相整格相材质），
+非整格变体保持内缩覆盖层。方块粒度的 `all(...)` 会把双台阶的覆盖层整个藏进宿主模型。
+
 用法: python gen_phase_blockstates.py <client-jar> <ids-file> <out-dir>
 输出: <out-dir>/assets/minecraft/blockstates/<id>.json
 """
@@ -250,7 +255,7 @@ def host_parts(state_json):
     return parts
 
 
-def referenced_models(parts):
+def part_models(part):
     models = set()
 
     def walk(apply):
@@ -260,9 +265,35 @@ def referenced_models(parts):
         else:
             models.add(apply["model"])
 
-    for part in parts:
-        walk(part["apply"])
+    walk(part["apply"])
     return models
+
+
+def negate_condition(when):
+    """when 的取反，展开成**原版合法**的 AND/OR 组合。
+
+    NOT(a AND b) = OR(!a, !b)；NOT(key = "v1|v2") = AND(key != v1, key != v2)。
+    空条件（恒真）取反是恒假，返回 None，由调用方特判。
+    """
+    if not when:
+        return None
+    terms = []
+    for key, value in when.items():
+        values = value.split("|") if isinstance(value, str) else [str(value)]
+        negs = [{key: "!" + v.lstrip("!")} for v in values]
+        terms.append(negs[0] if len(negs) == 1 else {"AND": negs})
+    return terms[0] if len(terms) == 1 else {"OR": terms}
+
+
+def and_with_phase(value, cond):
+    """{"phase": 值} 与宿主条件按 AND 合并（结果必须是原版合法的 multipart 条件）。"""
+    if not cond:
+        return {"phase": value}
+    if _is_combiner(cond):
+        return {"AND": [cond, {"phase": value}]}
+    merged = dict(cond)
+    merged["phase"] = value
+    return merged
 
 
 def convert(state_json, geometry):
@@ -273,20 +304,60 @@ def convert(state_json, geometry):
     （`KeyValueCondition.instantiate` 会为它打 `Condition ... is always true` 警告，
     1.21.10+ 每个方块状态各一条，加载日志直接被刷屏）。
 
-    整格宿主例外：宿主 part 要限制在"宿主可见"的相（none|lava|redstone_*），
-    固体相下换成整格相材质。
+    整格判定按 **part（变体）** 粒度，不是方块粒度（0.1.13 修，audit §4.1）：
+    台阶是"混合模型"宿主——`type=bottom/top` 引用半砖模型（非整格），
+    `type=double` 引用整块模型（整格）。方块级 `all(...)` 必然判否，于是双台阶
+    含固相时整格宿主模型 + 0.25 内缩覆盖层，覆盖层完全藏在宿主内部、一点看不见。
+    现在按变体判定：
+    - 全部变体整格 → 维持原行为（宿主 part 限制在"宿主可见"的相，整格相材质替换）；
+    - 全部变体非整格 → 维持原行为（内缩覆盖层叠加）；
+    - 混合 → 整格变体的宿主 part 限制在"宿主可见"的相、固体相换整格相材质；
+      非整格变体保持宿主常驻 + 内缩覆盖层（条件取整格变体 when 的取反）。
     """
     parts = host_parts(state_json)
-    full_cube = bool(parts) and all(geometry.is_full_cube(m)
-                                    for m in referenced_models(parts))
-    overlays = FULL_OVERLAYS if full_cube else OVERLAYS
+    full_flags = []
+    for part in parts:
+        models = part_models(part)
+        full_flags.append(bool(models) and all(geometry.is_full_cube(m) for m in models))
 
-    if full_cube:
+    mode = "mixed"
+    if parts and all(full_flags):
+        mode = "full"
+    elif parts and not any(full_flags):
+        mode = "inset"
+    elif any(f and p.get("when") is None for f, p in zip(full_flags, parts)):
+        # 无条件的整格 part 会匹配**所有**状态，"非整格变体"不存在——按变体拆分无意义。
+        # 退回全内缩（相永远可见优先；这种 host 目前只在理论上存在）。
+        print("WARNING: host has an unconditional full-cube part; falling back to inset overlays",
+              file=sys.stderr)
+        mode = "inset"
+
+    if mode == "full":
         for part in parts:
             part["when"] = and_condition(part.get("when"), FULL_CUBE_HOST_CONDITION)
+        overlays = [(value, model, {"phase": value}) for value, model in FULL_OVERLAYS]
+    elif mode == "inset":
+        overlays = [(value, model, {"phase": value}) for value, model in OVERLAYS]
+    else:
+        full_whens = []
+        seen = set()
+        for part, full in zip(parts, full_flags):
+            if not full:
+                continue
+            key = json.dumps(part["when"], sort_keys=True)
+            if key not in seen:
+                seen.add(key)
+                full_whens.append(part["when"])
+            part["when"] = and_condition(part.get("when"), FULL_CUBE_HOST_CONDITION)
+        is_full_state = full_whens[0] if len(full_whens) == 1 else {"OR": full_whens}
+        is_inset_state = negate_condition(is_full_state)
+        overlays = [(value, model, and_with_phase(value, is_full_state))
+                    for value, model in FULL_OVERLAYS]
+        overlays += [(value, model, and_with_phase(value, is_inset_state))
+                     for value, model in OVERLAYS]
 
-    for value, model in overlays:
-        parts.append({"when": {"phase": value}, "apply": {"model": model}})
+    for value, model, when in overlays:
+        parts.append({"when": when, "apply": {"model": model}})
 
     # 红石外壳对**全部**宿主生成（不只 41 个楼梯/台阶/墙/栅栏）。
     # 任何相容宿主都能被写入 phase=redstone_*；只给一部分生成时，其余宿主
@@ -297,7 +368,7 @@ def convert(state_json, geometry):
             "when": {"phase": "redstone_%d" % power},
             "apply": {"model": redstone_model(power)},
         })
-    return {"multipart": parts}, full_cube
+    return {"multipart": parts}, mode
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +450,7 @@ def main():
 
     converted = 0
     full_cube_hosts = []
+    mixed_hosts = []
     missing = []
     problems = []
     written = set()
@@ -402,7 +474,7 @@ def main():
                 missing.append(block_id)
                 continue
             state = json.loads(zf.read(path).decode("utf-8"))
-            result, full_cube = convert(state, geometry)
+            result, mode = convert(state, geometry)
             bad = validate_result(result, known)
             if bad:
                 problems.append((block_id, bad[:3]))
@@ -411,8 +483,10 @@ def main():
             target.write_text(json.dumps(result, separators=(",", ":"), sort_keys=False), encoding="utf-8")
             written.add(target.name)
             converted += 1
-            if full_cube:
+            if mode == "full":
                 full_cube_hosts.append(block_id)
+            elif mode == "mixed":
+                mixed_hosts.append(block_id)
 
     # 删掉上一次生成、这一次不再产出的 blockstate。
     # 不清理的话，从 `<版本>.ids` 里移除某个 id 后旧文件仍留在输出目录里、继续被打进 jar：
@@ -433,9 +507,10 @@ def main():
     if missing:
         print("WARNING: %d ids missing blockstates in jar: %s%s"
               % (len(missing), missing[:10], "..." if len(missing) > 10 else ""))
-    print("converted %d/%d blockstates (%d full-cube hosts) -> %s"
-          % (converted, len(ids), len(full_cube_hosts), out_dir))
+    print("converted %d/%d blockstates (%d full-cube hosts, %d mixed-model hosts) -> %s"
+          % (converted, len(ids), len(full_cube_hosts), len(mixed_hosts), out_dir))
     print("full-cube hosts: %s" % ", ".join(full_cube_hosts))
+    print("mixed-model hosts (per-variant full swap): %s" % ", ".join(mixed_hosts))
     if problems:
         # 生成出来的条件如果原版解析器读不了，整份 blockstate 会导致该方块所有状态变 missing model。
         # 这里硬失败，避免把坏资源打进 jar（历史 bug：0.1.5 的 "(a)&(b)" 伪语法）。

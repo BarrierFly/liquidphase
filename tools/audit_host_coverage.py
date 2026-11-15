@@ -19,7 +19,10 @@
 另附"能力被宿主覆写遮蔽"的检查（mixin 挂在基类上，子类覆写不转调 super 就失效）：
 
     1. PhaseCapable 的 canPlaceLiquid / placeLiquid / pickupBlock 被宿主覆写
-    2. 块级 getCollisionShape 被宿主覆写（固相"整格碰撞"失效）
+       （0.1.13 起台阶/蜡烛/营火/干化恶魂由 SlabLiquidMixin / HostPlaceLiquidMixin
+       接管，清单里标为"覆写已接管"；1.21.1+ barrier 的覆写按原版创造模式语义有意不接管）
+    2. 块级 getCollisionShape 被宿主覆写（固相"整格碰撞"0.1.13 起挂在状态级，
+       这条只反映宿主自己的碰撞形状，不再是缺口）
     3. getStateForPlacement 的声明类不在 PlacementMixin 目标里（放置吸收失效）
 
 用法:
@@ -37,6 +40,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gen_phase_blocks as gpb  # noqa: E402
 
 VERSIONS = ["1.19.4", "1.20.1", "1.21.1", "1.21.10", "1.21.11", "26.3"]
+
+# 0.1.13 起由专门 mixin 接管的"覆写遮蔽"条目（(宿主类, 方法) → 接管 mixin）。
+# 这些条目不再是缺口，只作为接管记录打印（防止有人误以为还在漏）。
+LIQUID_COVERAGE = {
+    ("SlabBlock", "canPlaceLiquid"): "SlabLiquidMixin",
+    ("SlabBlock", "placeLiquid"): "SlabLiquidMixin",
+    ("CandleBlock", "placeLiquid"): "HostPlaceLiquidMixin",
+    ("CampfireBlock", "placeLiquid"): "HostPlaceLiquidMixin",
+    ("DriedGhastBlock", "placeLiquid"): "HostPlaceLiquidMixin",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -341,14 +354,18 @@ def audit(guardian, version, commit, mixin_src, placement_src, ids, shell):
                if any(set(ancestors(c, types)) & targets for c in classes if c in types)}
 
     cache = {}
-    shadow, collision, placement = {}, {}, {}
+    shadow, covered, collision, placement = {}, {}, {}, {}
     for bid, classes in hosts.items():
         cls = classes[0]
         hits = []
         for method in ("canPlaceLiquid", "placeLiquid", "pickupBlock"):
             owner, _ = nearest_override(cls, method, types, rels, cache)
             if owner:
-                hits.append((method, owner))
+                mixin = LIQUID_COVERAGE.get((owner, method))
+                if mixin:
+                    covered.setdefault(mixin, set()).add(bid)
+                else:
+                    hits.append((method, owner))
         if hits:
             shadow.setdefault(tuple(sorted(hits)), []).append(bid)
 
@@ -367,7 +384,7 @@ def audit(guardian, version, commit, mixin_src, placement_src, ids, shell):
         "b_c": sorted(runtime - set(ids)),
         "c_b": sorted(set(ids) - runtime),
         "c_s": sorted(set(ids) - set(shell)),
-        "shadow": shadow, "collision": collision, "placement": placement,
+        "shadow": shadow, "covered": covered, "collision": collision, "placement": placement,
     }
 
 
@@ -397,7 +414,11 @@ def print_detail(version, r):
         print("   覆写遮蔽 %-46s %4d hosts e.g. %s"
               % (",".join("%s@%s" % (m, c) for m, c in pattern), len(ids),
                  ", ".join(sorted(ids)[:4])))
+    for mixin, ids in sorted(r["covered"].items()):
+        print("   覆写已接管 %-45s %4d hosts（%s）" % (mixin + ":", len(ids), ", ".join(sorted(ids)[:4])))
     for cls, ids in sorted(r["collision"].items(), key=lambda kv: -len(kv[1])):
+        # 0.1.13 起固相"整格碰撞"挂在状态级 ShapeFallbackMixin（两参+三参 RETURN），
+        # 块级覆写不再影响碰撞；这条只反映"宿主自己的碰撞形状"这一结构事实。
         print("   块级碰撞被覆写 %-26s %4d hosts e.g. %s"
               % (cls, len(ids), ", ".join(sorted(ids)[:4])))
     for cls, ids in sorted(r["placement"].items(), key=lambda kv: -len(kv[1])):

@@ -141,7 +141,7 @@ public abstract class BlockStateBaseMixin {
     private void liquidphase$onRemove(Level level, BlockPos pos, BlockState newState, boolean movedByPiston, CallbackInfo ci) {
         BlockState self = (BlockState) (Object) this;
         if (!movedByPiston && newState.isAir() && level.getBlockState(pos).isAir()) {
-            if (PhaseHelper.isSolidPhase(self) && !self.hasOffsetFunction()) {
+            if (PhaseHelper.isSolidPhase(self)) {
                 level.setBlock(pos, PhaseHelper.materializedPhase(self), Block.UPDATE_ALL);
             } else if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {
                 org.liquidphase.redstone.RedstoneBlocks.materializeWire(level, pos, self);
@@ -153,7 +153,7 @@ public abstract class BlockStateBaseMixin {
     private void liquidphase$affectNeighborsAfterRemoval(ServerLevel level, BlockPos pos, boolean movedByPiston, CallbackInfo ci) {
         BlockState self = (BlockState) (Object) this;
         if (!movedByPiston && level.getBlockState(pos).isAir()) {
-            if (PhaseHelper.isSolidPhase(self) && !self.hasOffsetFunction()) {
+            if (PhaseHelper.isSolidPhase(self)) {
                 level.setBlock(pos, PhaseHelper.materializedPhase(self), Block.UPDATE_ALL);
             } else if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {
                 org.liquidphase.redstone.RedstoneBlocks.materializeWire(level, pos, self);

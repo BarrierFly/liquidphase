@@ -17,24 +17,19 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * 块级形状兜底 + 固相碰撞。
+ * 块级形状兜底（null → phase=none 的兄弟状态）。
  * <p>
- * ① 决策点 D7：固体相（冰/霜冰/黑曜石）的碰撞 = 整格实心（与"相填满宿主空隙"的视觉一致）。
- * ② 不少宿主把形状表按"构造时的全部状态"建 Map/Function，追加的 phase 状态查不到会返回
- *    null；{@code Cache} 构造时会 NPE。这里在块级把 null 兜回 {@code phase=none} 的兄弟状态。
+ * 不少宿主把形状表按"构造时的全部状态"建 Map/Function，追加的 phase 状态查不到会返回
+ * null；{@code Cache} 构造时会 NPE。这里在块级把 null 兜回 {@code phase=none} 的兄弟状态。
+ * 兜底必须留在块级：{@code Cache.<init>} 直接调块级 {@code getCollisionShape}，状态级钩子管不到它。
  * <p>
- * 红石相不参与这两项：它用宿主原有形状（不加碰撞、不改轮廓）。
+ * 固相"整格碰撞"（决策点 D7）**不在**这里：块级注入会被自己覆写 {@code getCollisionShape}
+ * 的宿主（栅栏/玻璃板/铁栏杆、墙、墙悬挂告示牌、脚手架、sculk_shrieker、big_dripleaf）
+ * 整个遮蔽。它已移到状态级 {@code ShapeFallbackMixin}（见 docs/host-coverage-audit.md §4.4），
+ * 对全部宿主一致生效。红石相两种注入都不参与：它用宿主原有形状。
  */
 @Mixin(BlockBehaviour.class)
 public abstract class BlockBehaviourMixin {
-
-    @Inject(method = "getCollisionShape", at = @At("RETURN"), cancellable = true)
-    private void liquidphase$solidPhaseCollision(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context,
-                                                 CallbackInfoReturnable<VoxelShape> cir) {
-        if (PhaseHelper.isSolidPhase(state) && !state.hasOffsetFunction()) {
-            cir.setReturnValue(Shapes.block());
-        }
-    }
 
     /** 需要形状兜底的状态：带相且不是 none（红石相也在内，形状表同样可能查不到）。 */
     private static boolean liquidphase$needsFallback(BlockState state) {

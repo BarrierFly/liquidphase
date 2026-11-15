@@ -127,6 +127,10 @@
 
 ## 4. 至今仍未覆盖的宿主（0.1.12 仍然存在）
 
+> **注（0.1.13）**：本节的 7 项已在 0.1.13 全部修复，修法与逐项更正见 **§6**；
+> 其中 §4.7 的核心推断（"1.21.1+ 熔岩桶不再灌入活板门/箱子/光源"）是**错的**，
+> 见 §6 的更正。本节以下保留 0.1.12 时的分析原文。
+
 以下各项**都没有被任何历史补丁触及**，与 §3 的清单问题无关。
 
 ### 4.1 台阶的 `type=double` 变体：含固相完全看不见（57–101 个宿主）
@@ -353,3 +357,40 @@ if (PhaseHelper.isSolidPhase(self) && !self.hasOffsetFunction()) { ... }
 覆盖面的验收口径建议固定在 `tools/audit_host_coverage.py` 的四个差集上：
 `A-B`、`B-C`、`C-B`、`C-S` **必须全为 0**；`B-A` 允许非空但必须逐个说明理由
 （当前唯一允许项是 §4.2，而它建议被移除而不是保留）。
+
+---
+
+## 6. 0.1.13 的处置（逐项修复记录）
+
+§4 的 7 处缺口在 0.1.13 全部处理完毕。以下是逐项的修法与**对本文档的更正**，
+历史分析（§1–§5）保持原样作为审计快照。
+
+| 项 | 修法 | 自检回归 |
+| --- | --- | --- |
+| §4.1 双台阶含固相看不见 | `tools/gen_phase_blockstates.py` 整格判定改到 **part（变体）粒度**：全部整格→原整格行为；全部非整格→原内缩行为；混合→整格 part 换 `phase_*_full` 相材质、宿主 part 限制在"宿主可见"的相，非整格 part 保持内缩（when 取整格条件的取反，如 `"type": "!double"`）。取反只用单值否定或 AND/OR 组合——`KeyValueCondition` 对 `"!a|b"` 多值否定的语义在 1.19.4 与 1.21.2+ 相反，不能写 | `checkSlabVariantRendering`（stone_slab 的 full/内缩两层条件） |
+| §4.2 barrier 1.19.4/1.20.1 崩溃面 | 采纳建议 ①：`BarrierBlock` 从这两个版本的 `PhaseCapableMixin` 目标、`closure.txt`、`.ids` 移除；`EXPECTED_COUNTS` 309→308、311→310。1.21.1+ 保留（那里有 `WATERLOGGED`） | `checkPhasePropertyCoverage`（清单==运行时）+ `checkPhasedRenderShape`（1.19.4/1.20.1 改用 `light` 顶上） |
+| §4.3 遮蔽的熔岩分支 | 新增 `SlabLiquidMixin`（台阶：`canPlaceLiquid`+`placeLiquid`）与 `HostPlaceLiquidMixin`（蜡烛/营火/干化恶魂：`placeLiquid`），只接管熔岩分支；水仍走宿主原版逻辑。**有意不接管** 1.21.1+ `barrier` 的 `canPlaceLiquid`/`pickupBlock`——原版语义是创造模式限定接受流体，探测调用拿不到玩家身份时本来就拒绝 | `checkAdjacentLavaFilling`（直接调遮蔽方法，与 `FlowingFluid` 同参；含反向断言"含水台阶仍拒绝熔岩"） |
+| §4.4 固相整格碰撞只覆盖一半宿主 | 采纳"移到状态级"：整格碰撞从 `BlockBehaviourMixin` 移到 `ShapeFallbackMixin`（`BlockStateBase.getCollisionShape` 的 RETURN），**三参（实体碰撞路径）+ 两参（`Cache.collisionShape` 缓存路径，`isCollisionShapeFullBlock` 走它）都挂**。块级 null 兜底保留（`Cache.<init>` 直接调块级方法，兜底必须留在那） | `checkSolidPhaseCollision`（栅栏/墙/墙悬挂告示牌/脚手架/big_dripleaf/楼梯/台阶逐一 + 全量扫描两参三参 + 红石相不参与的反向断言） |
+| §4.5 offsetType 宿主跳过 | 删除 `!state.hasOffsetFunction()` guard（实体化 hook 与块级碰撞注入两处；后者随 §4.4 整体移除） | `checkBreakRetainEverywhere`（全量扫描 offset 宿主：破坏后必须留冰；楼梯对照 + 扫描命中数下限） |
+| §4.6 PlacementMixin 漏 MultifaceBlock | `MultifaceBlock.class` 改为**全版本**目标（guardian 核对：`getStateForPlacement` 全版本都由 `MultifaceBlock` 声明，比"对齐 PhaseCapableMixin 的两个子类分支"更直接；handler 有 `instanceof PhaseCapable` 保护） | `checkPlacementAbsorption`（点熔岩源格旁石头侧面，context 落点=熔岩格，断言 `getStateForPlacement` 带熔岩相） |
+| §4.7 熔岩桶右键跨版本不一致 | **更正：§4.7 的核心推断是错的。** `BucketUseMixin` 在 ≥1.21.1 目标清单里有 `BlockBehaviour` 基类，未声明 `useItemOn` 的宿主（活板门/箱子/末影箱/光源）dispatch 全部落到基类 → 灌入在 `useItemOn` HEAD 就发生，`useWithoutItem` 根本没机会消费右键——"1.21.1+ 不再灌入"不成立，两个年代的行为其实一致（都强制灌入）。真实问题是**强制灌入凌驾原版交互**（≤1.20.1 连箱子/告示牌都灌）。按"参照原版倒水的交互"：删除 `BucketUseMixin`，桶交互完全走原版路径（`useItemOn` 通过 → `useItem` → `emptyContents` → `BucketItemMixin`）：原版交互消费右键的宿主不灌入（水桶点活板门只会开关它——同规则），其余宿主照常灌入；潜行右键绕过交互照常灌入；发射器/放置吸收不变。**顺带修复**：`BucketItemUseMixin` 在 ≤1.21.1 的 CIR 类型写成了 1.21.10+ 的 `InteractionResult`（宿主返回 `InteractionResultHolder`），`setReturnValue` 后强转必崩——以前被 `BucketUseMixin` 提前消费右键而很少走到，桶走原版路径后成了必经之路，按版本分支修正 | `checkBucketInteraction`（FakePlayer：楼梯灌入、活板门被原版开关不灌、光源方块保持原版交互不灌） |
+
+修复后的审计输出：四个差集全零；"覆写遮蔽"清单只剩 1.21.1+ `barrier` 的
+`canPlaceLiquid`/`pickupBlock`（有意不接管，见上）；台阶/蜡烛/营火/干化恶魂的条目
+标为"覆写已接管"（`SlabLiquidMixin` / `HostPlaceLiquidMixin`）；
+"块级碰撞被覆写"条目保留为结构信息（固相碰撞已不依赖块级）。
+
+### 6.1 经验
+
+1. **"基类 mixin 覆盖一切未声明者"这一层，读审计结果时必须想到。** §4.7 的错误推断
+   正是漏了它：`@Mixin(BlockBehaviour.class)` 的注入对所有不覆写方法的子类生效，
+   与"目标清单里有没有那个具体类"无关。
+2. **mixin 只能注入目标类自己声明的方法**（AGENTS §4）反过来也限制了修复方式：
+   `HostPlaceLiquidMixin` 能挂在蜡烛/营火上是因为它们真声明了 `placeLiquid`；
+   `canPlaceLiquid` 只有台阶声明，所以两个 mixin 必须分开（共享 mixin 的注入点
+   在未声明该方法的宿主上会直接报错，不能用 `require = 0` 掩盖）。
+3. **CCE 类潜伏 bug 的教训**：跨版本改签名时，`CallbackInfoReturnable` 的类型参数
+   是编译期擦除的，mixin 不检查；`setReturnValue` 的值最终会被强转回宿主返回类型。
+   返回类型分版本的地方（`Item.use` 1.21.2 的返回类型重构）必须连 CIR 一起分支。
+4. **多值否定不可跨版本**：`"!a|b"` 在 1.19.4 语义是 NOT(a|b)，1.21.2+ 是 (NOT a)|b。
+   生成资源里的否定一律拆成单值否定或显式 AND/OR 组合。
