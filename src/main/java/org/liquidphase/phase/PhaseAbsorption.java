@@ -52,4 +52,14 @@ public final class PhaseAbsorption {
     public static boolean isPhaseMaterialItem(ItemStack stack) {
         return stack.getItem() instanceof BlockItem item && phaseOfItem(item.getBlock()) != null;
     }
+
+    /**
+     * {@return 手持物品是否为"填充相材料"（可写进宿主格的相材料）：
+     * 冰/霜冰/黑曜石的 BlockItem，或红石粉（红石线的物品形态）。}
+     * 与 {@link #isPhaseMaterialItem} 的差别：红石粉也算填充相材料（写红石相）。
+     */
+    public static boolean isFillingMaterialItem(ItemStack stack) {
+        return stack.getItem() instanceof BlockItem item
+            && (phaseOfItem(item.getBlock()) != null || item.getBlock() == Blocks.REDSTONE_WIRE);
+    }
 }

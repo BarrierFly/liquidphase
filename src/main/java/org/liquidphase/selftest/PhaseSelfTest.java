@@ -78,6 +78,8 @@ public final class PhaseSelfTest {
             checkBucketInteraction(level, base);
             checkDispenserHostFilling(level, base);
             checkLavaReflowWiring(level, base);
+            checkIndirectPhaseAbsorption(level, base);
+            checkUniversalFillingPlacement(level, base);
             checkSlabVariantRendering();
         } catch (Throwable t) {
             failed++;
@@ -1244,6 +1246,91 @@ public final class PhaseSelfTest {
         }
     }
 
+    /**
+     * 非直接点击吸收（0.1.16 新增手势）：点**旁边**的方块让红石粉/冰"落进"相容宿主格——
+     * 原版对不可替换的落点格直接 FAIL，这条路径此前从未被接管（用户实测缺口）。
+     * 反向：落点格是空气时走原版放置（红石粉落成线、冰落成方块），宿主不受影响。
+     */
+    private static void checkIndirectPhaseAbsorption(ServerLevel level, BlockPos base) {
+        // 注意坐标语义：32 是被点击的石头，33/34 是落点格；破坏保留会把含固相的方块
+        // 实体化成相材料（冰/黑曜石），所以每个子场景结束时必须把材料方块一并清掉。
+        BlockPos stonePos = base.offset(32, 1, 0);
+        BlockPos targetA = base.offset(33, 1, 0);
+        BlockPos targetB = base.offset(34, 1, 0);
+        level.setBlock(stonePos, Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        // (1) 红石粉落进栅栏格 → 红石相
+        level.setBlock(targetA, Blocks.OAK_FENCE.defaultBlockState(), Block.UPDATE_ALL);
+        liquidphase$placeBlockInto(level, Blocks.REDSTONE_WIRE, stonePos, Direction.EAST);
+        assertTrue("indirect dust lands into fence as redstone phase",
+            RedstoneBlocks.isRedstonePhase(level.getBlockState(targetA)));
+        level.setBlock(targetA, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        // (2) 冰落进树叶格 → 冰相
+        level.setBlock(targetA, Blocks.OAK_LEAVES.defaultBlockState(), Block.UPDATE_ALL);
+        liquidphase$placeBlockInto(level, Blocks.ICE, stonePos, Direction.EAST);
+        assertTrue("indirect ice lands into leaves as ice phase",
+            PhaseHelper.getPhase(level.getBlockState(targetA)) == Phase.ICE);
+        // 冰相破坏保留会把冰实体化，换用 targetB 做原版对照
+        level.setBlock(targetA, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        // (3) 反向：落点格是空气 → 原版放置（红石粉落成线）
+        level.setBlock(targetB.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        liquidphase$placeBlockInto(level, Blocks.REDSTONE_WIRE, targetA, Direction.EAST);
+        assertTrue("dust into air cell stays vanilla wire",
+            level.getBlockState(targetB).is(Blocks.REDSTONE_WIRE));
+        level.setBlock(targetB, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(targetB.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        // (4) 反向：非相材料（石头）落进栅栏格 → 原版 FAIL，栅栏不变
+        level.setBlock(targetA, Blocks.OAK_FENCE.defaultBlockState(), Block.UPDATE_ALL);
+        liquidphase$placeBlockInto(level, Blocks.STONE, stonePos, Direction.EAST);
+        assertTrue("stone item does not replace the host cell",
+            level.getBlockState(targetA).is(Blocks.OAK_FENCE));
+        level.setBlock(targetA, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(stonePos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+    }
+
+    /**
+     * 通用放置改写层（0.1.16）：任意来源经 {@code Level.setBlock} 向无相未含水宿主格
+     * 写填充相材料（冰/黑曜石/红石线）→ 改写为宿主 + 填充相。同时断言排除口径：
+     * 非材料方块、水、已有相的宿主都不改写。
+     */
+    private static void checkUniversalFillingPlacement(ServerLevel level, BlockPos base) {
+        BlockPos pos = base.offset(35, 1, 0);
+        // (1) 冰写进栅栏格 → 栅栏 + 冰相
+        level.setBlock(pos, Blocks.OAK_FENCE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(pos, Blocks.ICE.defaultBlockState(), Block.UPDATE_ALL);
+        assertTrue("universal: ice setBlock into fence becomes ice phase",
+            level.getBlockState(pos).is(Blocks.OAK_FENCE)
+                && PhaseHelper.getPhase(level.getBlockState(pos)) == Phase.ICE);
+        // (2) 黑曜石写进含冰栅栏格 → 互斥，原版覆盖
+        level.setBlock(pos, Blocks.OBSIDIAN.defaultBlockState(), Block.UPDATE_ALL);
+        assertTrue("universal: obsidian setBlock replaces the phased host (mutex)",
+            level.getBlockState(pos).is(Blocks.OBSIDIAN));
+        // (3) 红石线写进栅栏格 → 栅栏 + 红石相（功率随线）
+        level.setBlock(pos, Blocks.OAK_FENCE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(pos, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
+        assertTrue("universal: wire setBlock into fence becomes redstone phase",
+            level.getBlockState(pos).is(Blocks.OAK_FENCE)
+                && RedstoneBlocks.isRedstonePhase(level.getBlockState(pos)));
+        // (4) 水写进栅栏格 → 不在材料口径（走容器路径），原版覆盖
+        level.setBlock(pos, Blocks.OAK_FENCE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(pos, net.minecraft.world.level.material.Fluids.WATER.defaultFluidState().createLegacyBlock(),
+            Block.UPDATE_ALL);
+        assertTrue("universal: water setBlock is not converted (container path owns water)",
+            level.getBlockState(pos).is(Blocks.WATER));
+        // (5) 接受层：冰物品的放置上下文里栅栏"可替换"；石头物品不可；含水栅栏不可
+        level.setBlock(pos, Blocks.OAK_FENCE.defaultBlockState(), Block.UPDATE_ALL);
+        BlockPlaceContext iceCtx = liquidphase$context(level, Blocks.ICE, pos.west(), Direction.EAST);
+        BlockPlaceContext stoneCtx = liquidphase$context(level, Blocks.STONE, pos.west(), Direction.EAST);
+        assertTrue("acceptance: fence is replaceable for an ice item placement",
+            level.getBlockState(pos).canBeReplaced(iceCtx));
+        assertTrue("acceptance: fence is NOT replaceable for a stone item placement",
+            !level.getBlockState(pos).canBeReplaced(stoneCtx));
+        level.setBlock(pos, Blocks.OAK_FENCE.defaultBlockState()
+            .setValue(BlockStateProperties.WATERLOGGED, true), Block.UPDATE_ALL);
+        assertTrue("acceptance: waterlogged fence is NOT replaceable for an ice item placement",
+            !level.getBlockState(pos).canBeReplaced(iceCtx));
+        level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+    }
+
     /** 清空某位置全部流体 scheduled tick（自检场地复用坐标，残留 tick 会污染 hasScheduledTick）。 */
     private static void clearFluidTicks(ServerLevel level, BlockPos pos) {
         ((net.minecraft.world.ticks.LevelChunkTicks<net.minecraft.world.level.material.Fluid>) level.getChunkAt(pos).getFluidTicks())
@@ -1298,7 +1385,7 @@ public final class PhaseSelfTest {
     }
 
     private static void clearArea(ServerLevel level, BlockPos base) {
-        for (int x = -1; x <= 31; x++) {
+        for (int x = -1; x <= 35; x++) {
             for (int y = 0; y <= 2; y++) {
                 for (int z = -1; z <= 9; z++) {
                     level.setBlock(base.offset(x, y, z), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);

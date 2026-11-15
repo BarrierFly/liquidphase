@@ -32,7 +32,7 @@
 | 瞄准与直接挖相（含整格宿主/形状表宿主的命中判定） | `phase/PhaseTargeting.java` |
 | 状态级核心 mixin（流体态/光照/随机刻/破坏保留/邻居） | `mixin/BlockStateBaseMixin.java` |
 | 自带状态注入器（1.21.1+） | `state/PhaseStateRefresher.java` + `mixin/state/*` + `state/*Duck` |
-| 桶/放置/交互 mixin | `mixin/BucketItem*Mixin.java`、`mixin/PlacementMixin.java`、`mixin/BlockItemMixin.java`；遮蔽宿主的熔岩分支在 `mixin/SlabLiquidMixin.java` + `mixin/HostPlaceLiquidMixin.java`（0.1.13，audit §4.3）。原 `BucketUseMixin` 已删除（0.1.13，audit §4.7：桶交互完全走原版路径） |
+| 桶/放置/交互 mixin | `mixin/BucketItem*Mixin.java`、`mixin/PlacementMixin.java`、`mixin/BlockItemMixin.java`（含落点格吸收）；`mixin/FillingReplaceMixin`（接受层）+ `mixin/FillingPlacementMixin`（`Level.setBlock` 通用改写层）；遮蔽宿主的熔岩分支在 `mixin/SlabLiquidMixin.java` + `mixin/HostPlaceLiquidMixin.java`（0.1.13，audit §4.3）。原 `BucketUseMixin` 已删除（0.1.13，audit §4.7：桶交互完全走原版路径） |
 | 冻结接线 | `mixin/ServerLevelMixin.java`（`tickChunk` ≤1.20.1 / `tickPrecipitation` 1.21.1+） |
 | 炼药锅 | `cauldron/CauldronBehaviors.java`、`CauldronBehaviorRegistration.java`、`CauldronHopperTransfer.java`、`ConcreteMappings.java` |
 | 发射器/漏斗 | `interact/LiquidInteractions.java`、`mixin/HopperTransferMixin.java` |

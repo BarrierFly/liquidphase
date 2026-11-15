@@ -38,6 +38,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * 另外保留原有的"放置吸收"语义（同样只看手里的方块物品与命中的方块）：
  * (a0) 红石粉点相容宿主 → 写红石相；(a) 相材料物品点宿主 → 写相；
  * (b) 相容宿主点相材料方块 → 吸收该相。
+ * 0.1.16 起同样的吸收逻辑也作用于"落点格"：点旁边的方块让红石粉/冰/宿主落进
+ * 相容宿主格（原版会因不可替换直接 FAIL 的那条路径），同样写相。
  */
 @Mixin(BlockItem.class)
 public abstract class BlockItemMixin {
@@ -85,44 +87,64 @@ public abstract class BlockItemMixin {
         if (hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) {
             return;
         }
+        // 依次对"点击格"与"落点格"尝试吸收（判定只依据放的是哪个方块、落到哪一格）：
+        // - 点击格 = 被点击的方块本身（直接点宿主/相材料，原有路径）；
+        // - 落点格 = context.getClickedPos()（0.1.16 新增）：点旁边的方块让红石粉/冰/
+        //   宿主"落进"目标格。原版对不可替换的落点格直接 FAIL——这条路径此前从未
+        //   被接管，表现为"非直接点击放置失败"（用户实测缺口）。
         BlockPos hitPos = hit.getBlockPos();
-        BlockState hitState = level.getBlockState(hitPos);
+        if (liquidphase$absorbInto(level, context, hitPos)) {
+            cir.setReturnValue(liquidphase$success(level));
+            return;
+        }
+        BlockPos landedPos = context.getClickedPos();
+        if (!landedPos.equals(hitPos) && liquidphase$absorbInto(level, context, landedPos)) {
+            cir.setReturnValue(liquidphase$success(level));
+            return;
+        }
+    }
+
+    /**
+     * 对目标格尝试相吸收（红石粉写红石相 / 相材料物品写相 / 相容宿主吸相材料格的相）。
+     * {@code true} = 已吸收（物品已消耗，放置结束）；{@code false} = 目标格不适用，交给原版流程。
+     */
+    private boolean liquidphase$absorbInto(Level level, BlockPlaceContext context, BlockPos target) {
+        BlockState targetState = level.getBlockState(target);
         Block held = this.getBlock();
         Player player = context.getPlayer();
         ItemStack stack = context.getItemInHand();
 
         // (a0) 红石粉指向相容宿主 → 该格写入红石相（§3.4）。
         if (held == Blocks.REDSTONE_WIRE
-            && hitState.getBlock() instanceof PhaseCapable
-            && !RedstoneBlocks.isRedstonePhase(hitState)
-            && PhaseHelper.getPhase(hitState) == Phase.NONE
-            && (!hitState.hasProperty(BlockStateProperties.WATERLOGGED)
-                || !hitState.getValue(BlockStateProperties.WATERLOGGED))
-            && RedstoneBlocks.setRedstonePhase(level, hitPos, hitState, 15)) {
+            && targetState.getBlock() instanceof PhaseCapable
+            && !RedstoneBlocks.isRedstonePhase(targetState)
+            && PhaseHelper.getPhase(targetState) == Phase.NONE
+            && (!targetState.hasProperty(BlockStateProperties.WATERLOGGED)
+                || !targetState.getValue(BlockStateProperties.WATERLOGGED))
+            && RedstoneBlocks.setRedstonePhase(level, target, targetState, 15)) {
             liquidphase$consume(stack, player);
-            cir.setReturnValue(liquidphase$success(level));
-            return;
+            return true;
         }
 
-        // (a) 相材料物品 → 写入被点击的相容宿主。
+        // (a) 相材料物品 → 写入相容宿主。
         Phase fromItem = PhaseAbsorption.phaseOfItem(held);
-        if (fromItem != null && hitState.getBlock() instanceof PhaseCapable
-            && PhaseHelper.fillWithPhase(level, hitPos, hitState, fromItem)) {
+        if (fromItem != null && targetState.getBlock() instanceof PhaseCapable
+            && PhaseHelper.fillWithPhase(level, target, targetState, fromItem)) {
             liquidphase$consume(stack, player);
-            cir.setReturnValue(liquidphase$success(level));
-            return;
+            return true;
         }
 
-        // (b) 相容宿主 → 放进相材料方块本体所在格。
-        Phase fromBlock = PhaseAbsorption.phaseOfBlock(hitState);
+        // (b) 相容宿主 → 放进相材料方块本体所在格（吸收该格的相）。
+        Phase fromBlock = PhaseAbsorption.phaseOfBlock(targetState);
         if (fromBlock != null && held instanceof PhaseCapable) {
             BlockState hostState = held.getStateForPlacement(context);
-            if (hostState != null && PhaseHelper.canAcceptPhase(hostState, level, hitPos, fromBlock)) {
-                level.setBlock(hitPos, PhaseHelper.withPhase(hostState, fromBlock), Block.UPDATE_ALL);
+            if (hostState != null && PhaseHelper.canAcceptPhase(hostState, level, target, fromBlock)) {
+                level.setBlock(target, PhaseHelper.withPhase(hostState, fromBlock), Block.UPDATE_ALL);
                 liquidphase$consume(stack, player);
-                cir.setReturnValue(liquidphase$success(level));
+                return true;
             }
         }
+        return false;
     }
 
     private static void liquidphase$consume(ItemStack stack, Player player) {
