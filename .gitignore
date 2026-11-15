@@ -3,6 +3,8 @@ build/
 versions/*/build/
 test-server/
 run/
+# 客户端渲染回归（:1.21.11:runClientGameTest）的独立运行目录：日志/存档/截图都在里面
+versions/*/run-clientgametest/
 *.log
 .idea/
 __pycache__/

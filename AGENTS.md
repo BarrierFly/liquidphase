@@ -486,6 +486,39 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 
 ### 3.4 自动化自检
 
+#### 3.4.0 客户端渲染回归（1.21.11 `runClientGameTest`）
+
+服务端自检只能看 jar 里的 blockstate JSON，看不到"真实客户端烘焙出来的模型"。栅栏是最典型的
+"形状表型宿主"（`FenceBlock` 自建 occlusion 形状表、1.21.10+ 在 `getOcclusionShape` 里手工查表），
+所以单开一个**真实客户端**回归：
+
+```bash
+./gradlew :1.21.11:runClientGameTest
+```
+
+- 代码：`src/main/java/org/liquidphase/client/FenceRedstoneRenderTest.java`（`fabric-client-gametest`
+  入口，由 `build.gradle.kts` 的 `extra_gametest_entrypoint` 只对 1.21.11 注入 `fabric.mod.json`）。
+- run config：`build.gradle.kts` 的 `loom.runs.create("clientGameTest")`，运行目录
+  **`versions/1.21.11/run-clientgametest/`**（刻意与 `run/` 分开：新目录里没有 `resourcepacks/`，
+  等于"无资源包"的干净客户端）。日志与截图都在该目录下，已加进 `.gitignore`。
+- 必须带 `-Dfabric.client.gametest.disableNetworkSynchronizer=true`：本 mod 的握手包走自定义通道，
+  gametest 的网络同步器会判成 `interfacing with packets at a lower level` 并让 run 失败。
+- 场景：地板 + 一列含相栅栏（先写 `redstone_0`，再由紧邻的真实红石线算出功率）+ 两段无相栅栏对照，
+  另有一处 0 档（无红石线）对照。断言逐格检查：
+  1. **宿主 quad 和外壳 quad 都在**（红石相是叠加，不能让宿主消失，也不能没有外壳）；
+  2. 区块图层不是 `SOLID`（外壳透明底，SOLID 会丢像素）；
+  3. 外壳 quad 顶点落在本格内（方块空间 0..1，宽松量 0.01px 外扩）。
+- 每次会落三张截图到 `screenshots/`：斜视、近垂直俯视、0 档对比。
+
+> ⚠️ 只在 **1.21.11** 接线：`BakedQuad.position(int)` 是这一版才有的 API（1.21.10 的顶点还打包在
+> `int[] vertices` 里），其余版本的渲染覆盖仍靠服务端自检 + `tools/verify_jars.py`。
+>
+> ⚠️ 截图里**地面上的红色碎屑属于原版红石线**，不是本 mod 的外壳几何。判定方法（本轮实测）：
+> 把相写成 `redstone_0` 后外壳变暗红、栅栏表面随之变暗，而地面碎屑亮度不变；而且"只放线不放栅栏"
+> 与"有栅栏但隔一格无线"两种场景下地面都没有碎屑。
+
+#### 3.4.1 服务端自检
+
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
 `ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，断言数按版本为
 **295（1.19.4 / 1.20.1 / 1.21.1 / 1.21.11 / 26.3）/ 296（1.21.10，多一个干化恶魂断言；0.1.16 及以前为 162/163）**——
@@ -642,6 +675,9 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    **渲染层与剔除面已在真实客户端（1.21.11 `runClient`）取证修复**：
    带相状态图层为 CUTOUT（半透明宿主保持 TRANSLUCENT）、内缩覆盖层/外扩外壳的
    quad 进入不可剔除列表、几何坐标在宿主外侧；
+   **栅栏的红石相已在真实 1.21.11 客户端取证并自动回归**（`./gradlew :1.21.11:runClientGameTest`，
+   见 §3.4.0）：宿主 quad + 外壳 quad 同在、图层 CUTOUT、外壳顶点不越出本格；
+   顺手核清了"地面红碎屑属于原版红石线"这一易误判点。
    游戏内逐条手测（冻结、凝固、破坏保留、桶挖、炼药锅转化、**固定视角目视含相剔除接缝**、
    客户端取水不发本地挖掘包、**连原版服务器时的客户端回退**、
    **隐形宿主/告示牌箱子含相后的外观**、**0 档与 15 档外壳的颜色差异**、

@@ -70,11 +70,12 @@ def load(source, block):
         return json.loads(z.read('assets/minecraft/blockstates/%s.json' % block))
 
 
-# 每个属性都给一个"合法"取值，这样 multipart 条件只按 phase 差异分派。
+# 每个属性都给一个"合法"取值，这样 multipart 条件只按相差异分派。
 # `type` 给台阶用（0.1.13 起混合模型宿主按变体分派；台阶没有 type 属性的宿主不受影响）。
+# 相属性名 0.1.15 起是 `filling`；同时给 `phase` 是为了能继续核对旧产物。
 state = {
     'facing': 'north', 'half': 'bottom', 'shape': 'straight', 'type': 'double',
-    'waterlogged': 'false', 'phase': PHASE,
+    'waterlogged': 'false', 'filling': PHASE, 'phase': PHASE,
 }
 
 data = load(SOURCE, BLOCK)

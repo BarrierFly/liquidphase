@@ -27,6 +27,9 @@ import zipfile
 PHASE_VALUES = frozenset(
     ['none', 'lava', 'obsidian', 'ice', 'frosted_0', 'frosted_1', 'frosted_2', 'frosted_3']
     + ['redstone_%d' % i for i in range(16)])
+# 相属性名 0.1.15 起从 `phase` 改成 `filling`（Phase.FILLING 的序列化名）。
+# 两个名字都认：旧产物/旧文档给出的 jar 仍可能带 `phase` 条件，校验时同样按相取值域判定。
+FILLING_KEYS = ('filling', 'phase')
 VERSIONS = ['1.19.4', '1.20.1', '1.21.1', '1.21.10', '1.21.11', '26.3']
 BLOCKSTATE_PREFIX = 'assets/minecraft/blockstates/'
 
@@ -87,7 +90,7 @@ def check_condition(cond, props, errors, where):
             check_condition(sub, props, errors, '%s/%s%d' % (where, key, i))
         return
     for key, value in cond.items():
-        if key == 'phase':
+        if key in FILLING_KEYS:
             valid = PHASE_VALUES
         else:
             valid = props.get(key)

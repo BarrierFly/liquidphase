@@ -167,6 +167,28 @@
 
 ## 变更记录
 
+- **未发布（0.1.17 后续：栅栏红石相实机取证 + 客户端渲染回归）**：
+  - 用户报告"含红石的栅栏能否正常显示红石相"。在**真实 1.21.11 客户端**（
+    `fabric-client-gametest`，全新运行目录、无任何资源包）造了一列含相栅栏验证：
+    红石线旁的栅栏正确结算到 `filling=redstone_14..9`，烘焙模型**同时**含宿主 quad
+    与 `redstone_phase_*` 外壳 quad，区块图层为 CUTOUT，外壳顶点严格落在本格内
+    （`[-0.0006, 1.0006]`，即 0.01px 外扩）。**结论：显示正常**。
+  - 顺手核清一个易误判点：截图里**地面上的红色碎屑是原版红石线本身**，不是外壳几何
+    溢出。判定：相改成 `redstone_0` 后外壳与栅栏表面一起变暗，地面碎屑亮度不变；
+    "只放线不放栅栏""有栅栏但线隔一格"两种场景地面都没有碎屑。
+  - 新增可重跑的客户端渲染回归 `FenceRedstoneRenderTest`（仅 1.21.11 接线）：
+    `./gradlew :1.21.11:runClientGameTest`，独立运行目录
+    `versions/1.21.11/run-clientgametest/`（无 `resourcepacks/`），带三张截图。
+    断言：宿主 quad 与外壳 quad 都在、图层非 SOLID、外壳顶点不越出本格。
+    该 run config 需要 `fabric.client.gametest.disableNetworkSynchronizer=true`——
+    本 mod 的握手包走自定义通道，gametest 网络同步器会误判并让 run 失败。
+  - 同步修掉两个**发布前校验脚本**的残留：`tools/validate_blockstates.py` 与
+    `tools/check_redstone_render.py` 还在按旧属性名 `phase` 特判（0.1.15 起已改名
+    `filling`），导致前者把每个版本的全部合法 `filling` 条件报成 `unknown-property`
+    （53057 条误报）、后者对所有宿主误判 BROKEN。两处都改成同时认 `filling` / `phase`，
+    修完后 `validate_blockstates.py` 六版本 errors=0、`check_redstone_render.py`
+    对 fence/stairs/leaves 均为 OK。
+
 - **0.1.17（可替换填充相 + 资源包自动合并 + 吸收门控防漂移）**：
   - **吸收机制改为"可替换填充相"规则**：向宿主格写入填充相材料（冰/霜冰/黑曜石/熔岩/红石粉）
     时只判定**现有填充相是否可替换**——空格、含水（水即"现有填充相"）与含熔岩相可替换，

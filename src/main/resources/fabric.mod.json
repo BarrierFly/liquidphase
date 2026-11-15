@@ -10,7 +10,7 @@
   "environment": "*",
   "entrypoints": {
     "main": ["org.liquidphase.LiquidPhase"],
-    "client": ["org.liquidphase.client.LiquidPhaseClient"]
+    "client": ["org.liquidphase.client.LiquidPhaseClient"]${extra_gametest_entrypoint}
   },
   "mixins": [
     "liquidphase.mixins.json"${extra_mixins}${extra_mixins_wire}${extra_mixins_layer}${extra_mixins_26}
