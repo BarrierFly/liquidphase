@@ -105,11 +105,15 @@
 - **移除本 mod 会丢失所有相**（含熔岩/冰/黑曜石/红石相）。降级前请先清场。
 - **0.1.15 起属性名为 `filling`**（原 `phase`）：跨 0.1.14 ↔ 0.1.15 升降级都会丢相，请先清场。
 - 本 mod 独占"相"语义，**不与 Fluidlogged 这类通用 fluidlogged mod 互通**（共存不崩，但互相看不见对方的数据）。
-- 相位渲染用 blockstate JSON 覆盖（multipart + 内缩模型），与其他**重写过原版 blockstate JSON 的资源包/模组**会冲突——
+- 相位渲染用 blockstate JSON 覆盖（multipart + 内缩模型）。**0.1.17 起与第三方资源包自动兼容**：
+  资源包覆盖宿主 blockstate（`assets/minecraft/blockstates/<宿主>.json`——栅栏/树叶/告示牌类包
+  很常见）时，客户端会把相部件**合并进包的定义**，包只生效于宿主 part、相照常显示；
+  成功与降级各有一条日志（`merged phase overlays into …` / `overlay could not be merged …`）。
+  仅当包把宿主 part 的条件重排到无法精确匹配（罕见）时该宿主退回旧行为——
   **症状是"某些宿主的所有相完全不显示"**（宿主本体正常、熔岩相因走流体渲染也正常）。
-  用户资源包优先级高于 mod 内置资源，mod 无法盖过；资源包含有
-  `assets/minecraft/blockstates/<宿主>.json` 就会覆盖那个宿主（栅栏/树叶/告示牌类包常见）。
-  验证方法：F3 看该方块的 `filling` 属性是否已写入——已写入但不显示即被资源包覆盖。
+  验证方法：F3 看该方块的 `filling` 属性是否已写入——已写入但不显示即触发了降级，
+  可用配置 `packMerge=false` 复现旧行为进一步定位；针对本 mod 的资源包
+  （引用 `liquidphase:` 模型）不受合并影响，仍可整体覆盖。
 - 26.x 的实验性红石评估器（`REDSTONE_EXPERIMENTS`）下，含红石相方块**不保证**与原版红石线行为一致。
 - 红石相是**宿主方块上的 `filling` 取值**（`redstone_0`…`redstone_15`，功率直接编码在取值里），
   不注册任何新方块；方块仍是原版楼梯/台阶/墙/栅栏。渲染外壳对**全部**相容宿主生成
@@ -117,6 +121,11 @@
   外壳跟着"运行时真的拿到 `phase` 属性的方块"走：清单由 `tools/gen_phase_blocks.py`
   从原版 `Blocks.java` 推导，并用运行时注入数硬校验，漏一个就会让那个方块含红石相时
   什么都不显示（0.1.12 修的就是这个）。
+- **吸收按"可替换填充相"规则判定**（0.1.17 起）：向宿主写填充材料时只看**现有填充相**——
+  空格 / 含水 / 含熔岩相可替换（冰替换水=冻结、熔岩或黑曜石替换水、黑曜石覆盖熔岩相、
+  红石粉也能替换水/熔岩），冰/霜冰/黑曜石/红石相不可替换、材料按不可放置处理。
+  与 0.1.16 的差别：含水/含熔岩的宿主**不再拒绝**填充材料。水的流体路径不变：
+  水桶/水流仍只进无相宿主，水不能直接替换熔岩相（含熔岩相宿主遇水邻居走凝固成黑曜石相）。
 - **告示牌/箱子/屏障/光源方块等原生"不渲染方块模型"的宿主也能显示相**：带相状态一律按
   方块模型渲染，宿主本体仍由各自的原版渲染路径绘制。
 - **状态数会明显增加**：`phase` 从 8 个取值变成 24 个，1.21.11 加载后的总状态数约 51 万
@@ -157,6 +166,37 @@
 ---
 
 ## 变更记录
+
+- **0.1.17（可替换填充相 + 资源包自动合并 + 吸收门控防漂移）**：
+  - **吸收机制改为"可替换填充相"规则**：向宿主格写入填充相材料（冰/霜冰/黑曜石/熔岩/红石粉）
+    时只判定**现有填充相是否可替换**——空格、含水（水即"现有填充相"）与含熔岩相可替换，
+    冰/霜冰/黑曜石/红石相不可替换、按不可放置处理。0.1.16 及以前一律要求"无相且未含水"，
+    所以含水/含熔岩的宿主现在能被吸收（冰替换水=冻结、熔岩替换水、黑曜石覆盖熔岩相等），
+    且该规则由 `Phase.isReplaceableFilling()` 统一维护，未来加可替换相只改一处。
+    **边界**：水的流体容器路径不变——水桶/水流仍只进无相宿主（含熔岩相宿主遇水邻居
+    仍走"凝固成黑曜石相"，水桶不能直接替换熔岩相）；熔岩桶对熔岩相宿主幂等重灌成功。
+  - **吸收门控防漂移**：接受层（`canBeReplaced`）/改写层（`Level.setBlock`）/交互层
+    （`BlockItem.place` 落点吸收）的判定全部收敛到唯一判定源 `PhaseHelper.canAcceptPhase`，
+    不再各自复写内联门控；自检新增 `checkAbsorptionGateConsistency`——楼梯 ×
+    现有填充相 {空/含水/熔岩/冰/黑曜石/红石} × 材料 {冰/黑曜石/红石粉/熔岩/水}
+    全矩阵对四条路径逐一对账（A==B==C==D，含终态一致性），并对**全部相容宿主**
+    扫描判定源与接受层一致。自检总数 162→295（1.21.10 为 296）。
+  - **资源包冲突自动合并（0.1.16"实锤冲突"的完整解法）**：第三方资源包覆盖宿主
+    blockstate 时，客户端在 blockstate 加载点把 mod 的相部件（覆盖层/红石外壳/整格
+    相材质）**合并进获胜定义**，使包只生效于宿主 part、相外观不再丢失——不需要再
+    手动编辑资源包。合并核心 `PhasePackMergeCore`（纯 JSON）：包若为 variants 形式
+    先转等价 multipart；整格宿主（树叶/铜格栅/红树根）统一门控宿主 part 到
+    "宿主可见"的相（第三方包把树叶拆成 per-distance 变体也能全部命中）；
+    混合宿主（台阶）按变体精确匹配门控 `type=double`。降级约定：包把宿主 part 条件
+    重排到无法精确匹配时，该宿主退回旧行为（相被宿主模型挡住），不崩溃；
+    合并成功/降级各有一条日志。针对本 mod 的包（引用 `liquidphase:` 模型）不受影响，
+    仍可整体覆盖。可用配置 `packMerge`（默认开）关闭。客户端注入点 ≤1.21.1 挂
+    `ModelManager.loadBlockStates`、1.21.10+ 挂 `BlockStateModelLoader.loadBlockStates`，
+    一处代理覆盖两条管线。已在 1.21.11 实机验证：含 oak_stairs/stone_slab/oak_leaves
+    blockstate 的第三方包 → 日志 `merged phase overlays into 3 foreign blockstate(s)`，
+    无 `Unknown property 'filling'`、无 missing model。
+  - 片段资源：生成器为每个宿主另出 `assets/liquidphase/phase_parts/<id>.json`
+    （纯相部件 + 门控），与烘焙 blockstate 由同一份逻辑产出并走同一套条件校验。
 
 - **0.1.16（填充相放置手势补全：任意来源落进宿主格都写相）**：
   - **新增"落点吸收"**：点**旁边**的方块让红石粉/冰/黑曜石/宿主落进相容宿主格——
@@ -584,7 +624,14 @@ Existing phases in old worlds are then **lost permanently** (vanilla drops unkno
 ### Compatibility notes
 
 Removing this mod loses every phase. It does not interoperate with generic fluidlogged mods (coexistence is crash-free, data is not shared).
-Phase rendering overrides vanilla blockstate JSONs, so resource packs/mods that rewrite those files conflict.
+Phase rendering overrides vanilla blockstate JSONs. **Since 0.1.17 resource packs are merged automatically**: when a pack replaces a host's
+blockstate JSON, the client merges the phase parts (overlays / redstone shells / full-cube swaps) into the winning definition, so the pack
+only affects the host part and the phase visuals survive. A log line reports every merge (`merged phase overlays into …`) and every
+degradation (`overlay could not be merged …`). Packs made for this mod (referencing `liquidphase:` models) still override freely, and
+`packMerge=false` in the config restores the old behaviour.
+Filling absorption (0.1.17) judges **the existing filling's replaceability**: empty / waterlogged / lava-filled hosts accept any filling
+material (ice replaces water, obsidian covers lava, redstone dust replaces water or lava); ice/frosted/obsidian/redstone fillings are not
+replaceable. The water fluid path is unchanged — buckets and flowing water still only enter empty hosts.
 Under the 26.x experimental redstone evaluator (`REDSTONE_EXPERIMENTS`) redstone-phase blocks are not guaranteed to match vanilla wire behaviour.
 Redstone-phase composites are available on **all six versions** (every phase-capable host, not just stairs/slabs/walls/fences).
 The shell is generated for **all** phase hosts, including the transparent ones (leaves, grates, glass panes, iron bars, ladders,

@@ -100,6 +100,18 @@ public enum Phase implements StringRepresentable {
         return ordinal() >= REDSTONE_0.ordinal();
     }
 
+    /**
+     * {@return 该相作为"现有填充相"时能否被新的填充材料替换（0.1.17 可替换填充相规则）}
+     * <p>
+     * 吸收门控（{@code PhaseHelper.canAcceptPhase}）只看这一条：现有填充相可替换 →
+     * 任何填充材料（冰/霜冰/黑曜石/熔岩/红石粉，及未来加入的相材料）都可写入；
+     * 不可替换 → 按不可放置处理。空格与含水态（水即"现有填充相"）在门控里单独算可替换，
+     * 不走本方法。未来加入可替换相（如脆冰的流体前身）时，只需在这里追加 {@code true}。
+     */
+    public boolean isReplaceableFilling() {
+        return this == LAVA;
+    }
+
     /** {@return 红石相功率 0–15；非红石相返回 0} */
     public int redstonePower() {
         return isRedstone() ? ordinal() - REDSTONE_0.ordinal() : 0;

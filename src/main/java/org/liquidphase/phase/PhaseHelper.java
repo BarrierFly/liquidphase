@@ -105,21 +105,45 @@ public final class PhaseHelper {
     /**
      * {@return 方块当前能否接受给定相}
      * <p>
-     * 门控与原版含水对齐（fork 的"运行期修复 3"）：未含任何相、未含水、且该方块自身
-     * 接受水（探测 {@code canPlaceLiquid(…, WATER)}）——双层台阶等被原版自身覆写拒绝的照样拒绝，
+     * 门控（0.1.17 起为"可替换填充相"规则，全吸收路径的唯一判定源）：
+     * 现有填充相可替换 → 接受；不可替换 → 按不可放置处理。其中
+     * <ul>
+     *   <li>空格（{@code filling=none}、未含水）：无可替换物，接受（原有行为）；</li>
+     *   <li>含水（{@code filling=none}、{@code waterlogged=true}）：水即现有填充相，可替换
+     *       ——冰替换水=冻结、熔岩替换水、红石粉替换水等一律放行（0.1.16 及以前一律拒绝）；</li>
+     *   <li>熔岩相：可替换（黑曜石/冰/红石粉等可覆盖熔岩相）；</li>
+     *   <li>冰/霜冰/黑曜石/红石相：不可替换，拒绝（与 0.1.16 的互斥语义一致）。</li>
+     * </ul>
+     * 可替换集合由 {@link Phase#isReplaceableFilling()} 统一维护；水的流体容器路径
+     * （水桶/水流写入）不走本门控，仍只进无相宿主——熔岩相遇水邻居走既有凝固逻辑。
+     * <p>
+     * 宿主本体充水能力探测照旧保留（决策点 D4：按原版充水的判定），但在**空宿主兄弟状态**
+     * 上探测：含水/含熔岩相的宿主要用 {@code filling=none} 且未含水的同属性状态去问
+     * {@code canPlaceLiquid(…, WATER)}，否则熔岩相状态会被 {@code PhaseCapable.canPlaceLiquid}
+     * 的互斥分支误判为"宿主本体不接受水"。双层台阶等被原版自身覆写拒绝的照样拒绝，
      * 避免误杀树叶/格栅等整格方块。
      */
     public static boolean canAcceptPhase(BlockState state, BlockGetter level, BlockPos pos, Phase phase) {
-        if (phase == Phase.NONE || !state.hasProperty(FILLING) || state.getValue(FILLING) != Phase.NONE) {
+        if (phase == Phase.NONE || !state.hasProperty(FILLING)) {
             return false;
         }
-        if (state.hasProperty(BlockStateProperties.WATERLOGGED) && state.getValue(BlockStateProperties.WATERLOGGED)) {
+        Phase current = state.getValue(FILLING);
+        if (current != Phase.NONE && !current.isReplaceableFilling()) {
             return false;
         }
         if (state.getBlock() instanceof LiquidBlockContainer container) {
-            return canPlaceWaterProbe(container, level, pos, state);
+            return canPlaceWaterProbe(container, level, pos, emptySibling(state));
         }
         return true;
+    }
+
+    /** {@return 同属性、无相且未含水的兄弟状态——宿主本体充水能力探测用} */
+    private static BlockState emptySibling(BlockState state) {
+        BlockState probe = withPhase(state, Phase.NONE);
+        if (probe.hasProperty(BlockStateProperties.WATERLOGGED) && probe.getValue(BlockStateProperties.WATERLOGGED)) {
+            probe = probe.setValue(BlockStateProperties.WATERLOGGED, false);
+        }
+        return probe;
     }
 
     /**

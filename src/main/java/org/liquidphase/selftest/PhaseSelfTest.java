@@ -1,5 +1,8 @@
 package org.liquidphase.selftest;
 
+import com.google.gson.JsonObject;
+import java.util.List;
+import java.util.Map;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.MinecraftServer;
@@ -18,6 +21,7 @@ import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
+import net.minecraft.server.packs.resources.ResourceManager;
 import org.liquidphase.LiquidPhase;
 import org.liquidphase.phase.Phase;
 import org.liquidphase.phase.PhaseHelper;
@@ -80,6 +84,8 @@ public final class PhaseSelfTest {
             checkLavaReflowWiring(level, base);
             checkIndirectPhaseAbsorption(level, base);
             checkUniversalFillingPlacement(level, base);
+            checkAbsorptionGateConsistency(level, base);
+            checkPackMergeFragments(level, base);
             checkSlabVariantRendering();
         } catch (Throwable t) {
             failed++;
@@ -105,6 +111,15 @@ public final class PhaseSelfTest {
         assertTrue("frosted age works", Phase.FROSTED_2.frostedAge() == 2);
         assertTrue("redstone is not solid", !Phase.REDSTONE_15.isSolid());
         assertTrue("obsidian is solid", Phase.OBSIDIAN.isSolid());
+        // 可替换填充相（0.1.17）：只有熔岩相可被新的填充材料替换；水（含水态）在
+        // canAcceptPhase 里单独算可替换，不进这个方法。未来加可替换相改 Phase 枚举。
+        assertTrue("lava is the only replaceable filling",
+            Phase.LAVA.isReplaceableFilling()
+                && !Phase.OBSIDIAN.isReplaceableFilling()
+                && !Phase.ICE.isReplaceableFilling()
+                && !Phase.FROSTED_0.isReplaceableFilling()
+                && !Phase.REDSTONE_15.isReplaceableFilling()
+                && !Phase.NONE.isReplaceableFilling());
         assertTrue("none is neither", !Phase.NONE.isSolid() && !Phase.NONE.isRedstone());
     }
 
@@ -1016,15 +1031,19 @@ public final class PhaseSelfTest {
         level.setBlock(ghastPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
          *///?}
 
-        // 反向：已含水的台阶仍拒绝熔岩（水与相互斥的语义不变）。
+        // 反向（0.1.17 反转）：含水台阶是"现有填充相=水（可替换）"——熔岩替换水，
+        // 台阶变为熔岩相且不再含水。水的流体容器路径对"写入水"仍只进空宿主。
         BlockPos wetSlabPos = base.offset(22, 1, 2);
         BlockState wetSlab = Blocks.STONE_SLAB.defaultBlockState()
             .setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED, true);
         level.setBlock(wetSlabPos, wetSlab, Block.UPDATE_ALL);
-        assertTrue("waterlogged slab still refuses lava",
-            !((net.minecraft.world.level.block.LiquidBlockContainer) Blocks.STONE_SLAB)
+        assertTrue("waterlogged slab accepts lava (water is a replaceable filling; got phase "
+                + PhaseHelper.getPhase(level.getBlockState(wetSlabPos)) + ")",
+            ((net.minecraft.world.level.block.LiquidBlockContainer) Blocks.STONE_SLAB)
                 .placeLiquid(level, wetSlabPos, level.getBlockState(wetSlabPos), Fluids.LAVA.getSource(false))
-                && !PhaseHelper.isLava(level.getBlockState(wetSlabPos)));
+                && PhaseHelper.isLava(level.getBlockState(wetSlabPos))
+                && !level.getBlockState(wetSlabPos)
+                    .getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED));
         level.setBlock(wetSlabPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
     }
 
@@ -1176,18 +1195,20 @@ public final class PhaseSelfTest {
                 Boolean.TRUE.equals(org.liquidphase.interact.LiquidInteractions.dispenseIntoHost(
                     level, pos, level.getBlockState(pos), true))
                     && PhaseHelper.isLava(level.getBlockState(pos)));
-            // (A) 反向 1：熔岩相宿主拒绝再灌熔岩（phase != NONE）
-            assertTrue("dispenser lava rejected by lava-phased " + host,
-                Boolean.FALSE.equals(org.liquidphase.interact.LiquidInteractions.dispenseIntoHost(
-                    level, pos, level.getBlockState(pos), true)));
-            // (A) 反向 2：含水宿主拒绝熔岩（水与相互斥）
+            // (A) 反向 1（0.1.17 反转）：熔岩相可替换 → 再灌熔岩幂等成功（状态不变）。
+            assertTrue("dispenser lava idempotently re-fills the lava phase of " + host,
+                Boolean.TRUE.equals(org.liquidphase.interact.LiquidInteractions.dispenseIntoHost(
+                    level, pos, level.getBlockState(pos), true))
+                    && PhaseHelper.isLava(level.getBlockState(pos)));
+            // (A) 反向 2（0.1.17 反转）：含水宿主接受熔岩——水是可替换填充相，
+            // 熔岩替换水，宿主变熔岩相且不再含水。
             level.setBlock(pos, host.defaultBlockState()
                 .setValue(BlockStateProperties.WATERLOGGED, true), Block.UPDATE_ALL);
-            assertTrue("dispenser lava rejected by waterlogged " + host,
-                Boolean.FALSE.equals(org.liquidphase.interact.LiquidInteractions.dispenseIntoHost(
+            assertTrue("dispenser lava replaces the water in waterlogged " + host,
+                Boolean.TRUE.equals(org.liquidphase.interact.LiquidInteractions.dispenseIntoHost(
                     level, pos, level.getBlockState(pos), true))
-                    && level.getBlockState(pos).getValue(BlockStateProperties.WATERLOGGED)
-                    && !PhaseHelper.isLava(level.getBlockState(pos)));
+                    && PhaseHelper.isLava(level.getBlockState(pos))
+                    && !level.getBlockState(pos).getValue(BlockStateProperties.WATERLOGGED));
             level.setBlock(pos, host.defaultBlockState(), Block.UPDATE_ALL);
             // (A) 水灌入宿主
             assertTrue("dispenser water waterlogs " + host,
@@ -1316,7 +1337,8 @@ public final class PhaseSelfTest {
             Block.UPDATE_ALL);
         assertTrue("universal: water setBlock is not converted (container path owns water)",
             level.getBlockState(pos).is(Blocks.WATER));
-        // (5) 接受层：冰物品的放置上下文里栅栏"可替换"；石头物品不可；含水栅栏不可
+        // (5) 接受层：冰物品的放置上下文里栅栏"可替换"；石头物品不可；
+        // 含水栅栏可替换（水=可替换填充相，0.1.17 反转）且改写后不再含水。
         level.setBlock(pos, Blocks.OAK_FENCE.defaultBlockState(), Block.UPDATE_ALL);
         BlockPlaceContext iceCtx = liquidphase$context(level, Blocks.ICE, pos.west(), Direction.EAST);
         BlockPlaceContext stoneCtx = liquidphase$context(level, Blocks.STONE, pos.west(), Direction.EAST);
@@ -1326,9 +1348,274 @@ public final class PhaseSelfTest {
             !level.getBlockState(pos).canBeReplaced(stoneCtx));
         level.setBlock(pos, Blocks.OAK_FENCE.defaultBlockState()
             .setValue(BlockStateProperties.WATERLOGGED, true), Block.UPDATE_ALL);
-        assertTrue("acceptance: waterlogged fence is NOT replaceable for an ice item placement",
-            !level.getBlockState(pos).canBeReplaced(iceCtx));
+        assertTrue("acceptance: waterlogged fence is replaceable for an ice item placement "
+                    + "(water is a replaceable filling)",
+            level.getBlockState(pos).canBeReplaced(iceCtx));
+        level.setBlock(pos, Blocks.ICE.defaultBlockState(), Block.UPDATE_ALL);
+        assertTrue("universal: ice setBlock into waterlogged fence becomes ice phase without water",
+            level.getBlockState(pos).is(Blocks.OAK_FENCE)
+                && PhaseHelper.getPhase(level.getBlockState(pos)) == Phase.ICE
+                && !level.getBlockState(pos).getValue(BlockStateProperties.WATERLOGGED));
         level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+    }
+
+    /**
+     * 吸收门控的**防漂移对账**（0.1.17）。可替换填充相规则只有唯一判定源
+     * {@code PhaseHelper.canAcceptPhase}，但接线分四层，各自都能被后来人单独改坏：
+     * <ol>
+     *   <li>A 判定源：{@code PhaseHelper.canAcceptPhase}；</li>
+     *   <li>B 接受层：{@code BlockState.canBeReplaced(BlockPlaceContext)}
+     *       （{@code FillingReplaceMixin}）；</li>
+     *   <li>C 改写层：{@code Level.setBlock(材料)}（{@code FillingPlacementMixin}）；</li>
+     *   <li>D 交互层：{@code BlockItem.place} 落点吸收（{@code BlockItemMixin}）。</li>
+     * </ol>
+     * 用例：一座楼梯 × 现有填充相 {空/含水/熔岩/冰/黑曜石/红石} × 写入材料
+     * {冰/黑曜石/红石粉} 全矩阵，A==B==C==D 且接受时终态一致（相写上、水清掉）；
+     * 熔岩/水作为写入材料走容器路径（E），对 A 同样对账，水对任何含相宿主保持互斥。
+     * 另有全量扫描：每个相容宿主的默认态（及含水态）上 A==B。
+     */
+    private static void checkAbsorptionGateConsistency(ServerLevel level, BlockPos base) {
+        BlockPos pos = base.offset(31, 1, 0);
+        level.setBlock(pos.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        Block hostBlock = Blocks.OAK_STAIRS;
+
+        // 现有填充相 → 预期接受（空/含水/熔岩可替换；冰/黑曜石/红石不可替换）。
+        Object[][] currents = {
+            {"empty", hostBlock.defaultBlockState(), true},
+            {"waterlogged", hostBlock.defaultBlockState()
+                .setValue(BlockStateProperties.WATERLOGGED, true), true},
+            {"lava", PhaseHelper.withPhase(hostBlock.defaultBlockState(), Phase.LAVA), true},
+            {"ice", PhaseHelper.withPhase(hostBlock.defaultBlockState(), Phase.ICE), false},
+            {"obsidian", PhaseHelper.withPhase(hostBlock.defaultBlockState(), Phase.OBSIDIAN), false},
+            {"redstone", PhaseHelper.withPhase(hostBlock.defaultBlockState(), Phase.REDSTONE_15), false},
+        };
+        Block[] materials = {Blocks.ICE, Blocks.OBSIDIAN, Blocks.REDSTONE_WIRE};
+
+        for (Object[] current : currents) {
+            String currentName = (String) current[0];
+            BlockState currentState = (BlockState) current[1];
+            boolean expected = (Boolean) current[2];
+
+            for (Block material : materials) {
+                Phase incoming = material == Blocks.REDSTONE_WIRE ? Phase.REDSTONE_15
+                    : org.liquidphase.phase.PhaseAbsorption.phaseOfItem(material);
+                String label = currentName + "->" + material;
+
+                // A 判定源
+                boolean a = PhaseHelper.canAcceptPhase(currentState, level, pos, incoming);
+                assertTrue("gate A matches the replaceability rule for " + label, a == expected);
+
+                // B 接受层：canBeReplaced 与 A 一致
+                BlockPlaceContext ctx = liquidphase$context(level, material, pos, Direction.DOWN);
+                boolean b = currentState.canBeReplaced(ctx);
+                assertTrue("gate B (canBeReplaced) agrees with A for " + label, b == a);
+
+                // C 改写层：Level.setBlock(材料) 与 A 一致，接受时终态一致
+                level.setBlock(pos, currentState, Block.UPDATE_ALL);
+                level.setBlock(pos, material.defaultBlockState(), Block.UPDATE_ALL);
+                BlockState afterC = level.getBlockState(pos);
+                boolean c = afterC.getBlock() == hostBlock && phaseMatches(afterC, incoming);
+                assertTrue("gate C (setBlock rewrite) agrees with A for " + label, c == a);
+                if (a) {
+                    assertTrue("gate C final state carries the incoming phase for " + label,
+                        (incoming == Phase.REDSTONE_15 ? RedstoneBlocks.isRedstonePhase(afterC)
+                            : PhaseHelper.getPhase(afterC) == incoming)
+                            && !afterC.getValue(BlockStateProperties.WATERLOGGED));
+                }
+
+                // D 交互层：BlockItem.place 落点吸收与 A 一致
+                level.setBlock(pos, currentState, Block.UPDATE_ALL);
+                BlockState placedD = liquidphase$placeBlockInto(level, material, pos, Direction.DOWN);
+                boolean d = placedD != null && placedD.getBlock() == hostBlock
+                    && phaseMatches(placedD, incoming);
+                assertTrue("gate D (BlockItem.place) agrees with A for " + label, d == a);
+            }
+
+            // E 容器路径（熔岩作为写入材料）：placeLiquid(LAVA) 与 A 一致
+            level.setBlock(pos, currentState, Block.UPDATE_ALL);
+            boolean aLava = PhaseHelper.canAcceptPhase(currentState, level, pos, Phase.LAVA);
+            clearFluidTicks(level, pos);
+            boolean e = ((net.minecraft.world.level.block.LiquidBlockContainer) hostBlock)
+                .placeLiquid(level, pos, level.getBlockState(pos), Fluids.LAVA.getSource(false));
+            assertTrue("gate E (container lava) agrees with A for " + currentName, e == aLava);
+            if (aLava) {
+                assertTrue("gate E fills the lava phase for " + currentName,
+                    PhaseHelper.isLava(level.getBlockState(pos)));
+            }
+            clearFluidTicks(level, pos);
+
+            // 水作为写入材料：互斥不变——只有空宿主接受水，任何含相宿主拒绝（0.1.17 决策）。
+            level.setBlock(pos, currentState, Block.UPDATE_ALL);
+            boolean waterAccepted = ((net.minecraft.world.level.block.LiquidBlockContainer) hostBlock)
+                .placeLiquid(level, pos, level.getBlockState(pos), Fluids.WATER.getSource(false));
+            assertTrue("water stays on the container path and only enters empty hosts for "
+                    + currentName,
+                waterAccepted == currentName.equals("empty"));
+            if (waterAccepted) {
+                assertTrue("water waterlogs the empty host", level.getBlockState(pos)
+                    .getValue(BlockStateProperties.WATERLOGGED));
+            }
+            level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        }
+        level.setBlock(pos.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+        // 全量扫描：每个相容宿主的默认态与含水态上 A==B（新宿主自动被扫进来）。
+        BlockPos probePos = base.offset(32, 1, 0);
+        level.setBlock(probePos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        java.util.List<String> broken = new java.util.ArrayList<>();
+        int scanned = 0;
+        for (Block block : net.minecraft.core.registries.BuiltInRegistries.BLOCK) {
+            if (!(block instanceof org.liquidphase.phase.PhaseCapable)
+                || !PhaseHelper.hasPhaseProperty(block.defaultBlockState())) {
+                continue;
+            }
+            scanned++;
+            BlockState def = block.defaultBlockState();
+            BlockState[] variants = def.hasProperty(BlockStateProperties.WATERLOGGED)
+                ? new BlockState[]{def, def.setValue(BlockStateProperties.WATERLOGGED, true)}
+                : new BlockState[]{def};
+            for (BlockState variant : variants) {
+                boolean a = PhaseHelper.canAcceptPhase(variant, level, probePos, Phase.ICE);
+                BlockPlaceContext ctx = liquidphase$context(level, Blocks.ICE, probePos, Direction.DOWN);
+                boolean b = variant.canBeReplaced(ctx);
+                if (a != b) {
+                    broken.add(String.valueOf(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block))
+                        + " (A=" + a + ", B=" + b + ")");
+                }
+            }
+        }
+        assertTrue("every phase host agrees between canAcceptPhase and canBeReplaced ("
+                + scanned + " hosts scanned, broken: " + broken + ")",
+            broken.isEmpty() && scanned >= 300);
+    }
+
+    /** {@return 状态的填充相是否等于给定材料对应的相（红石相按类型判）} */
+    private static boolean phaseMatches(BlockState state, Phase incoming) {
+        return incoming == Phase.REDSTONE_15
+            ? RedstoneBlocks.isRedstonePhase(state)
+            : PhaseHelper.getPhase(state) == incoming;
+    }
+
+    /**
+     * 资源包兼容合并（0.1.17）：片段完整性 + 合并核心对"仿第三方包 winner"的行为 +
+     * 代理包装的基础行为。合并核心 {@code PhasePackMergeCore} 是纯 Gson 实现，
+     * 服务端也能直接跑；服务端资源管理器只有 data 域拿不到 blockstate，
+     * 所以 winner 用 mod 自带的仿第三方 fixtures
+     * （{@code assets/liquidphase/packmerge_test/}，variants 形式、变体键与原版一致）。
+     * 客户端注入点（{@code PhaseLoaderMixin}）的真实覆盖需要客户端资源重载，
+     * 不在服务端自检范围（README 记录手测项）。
+     */
+    private static void checkPackMergeFragments(ServerLevel level, BlockPos base) {
+        // (1) 全量：每个相容宿主都有片段，且片段带红石外壳（与烘焙 blockstate 同判据）。
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        int fragments = 0;
+        for (Block block : net.minecraft.core.registries.BuiltInRegistries.BLOCK) {
+            if (!(block instanceof org.liquidphase.phase.PhaseCapable)
+                || !PhaseHelper.hasPhaseProperty(block.defaultBlockState())) {
+                continue;
+            }
+            String id = String.valueOf(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block));
+            if (!id.startsWith("minecraft:")) {
+                continue;
+            }
+            String fragment = liquidphase$resource("/assets/liquidphase/phase_parts/"
+                + id.substring("minecraft:".length()) + ".json");
+            fragments++;
+            if (fragment == null || !fragment.contains("liquidphase:block/redstone_phase_")) {
+                missing.add(id);
+            }
+        }
+        assertTrue("every phase host ships a pack-merge fragment with the redstone shell ("
+                + fragments + " checked, missing: " + missing + ")",
+            missing.isEmpty() && fragments >= 300);
+
+        // (2) 标记扫描：烘焙定义引用 liquidphase → 判定为"自带相部件"，不会被二次合并。
+        String baked = liquidphase$resource("/assets/minecraft/blockstates/stone_slab.json");
+        assertTrue("baked stone_slab blockstate ships in the jar", baked != null);
+        if (baked == null) {
+            return;
+        }
+        assertTrue("referencesLiquidphase detects the baked definition",
+            org.liquidphase.client.PhasePackMergeCore.referencesLiquidphase(
+                com.google.gson.JsonParser.parseString(baked)));
+        assertTrue("referencesLiquidphase ignores foreign definitions",
+            !org.liquidphase.client.PhasePackMergeCore.referencesLiquidphase(
+                com.google.gson.JsonParser.parseString(liquidphase$foreignFixture("stone_slab"))));
+
+        // (3) 合并核心 × 仿第三方包（variants 形式）：混合宿主（台阶）按变体门控。
+        JsonObject slabWinner = com.google.gson.JsonParser.parseString(
+            liquidphase$foreignFixture("stone_slab")).getAsJsonObject();
+        JsonObject slabFragment = com.google.gson.JsonParser.parseString(
+            liquidphase$resource("/assets/liquidphase/phase_parts/stone_slab.json")).getAsJsonObject();
+        JsonObject slabMerged = org.liquidphase.client.PhasePackMergeCore.merge(slabWinner, slabFragment);
+        assertTrue("merge converts the variants winner into multipart", slabMerged != null);
+        if (slabMerged == null) {
+            return;
+        }
+        String slabJson = slabMerged.toString();
+        assertTrue("merged slab gates the double variant on host-visible fillings",
+            slabJson.contains("\"type\":\"double\",\"filling\":\"none|lava|"));
+        assertTrue("merged slab keeps the bottom/top variants ungated",
+            slabJson.contains("\"type\":\"bottom\"") && !slabJson.contains("\"type\":\"bottom\",\"filling\""));
+        assertTrue("merged slab appends the full overlays and the redstone shell",
+            slabJson.contains("liquidphase:block/phase_ice_full")
+                && slabJson.contains("liquidphase:block/redstone_phase_0")
+                && slabJson.contains("liquidphase:block/redstone_phase_15"));
+
+        // (4) 合并核心 × 仿第三方包：内缩宿主（楼梯）无 gate，宿主 part 原样。
+        JsonObject stairsWinner = com.google.gson.JsonParser.parseString(
+            liquidphase$foreignFixture("oak_stairs")).getAsJsonObject();
+        JsonObject stairsFragment = com.google.gson.JsonParser.parseString(
+            liquidphase$resource("/assets/liquidphase/phase_parts/oak_stairs.json")).getAsJsonObject();
+        JsonObject stairsMerged = org.liquidphase.client.PhasePackMergeCore.merge(stairsWinner, stairsFragment);
+        assertTrue("merge handles the inset host", stairsMerged != null);
+        if (stairsMerged == null) {
+            return;
+        }
+        String stairsJson = stairsMerged.toString();
+        assertTrue("inset host parts stay ungated (no host-visibility gate)",
+            !stairsJson.contains("\"filling\":\"none|lava|"));
+        assertTrue("inset host keeps its variant keys after variants→multipart conversion",
+            stairsJson.contains("\"facing\":\"east\"") && stairsJson.contains("\"half\":\"bottom\""));
+        assertTrue("inset overlays and shell are appended",
+            stairsJson.contains("liquidphase:block/phase_obsidian")
+                && stairsJson.contains("liquidphase:block/redstone_phase_8"));
+
+        // (4b) 合并核心 × 整格宿主（树叶）：空 when gate 命中**全部** part——
+        // 原版树叶是无条件单一变体，第三方包拆成 per-distance 变体时也要全部门控。
+        JsonObject leavesWinner = com.google.gson.JsonParser.parseString(
+            liquidphase$foreignFixture("oak_leaves")).getAsJsonObject();
+        JsonObject leavesFragment = com.google.gson.JsonParser.parseString(
+            liquidphase$resource("/assets/liquidphase/phase_parts/oak_leaves.json")).getAsJsonObject();
+        JsonObject leavesMerged = org.liquidphase.client.PhasePackMergeCore.merge(leavesWinner, leavesFragment);
+        assertTrue("merge handles the full-cube host", leavesMerged != null);
+        if (leavesMerged == null) {
+            return;
+        }
+        String leavesJson = leavesMerged.toString();
+        assertTrue("empty-when gate applies to every split variant",
+            leavesJson.contains("\"distance\":\"1\",\"persistent\":\"false\",\"filling\":\"none|lava|")
+                && leavesJson.contains("\"distance\":\"3\",\"persistent\":\"true\",\"filling\":\"none|lava|"));
+        assertTrue("full-cube host swaps in the full phase material for solid phases",
+            leavesJson.contains("liquidphase:block/phase_ice_full"));
+
+        // (5) 代理包装：幂等 + 透传（用 ResourceManager.Empty 做最小可调用的 RM）。
+        // 合并开关强制打开，避免本机配置文件影响自检结论（内存态，不落盘）。
+        org.liquidphase.LiquidPhaseConfig.get().packMerge = true;
+        ResourceManager empty = net.minecraft.server.packs.resources.ResourceManager.Empty.INSTANCE;
+        ResourceManager proxied = org.liquidphase.client.PhasePackMerge.wrap(empty);
+        assertTrue("wrap wraps a plain manager", proxied != empty);
+        assertTrue("wrap is idempotent", org.liquidphase.client.PhasePackMerge.wrap(proxied) == proxied);
+        assertTrue("proxy preserves empty blockstate listings",
+            proxied.listResourceStacks("blockstates", id -> true).isEmpty());
+    }
+
+    /** {@return 仿第三方包的 winner fixture 文本（assets/liquidphase/packmerge_test/）} */
+    private static String liquidphase$foreignFixture(String blockName) {
+        String fixture = liquidphase$resource("/assets/liquidphase/packmerge_test/"
+            + blockName + "_foreign.json");
+        assertTrue("foreign-winner fixture ships for " + blockName, fixture != null);
+        return fixture;
     }
 
     /** 清空某位置全部流体 scheduled tick（自检场地复用坐标，残留 tick 会污染 hasScheduledTick）。 */

@@ -35,7 +35,8 @@
   ],
   "client": [
     "ClientLiquidMineMixin",
-    "EntityPickMixin"
+    "EntityPickMixin",
+    "client.PhaseLoaderMixin"
   ],
   "injectors": {
     "defaultRequire": 1

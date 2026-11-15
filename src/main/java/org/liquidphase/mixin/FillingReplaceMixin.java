@@ -1,12 +1,8 @@
 package org.liquidphase.mixin;
 
-import net.minecraft.core.BlockPos;
-import net.minecraft.world.item.BlockItem;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import org.liquidphase.phase.Phase;
 import org.liquidphase.phase.PhaseAbsorption;
 import org.liquidphase.phase.PhaseCapable;
@@ -23,7 +19,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * 在 {@code Level.setBlock} 统一完成。与 {@code RedstoneWireReplaceMixin}（线格接受
  * 宿主）同一架构、同一注入点、方向互补：那边是"宿主进线格"，这边是"相材料进宿主格"。
  * <p>
- * 门控与 {@code PhaseHelper.canAcceptPhase} 一致：宿主无相、未含水；手里是相材料物品
+ * 门控（0.1.17 起）**就是** {@code PhaseHelper.canAcceptPhase}（可替换填充相规则）本身，
+ * 不再复写一份内联门控——这是防漂移设计：接受层/改写层/交互层的判定必须同源，
+ * 自检 {@code checkAbsorptionGateConsistency} 会逐路径对账。手里是相材料物品
  * （冰/霜冰/黑曜石的 BlockItem 或红石粉）。其余物品（含同种宿主方块）不受影响，
  * 原版可替换语义不变；流体重载 {@code canBeReplaced(BlockState, Fluid)} 不在本注入点
  * （水流/熔岩走容器路径）。
@@ -36,14 +34,12 @@ public abstract class FillingReplaceMixin {
     private void liquidphase$hostAcceptsFillingPlacement(BlockPlaceContext context,
                                                          CallbackInfoReturnable<Boolean> cir) {
         BlockState self = (BlockState) (Object) this;
-        if (!(self.getBlock() instanceof PhaseCapable)
-            || PhaseHelper.getPhase(self) != Phase.NONE
-            || (self.hasProperty(BlockStateProperties.WATERLOGGED)
-                && self.getValue(BlockStateProperties.WATERLOGGED))) {
+        if (!(self.getBlock() instanceof PhaseCapable)) {
             return;
         }
-        ItemStack placing = context.getItemInHand();
-        if (!(placing.getItem() instanceof BlockItem item) || !PhaseAbsorption.isFillingMaterialItem(placing)) {
+        Phase filling = PhaseAbsorption.fillingOfItem(context.getItemInHand());
+        if (filling == null
+            || !PhaseHelper.canAcceptPhase(self, context.getLevel(), context.getClickedPos(), filling)) {
             return;
         }
         // 客户端预测必须等服务端握手；连原版服务器时该格真的不可替换，预测会闪一下弹回。

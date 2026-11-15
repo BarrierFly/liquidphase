@@ -1,0 +1,17 @@
+{
+  "variants": {
+    "facing=east,half=bottom,shape=straight": {
+      "model": "minecraft:block/oak_stairs"
+    },
+    "facing=east,half=top,shape=straight": {
+      "model": "minecraft:block/oak_stairs",
+      "uvlock": true,
+      "x": 180
+    },
+    "facing=west,half=bottom,shape=outer_left": {
+      "model": "minecraft:block/oak_stairs_outer",
+      "uvlock": true,
+      "y": 90
+    }
+  }
+}

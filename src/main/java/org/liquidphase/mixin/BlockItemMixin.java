@@ -115,12 +115,11 @@ public abstract class BlockItemMixin {
         ItemStack stack = context.getItemInHand();
 
         // (a0) 红石粉指向相容宿主 → 该格写入红石相（§3.4）。
+        // 门控统一走 canAcceptPhase（0.1.17 可替换填充相规则）：现有填充相是水/熔岩
+        // （可替换）时同样写红石相，不可替换相（冰/霜冰/黑曜石/红石）按不可放置处理。
         if (held == Blocks.REDSTONE_WIRE
             && targetState.getBlock() instanceof PhaseCapable
-            && !RedstoneBlocks.isRedstonePhase(targetState)
-            && PhaseHelper.getPhase(targetState) == Phase.NONE
-            && (!targetState.hasProperty(BlockStateProperties.WATERLOGGED)
-                || !targetState.getValue(BlockStateProperties.WATERLOGGED))
+            && PhaseHelper.canAcceptPhase(targetState, level, target, Phase.REDSTONE_15)
             && RedstoneBlocks.setRedstonePhase(level, target, targetState, 15)) {
             liquidphase$consume(stack, player);
             return true;

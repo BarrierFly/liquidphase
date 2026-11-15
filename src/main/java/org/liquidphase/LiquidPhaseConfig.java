@@ -28,6 +28,14 @@ public final class LiquidPhaseConfig {
     /** 液体互动（桶左键挖掘/液体物品放置）。关闭时恢复原版桶机制并允许右键收取熔岩相。 */
     public boolean liquidInteraction = true;
 
+    // ---- 渲染兼容（仅客户端生效） ----
+    /**
+     * 资源包兼容合并（0.1.17）：第三方资源包覆盖相容宿主的 blockstate 时，客户端在
+     * blockstate 加载点把本 mod 的相覆盖部件合并进获胜定义，使包只生效于宿主 part。
+     * 关闭则回到旧行为：包整体覆盖 blockstate、相外观静默丢失。
+     */
+    public boolean packMerge = true;
+
     // ---- 功能二：炼药锅（仅服务端，子开关） ----
     /** 熔岩锅+水 → 掉落黑曜石、锅清空（掉落版）。 */
     public boolean cauldronObsidian = true;

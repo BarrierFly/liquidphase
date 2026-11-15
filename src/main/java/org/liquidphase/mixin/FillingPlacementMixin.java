@@ -17,8 +17,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 /**
  * 填充相放置的**改写层**（audit v2 用户实测缺口，0.1.16 修）：任何来源
  * （{@code Level.setBlock} 是所有方块写入的唯一汇聚点——玩家放置、发射器、命令、
- * 下落方块、任意 mod）向"无相未含水的相容宿主格"写入填充相材料方块时，
- * 改写为"宿主 + 对应填充相"，而不是用材料覆盖宿主。
+ * 下落方块、任意 mod）向相容宿主格写入填充相材料方块时，改写为"宿主 + 对应填充相"，
+ * 而不是用材料覆盖宿主。0.1.17 起接受条件就是 {@code PhaseHelper.canAcceptPhase}
+ * （可替换填充相规则）：无相（含含水态）或含熔岩相的宿主格会被改写吸收；
+ * 冰/霜冰/黑曜石/红石相不可替换，材料照原版覆盖。
  * <p>
  * 材料口径：冰/霜冰/黑曜石（{@code PhaseAbsorption.phaseOfBlock}）与红石线
  * （功率随线）。水/熔岩**不在**材料口径——它们走流体容器路径

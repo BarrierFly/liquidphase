@@ -356,6 +356,31 @@ def convert(state_json, geometry):
         overlays += [(value, model, and_with_phase(value, is_inset_state))
                      for value, model in OVERLAYS]
 
+    # 资源包兼容片段（0.1.17）：烘焙 JSON 之外，另出一份"纯相部件 + 宿主 part 门控"
+    # 的片段（assets/liquidphase/phase_parts/<id>.json）。第三方包整体覆盖宿主
+    # blockstate 时，客户端在加载点把片段合并进获胜定义（PhasePackMergeCore），
+    # 使包只生效于宿主 part。gate 的 when 是**门控前**的宿主 part 条件
+    # （Java 侧要求与获胜定义 part 的 when 精确相等才合并，字面不等则降级跳过）。
+    # inset 模式没有 gate：内缩覆盖层与宿主 part 天然叠加，无需隐藏宿主。
+    host_gates = []
+    if mode == "full":
+        # 整格宿主：**每个** part 都在整格集合里，统一门控是安全的。
+        # gate 的 when 留空 = Java 侧"匹配获胜定义的全部 part"——原版树叶是无条件
+        # 单一变体，第三方包常拆成 per-distance 变体，精确匹配会漏掉它们。
+        host_gates = [{"when": {}, "with": dict(FULL_CUBE_HOST_CONDITION)}]
+    elif mode == "mixed":
+        # 混合宿主：只有整格变体（预处理前 when 已由 mixed 分支收集进 full_whens，
+        # 永不为空——无条件整格 part 会退回 inset 模式）需要门控，用精确匹配。
+        host_gates = [{"when": w or {}, "with": dict(FULL_CUBE_HOST_CONDITION)} for w in full_whens]
+    seen_gates = set()
+    gates = []
+    for gate in host_gates:
+        key = json.dumps(gate, sort_keys=True)
+        if key not in seen_gates:
+            seen_gates.add(key)
+            gates.append(gate)
+    fragment_parts = [{"when": when, "apply": {"model": model}} for value, model, when in overlays]
+
     for value, model, when in overlays:
         parts.append({"when": when, "apply": {"model": model}})
 
@@ -364,11 +389,14 @@ def convert(state_json, geometry):
     # （玻璃板、铁栏杆、梯子、锁链、树叶……这些"透明方块"最明显）含相了却看不到红石。
     # 16 条 part 各自指向按功率着色的模型（0 档暗、15 档亮，对齐原版红石线）。
     for power in REDSTONE_POWERS:
-        parts.append({
+        shell_part = {
             "when": {"filling": "redstone_%d" % power},
             "apply": {"model": redstone_model(power)},
-        })
-    return {"multipart": parts}, mode
+        }
+        parts.append(shell_part)
+        fragment_parts.append({"when": dict(shell_part["when"]), "apply": dict(shell_part["apply"])})
+    fragment = {"parts": fragment_parts, "gates": gates}
+    return {"multipart": parts}, mode, fragment
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +482,7 @@ def main():
     missing = []
     problems = []
     written = set()
+    written_fragments = set()
     known = {}
     with zipfile.ZipFile(jar) as zf:
         geometry = ModelGeometry(zf)
@@ -474,21 +503,35 @@ def main():
                 missing.append(block_id)
                 continue
             state = json.loads(zf.read(path).decode("utf-8"))
-            result, mode = convert(state, geometry)
+            result, mode, fragment = convert(state, geometry)
             bad = validate_result(result, known)
             if bad:
                 problems.append((block_id, bad[:3]))
+            # 片段的部件与 gate 条件走同一套校验（合并后同样要被原版 multipart 解析器接受）。
+            fragment_bad = validate_result({"multipart": fragment["parts"]}, known)
+            if fragment_bad:
+                problems.append(("%s (fragment parts)" % block_id, fragment_bad[:3]))
+            gate_parts = [{"when": gate["when"]} for gate in fragment["gates"]]
+            gate_parts += [{"when": gate["with"]} for gate in fragment["gates"]]
+            fragment_bad_gates = validate_result({"multipart": gate_parts}, known)
+            if fragment_bad_gates:
+                problems.append(("%s (fragment gates)" % block_id, fragment_bad_gates[:3]))
             target = out_dir / "assets" / "minecraft" / "blockstates" / ("%s.json" % block_id)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(json.dumps(result, separators=(",", ":"), sort_keys=False), encoding="utf-8")
             written.add(target.name)
+            fragment_target = (out_dir / "assets" / "liquidphase" / "phase_parts" / ("%s.json" % block_id))
+            fragment_target.parent.mkdir(parents=True, exist_ok=True)
+            fragment_target.write_text(
+                json.dumps(fragment, separators=(",", ":"), sort_keys=False), encoding="utf-8")
+            written_fragments.add(fragment_target.name)
             converted += 1
             if mode == "full":
                 full_cube_hosts.append(block_id)
             elif mode == "mixed":
                 mixed_hosts.append(block_id)
 
-    # 删掉上一次生成、这一次不再产出的 blockstate。
+    # 删掉上一次生成、这一次不再产出的 blockstate / 片段。
     # 不清理的话，从 `<版本>.ids` 里移除某个 id 后旧文件仍留在输出目录里、继续被打进 jar：
     # 如果那个方块其实拿不到 `phase` 属性，客户端就会报 `Unknown property 'phase'`，
     # 整份 blockstate 加载失败、该方块全部状态退化成 missing model。
@@ -499,6 +542,12 @@ def main():
             if path.name not in written:
                 path.unlink()
                 stale.append(path.name)
+    fragment_dir = out_dir / "assets" / "liquidphase" / "phase_parts"
+    if fragment_dir.is_dir():
+        for path in fragment_dir.glob("*.json"):
+            if path.name not in written_fragments:
+                path.unlink()
+                stale.append("fragment:" + path.name)
 
     if stale:
         print("removed %d stale blockstates: %s%s"

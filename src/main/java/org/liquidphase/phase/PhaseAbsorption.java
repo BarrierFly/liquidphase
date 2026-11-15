@@ -59,7 +59,23 @@ public final class PhaseAbsorption {
      * 与 {@link #isPhaseMaterialItem} 的差别：红石粉也算填充相材料（写红石相）。
      */
     public static boolean isFillingMaterialItem(ItemStack stack) {
-        return stack.getItem() instanceof BlockItem item
-            && (phaseOfItem(item.getBlock()) != null || item.getBlock() == Blocks.REDSTONE_WIRE);
+        return fillingOfItem(stack) != null;
+    }
+
+    /**
+     * {@return 手持物品对应的填充相；非填充相材料返回 null}
+     * <p>
+     * 填充相材料的物品形态 → 相的唯一映射（0.1.17 起供接受层/改写层共用作门控入参，
+     * 防止两处各写一份"物品 → 相"映射造成漂移）：红石粉 → {@code redstone_15}
+     * （接受判定与功率无关，实际功率由写入路径决定）；其余走 {@link #phaseOfItem}。
+     */
+    public static Phase fillingOfItem(ItemStack stack) {
+        if (!(stack.getItem() instanceof BlockItem item)) {
+            return null;
+        }
+        if (item.getBlock() == Blocks.REDSTONE_WIRE) {
+            return Phase.REDSTONE_15;
+        }
+        return phaseOfItem(item.getBlock());
     }
 }

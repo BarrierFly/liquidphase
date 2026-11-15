@@ -28,6 +28,7 @@
 | --- | --- |
 | 相枚举 | `phase/Phase.java`（属性名 0.1.15 起为 `filling`，Java 侧沿用 Phase 命名） |
 | 相行为总控（充入/实体化/凝固/冻结/融化/霜裂/火蔓延） | `phase/PhaseHelper.java`（属性常量 `FILLING`） |
+| 吸收门控唯一判定源（可替换填充相规则，0.1.17） | `PhaseHelper.canAcceptPhase` + `Phase.isReplaceableFilling()`；接受层/改写层/交互层一律委托它（防漂移，见 §3.7） |
 | 相容宿主标记接口 + 桶/流体默认方法 | `phase/PhaseCapable.java` |
 | 瞄准与直接挖相（含整格宿主/形状表宿主的命中判定） | `phase/PhaseTargeting.java` |
 | 状态级核心 mixin（流体态/光照/随机刻/破坏保留/邻居） | `mixin/BlockStateBaseMixin.java` |
@@ -37,7 +38,8 @@
 | 炼药锅 | `cauldron/CauldronBehaviors.java`、`CauldronBehaviorRegistration.java`、`CauldronHopperTransfer.java`、`ConcreteMappings.java` |
 | 发射器/漏斗 | `interact/LiquidInteractions.java`、`mixin/HopperTransferMixin.java` |
 | 红石相（§3.4） | `redstone/RedstoneBlocks.java`、`redstone/RedstonePhaseBlock.java`、`redstone/CompositeBlocks.java`、`redstone/composites/*`（生成） |
-| 配置 | `LiquidPhaseConfig.java` |
+| 资源包兼容合并（§3.7，0.1.17） | `client/PhasePackMerge.java`（ResourceManager 代理 + 栈顶合并）+ `client/PhasePackMergeCore.java`（纯 Gson 合并核心）+ `mixin/client/PhaseLoaderMixin.java`（≤1.21.1 挂 `ModelManager.loadBlockStates`，1.21.10+ 挂 `BlockStateModelLoader.loadBlockStates`）+ 片段 `assets/liquidphase/phase_parts/<id>.json`（生成器产出） |
+| 配置 | `LiquidPhaseConfig.java`（`packMerge` 控制资源包合并，默认开） |
 
 ## 3. 生成脚本（改动后必须重跑）
 
@@ -446,11 +448,47 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 排计划刻会让开关/拆线延迟两刻才反应。防递归靠“只有功率真的变了才 `setBlock`”，
 与原版 `DefaultRedstoneWireEvaluator` 同一手法。
 
+### 3.7 资源包兼容合并（0.1.17）
+
+第三方包覆盖宿主 blockstate 时，客户端把片段（`assets/liquidphase/phase_parts/<id>.json`，
+生成器与烘焙 blockstate 同源产出）合并进**获胜定义**，包只生效于宿主 part。
+要点与踩过的坑：
+
+- **两条管线、一个注入点**：≤1.21.1 是 `ModelManager.loadBlockStates`（私静）、
+  1.21.10/1.21.11/26.3 是 `BlockStateModelLoader.loadBlockStates`（公静），
+  两者都收 `(ResourceManager, Executor)` 且只经 `listResourceStacks("blockstates", …)`
+  枚举资源栈（栈序低→高、"最后者覆盖"）。`PhaseLoaderMixin` 在入口把参数换成
+  `PhasePackMerge.wrap` 的 `Proxy`（按方法名分派、其余透传）——26.3 把
+  `listResourceStacks` 第二参从 `Predicate` 换成 `Selector`、`getResource` 返回
+  `Optional`，代理按名分派全部免分支。
+- ⚠️ **stonecutter 分支的 live 代码必须是 1.21.11 的**：active 版本直接编译原始源码、
+  `//?` 分支只是注释。`PhaseLoaderMixin` 的 live 分支写错成 `ModelManager` 时，
+  1.21.11 客户端启动即 `Critical injection failure: could not find any targets matching
+  'loadBlockStates'`（实机踩过）。
+- ⚠️ **资源栈的 key 是文件 id**（`minecraft:blockstates/oak_stairs.json`），不是方块 id——
+  直接拿它查 BLOCK 注册表恒为 null、全部宿主静默跳过（实机踩过）。先剥
+  `blockstates/` 前缀与 `.json` 后缀再查注册表/取片段。
+- **合并语义**（`PhasePackMergeCore`，纯 Gson、无 MC 依赖，服务端自检可直接跑）：
+  获胜定义是 variants → 转等价 multipart；片段 `gates` 给获胜宿主 part 合并
+  `filling` 条件——空 when gate（整格宿主专用）命中**全部** part（原版树叶是无条件
+  单一变体，第三方包拆成 per-distance 变体也要全部命中）；混合宿主（台阶）的 gate
+  非空，要求与 part.when **精确相等**（键集相同、值串字面相等），子集匹配会误 gate
+  `"type": "bottom|double"` 这类合并条件。匹配不上时该宿主降级为旧行为（相被宿主
+  模型挡住），不崩溃。`and_condition` 是生成器同名函数的移植。
+- **跳过条件**：栈顶定义引用 `liquidphase:` 模型（= mod 烘焙的或针对本 mod 的包）→
+  不合并（重复追加部件会把覆盖层画两遍）；宿主无片段（第三方 mod 的相容宿主）→
+  静默跳过。
+- **性能**：只在资源重载时对"相容宿主且栈顶无 liquidphase 引用"的栈读一次栈顶 JSON，
+  正常路径零写入。配置 `packMerge=false` 关闭。
+- **验证**：服务端自检 `checkPackMergeFragments`（片段完整性全量扫描 + fixtures 合并
+  断言 + 代理幂等）；1.21.11 实机：含 oak_stairs/stone_slab/oak_leaves 的第三方包 →
+  `merged phase overlays into 3 foreign blockstate(s)`，无 `Unknown property 'filling'`。
+
 ### 3.4 自动化自检
 
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
 `ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，断言数按版本为
-**162（1.19.4 / 1.20.1 / 1.21.1 / 1.21.11 / 26.3）/ 163（1.21.10，多一个干化恶魂断言）**——
+**295（1.19.4 / 1.20.1 / 1.21.1 / 1.21.11 / 26.3）/ 296（1.21.10，多一个干化恶魂断言；0.1.16 及以前为 162/163）**——
 各版本已经收敛到几乎相同，因为断言改成**全量扫描**而不是写死几个代表方块：
 凡是"原生 RenderShape 不是 MODEL 的 phase 宿主"都会被逐个验证，各版本有几个就查几个
 （实测 1.20.1 有 **51** 个，1.21.11 只有 **2** 个（1.21.11 起是 `barrier`/`light`；1.19.4/1.20.1
@@ -517,8 +555,8 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 | 启动服务端 | 日志出现 `injected phase property into … blocks` 与 `redstone phase uses phase=redstone_0..15 (no extra blocks registered)`，无 mixin 报错 |
 | 熔岩桶 → 楼梯 | 出现含熔岩相；整格发光 15；可流出/被流入 |
 | 熔岩桶 → 活板门 / 箱子 / 光源方块 | **原版交互优先**（开关活板门/开箱/调亮度），不灌入——与原版水桶同规则；潜行右键灌入；各版本一致（0.1.13 起，audit §4.7） |
-| 熔岩贴着台阶/蜡烛/营火 | 按形状灌入（0.1.13 起，audit §4.3）；含水的仍拒绝 |
-| 水 → 含熔岩 | 变为含黑曜石相 + 嘶声 |
+| 熔岩贴着台阶/蜡烛/营火 | 按形状灌入（0.1.13 起，audit §4.3）；含水的也灌入并清掉水（0.1.17 可替换填充相规则） |
+| 水 → 含熔岩 | 变为含黑曜石相 + 嘶声（邻居凝固路径不变；水桶直接浇含熔岩相宿主仍拒绝，0.1.17 决策） |
 | 破坏含冰楼梯 | 掉楼梯 + 原地留冰；准星瞄楼梯就按楼梯速度挖，瞄相才按冰算 |
 | 破坏含黑曜石楼梯 | 瞄露出的黑曜石部分需钻石镐；瞄楼梯本体正常速度；破坏后留黑曜石 |
 | 树叶含水/含冰 | 冰相整格显示冰；相=none 时显示树叶原貌 |
@@ -600,7 +638,7 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    > 并集 `V=84` 全宿主 = 1,770,679 / ≈1.4 GiB；并集 `V=84` + 按方块裁剪
    > （白名单 = 楼梯+台阶 5,012 基础状态）= 812,839 / 730 MiB。
    > **扩取值前先确认白名单，墙（26 个方块、8,424 基础状态）必须排除。**
-4. 行为层已做服务端自检（6 版本 162/162/162/163/162/162 项断言全过）+ 启动冒烟 + 6 版本编译；
+4. 行为层已做服务端自检（6 版本 295/295/295/296/295/295 项断言全过，0.1.17）+ 启动冒烟 + 6 版本编译；
    **渲染层与剔除面已在真实客户端（1.21.11 `runClient`）取证修复**：
    带相状态图层为 CUTOUT（半透明宿主保持 TRANSLUCENT）、内缩覆盖层/外扩外壳的
    quad 进入不可剔除列表、几何坐标在宿主外侧；
