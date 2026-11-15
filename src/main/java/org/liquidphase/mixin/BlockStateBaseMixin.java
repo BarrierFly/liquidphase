@@ -202,6 +202,10 @@ public abstract class BlockStateBaseMixin {
         if (level instanceof ServerLevel serverLevel) {
             if (PhaseHelper.isLava(self)) {
                 PhaseHelper.solidifyIfWaterNearby(serverLevel, pos, self);
+                // 缺口 C（audit v2 §2.3，0.1.15 修）：原版源块靠 updateShape/neighborChanged
+                // 在邻居变化时重排流体 tick 实现重流；scheduleLavaFlowTick 此前是死代码，
+                // 熔岩相流出一次后不再重流。接线后与原版源块语义对齐。
+                PhaseHelper.scheduleLavaFlowTick(serverLevel, pos, self);
             }
             PhaseHelper.frostedNeighborChanged(level, pos, self, neighborBlock);
             if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {

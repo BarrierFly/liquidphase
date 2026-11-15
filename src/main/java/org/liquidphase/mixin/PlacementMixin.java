@@ -114,7 +114,7 @@ public class PlacementMixin {
         if (!org.liquidphase.sync.PhaseSyncState.canMutateWorld(context.getLevel())) {
             return;
         }
-        if (this instanceof PhaseCapable && cir.getReturnValue() != null && cir.getReturnValue().hasProperty(PhaseHelper.PHASE)) {
+        if (this instanceof PhaseCapable && cir.getReturnValue() != null && cir.getReturnValue().hasProperty(PhaseHelper.FILLING)) {
             BlockState placed = cir.getReturnValue();
             BlockPos pos = context.getClickedPos();
             FluidState fluidState = context.getLevel().getFluidState(pos);

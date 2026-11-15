@@ -15,7 +15,7 @@
 
 整格模型宿主（树叶 / 铜格栅 / 红树根 / 白杨树叶等原版模型本身就是 0..16 完整立方体）
 改用整格（0..16）覆盖模型 phase_*_full，并把原版 part 的 when 合并上
-"phase": "none|lava|<redstone>"——这些相下宿主模型不渲染、只渲染整格覆盖层
+"filling": "none|lava|<redstone>"——这些相下宿主模型不渲染、只渲染整格覆盖层
 （与这些相"整格实心碰撞"的设定一致）；否则内缩的覆盖层会被完整立方体
 宿主挡住（树叶贴图小孔外完全看不到相）。
 
@@ -67,7 +67,7 @@ REDSTONE_PHASES = "|".join("redstone_%d" % i for i in REDSTONE_POWERS)
 # 注意**不能**把这 24 个取值全写进来：原版 KeyValueCondition.instantiate 发现
 # "条件覆盖属性的全部取值"时会直接返回恒真谓词并打 `Condition ... is always true`
 # 警告，1.21.10+ 每个方块状态各一条，加载日志直接被刷屏。
-FULL_CUBE_HOST_CONDITION = {"phase": "none|lava|" + REDSTONE_PHASES}
+FULL_CUBE_HOST_CONDITION = {"filling": "none|lava|" + REDSTONE_PHASES}
 
 
 def redstone_model(power):
@@ -286,13 +286,13 @@ def negate_condition(when):
 
 
 def and_with_phase(value, cond):
-    """{"phase": 值} 与宿主条件按 AND 合并（结果必须是原版合法的 multipart 条件）。"""
+    """{"filling": 值} 与宿主条件按 AND 合并（结果必须是原版合法的 multipart 条件）。"""
     if not cond:
-        return {"phase": value}
+        return {"filling": value}
     if _is_combiner(cond):
-        return {"AND": [cond, {"phase": value}]}
+        return {"AND": [cond, {"filling": value}]}
     merged = dict(cond)
-    merged["phase"] = value
+    merged["filling"] = value
     return merged
 
 
@@ -335,9 +335,9 @@ def convert(state_json, geometry):
     if mode == "full":
         for part in parts:
             part["when"] = and_condition(part.get("when"), FULL_CUBE_HOST_CONDITION)
-        overlays = [(value, model, {"phase": value}) for value, model in FULL_OVERLAYS]
+        overlays = [(value, model, {"filling": value}) for value, model in FULL_OVERLAYS]
     elif mode == "inset":
-        overlays = [(value, model, {"phase": value}) for value, model in OVERLAYS]
+        overlays = [(value, model, {"filling": value}) for value, model in OVERLAYS]
     else:
         full_whens = []
         seen = set()
@@ -365,7 +365,7 @@ def convert(state_json, geometry):
     # 16 条 part 各自指向按功率着色的模型（0 档暗、15 档亮，对齐原版红石线）。
     for power in REDSTONE_POWERS:
         parts.append({
-            "when": {"phase": "redstone_%d" % power},
+            "when": {"filling": "redstone_%d" % power},
             "apply": {"model": redstone_model(power)},
         })
     return {"multipart": parts}, mode
@@ -376,7 +376,7 @@ def convert(state_json, geometry):
 # 原版会把 when 的每个值按 "|" 拆成 term，逐项去 StateDefinition 的属性取值为里查；
 # 查不到就抛 Unknown value / Unknown property，整份 blockstate 加载失败。
 # ---------------------------------------------------------------------------
-PHASE_VALUES = frozenset(
+FILLING_VALUES = frozenset(
     ["none", "lava", "obsidian", "ice", "frosted_0", "frosted_1", "frosted_2", "frosted_3"]
     + ["redstone_%d" % i for i in REDSTONE_POWERS]
 )
@@ -425,7 +425,7 @@ def validate_result(state_json, known):
                 walk(sub, "%s/%d" % (where, i))
             return
         for key, value in cond.items():
-            valid = PHASE_VALUES if key == "phase" else known.get(key)
+            valid = FILLING_VALUES if key == "filling" else known.get(key)
             if valid is None:
                 problems.append("%s: unknown property '%s'" % (where, key))
                 continue

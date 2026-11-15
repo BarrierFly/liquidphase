@@ -27,7 +27,7 @@ public final class LiquidPhase implements ModInitializer {
 
         if (config.phaseEnabled) {
             injectPhaseProperty();
-            LOGGER.info("[Liquid Phase] redstone phase uses phase=redstone_0..15 (no extra blocks registered)");
+            LOGGER.info("[Liquid Phase] redstone phase uses filling=redstone_0..15 (no extra blocks registered)");
         } else {
             LOGGER.info("[Liquid Phase] 双端功能已关闭（phase 属性未注入；旧存档中的相会被丢弃）");
         }
@@ -83,9 +83,9 @@ public final class LiquidPhase implements ModInitializer {
 
     private static void addPhaseProperty(Block block) {
         //? if 1.19.4 || 1.20.1 {
-        /*virtuoel.statement.api.StateRefresher.INSTANCE.addBlockProperty(block, PhaseHelper.PHASE, Phase.NONE);
+        /*virtuoel.statement.api.StateRefresher.INSTANCE.addBlockProperty(block, PhaseHelper.FILLING, Phase.NONE);
          *///?} else {
-        org.liquidphase.state.PhaseStateRefresher.addBlockProperty(block, PhaseHelper.PHASE, Phase.NONE);
+        org.liquidphase.state.PhaseStateRefresher.addBlockProperty(block, PhaseHelper.FILLING, Phase.NONE);
         //?}
     }
 }

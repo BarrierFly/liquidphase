@@ -37,7 +37,7 @@ public abstract class BigDripleafShapeMixin {
     @Inject(method = "getShape", at = @At("HEAD"), cancellable = true)
     private void liquidphase$getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context, CallbackInfoReturnable<VoxelShape> cir) {
         if (PhaseHelper.getPhase(state) != Phase.NONE) {
-            BlockState vanilla = state.setValue(PhaseHelper.PHASE, Phase.NONE);
+            BlockState vanilla = state.setValue(PhaseHelper.FILLING, Phase.NONE);
             //? if 1.21.10 || 1.21.11 || 26.3 {
             cir.setReturnValue(this.shapes.apply(vanilla));
             //?} else {

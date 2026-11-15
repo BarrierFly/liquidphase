@@ -37,11 +37,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public abstract class ShapeFallbackMixin {
 
     private static BlockState liquidphase$vanillaSibling(BlockState state) {
-        return state.hasProperty(PhaseHelper.PHASE) ? state.setValue(PhaseHelper.PHASE, Phase.NONE) : state;
+        return state.hasProperty(PhaseHelper.FILLING) ? state.setValue(PhaseHelper.FILLING, Phase.NONE) : state;
     }
 
     private static boolean liquidphase$isPhased(BlockState state) {
-        return state.hasProperty(PhaseHelper.PHASE) && state.getValue(PhaseHelper.PHASE) != Phase.NONE;
+        return state.hasProperty(PhaseHelper.FILLING) && state.getValue(PhaseHelper.FILLING) != Phase.NONE;
     }
 
     @Inject(method = "getShape(Lnet/minecraft/world/level/BlockGetter;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/phys/shapes/CollisionContext;)Lnet/minecraft/world/phys/shapes/VoxelShape;",

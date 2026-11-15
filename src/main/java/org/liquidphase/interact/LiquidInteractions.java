@@ -13,7 +13,10 @@ import net.minecraft.world.Container;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.gameevent.GameEvent;
 import net.minecraft.world.level.block.AbstractCauldronBlock;
+import net.minecraft.world.level.block.BucketPickup;
+import net.minecraft.world.level.block.LiquidBlockContainer;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.DispenserBlock;
@@ -23,6 +26,7 @@ import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.level.material.Fluids;
 import org.liquidphase.LiquidPhaseConfig;
 import org.liquidphase.phase.Phase;
+import org.liquidphase.phase.PhaseCapable;
 import org.liquidphase.phase.PhaseHelper;
 
 /**
@@ -146,6 +150,17 @@ public final class LiquidInteractions {
             }
             return null;
         }
+        // 相容宿主格：按原版桶语义灌入（audit v2 §2.1，0.1.15 修）——熔岩写相、水含水；
+        // 宿主拒绝（已有相/含水/barrier）→ 返回 null 落回弹射，与原版 emptyContents
+        // 对拒绝容器返回 false 后弹射的口径一致。
+        Boolean intoHost = dispenseIntoHost(level, front, frontState, lava);
+        if (Boolean.TRUE.equals(intoHost)) {
+            if (liquidInteraction) {
+                stack.shrink(1);
+                return stack;
+            }
+            return consumeWithRemainderHelper(source, stack, new ItemStack(Items.BUCKET));
+        }
         if (liquidInteraction) {
             if (!frontState.isAir() && !frontState.canBeReplaced()) {
                 return null;
@@ -169,6 +184,67 @@ public final class LiquidInteractions {
             }
         }
         return null;
+    }
+
+    /**
+     * 发射器把水/熔岩灌进相容宿主格（audit v2 缺口 A，0.1.15 修）。
+     * {@code TRUE}=灌入成功；{@code FALSE}=宿主拒绝（已有相/含水等，互斥口径）；
+     * {@code null}=前方不是相容宿主。
+     */
+    public static Boolean dispenseIntoHost(Level level, BlockPos pos, BlockState state, boolean lava) {
+        if (!(state.getBlock() instanceof PhaseCapable)) {
+            return null;
+        }
+        boolean filled = lava
+            ? PhaseHelper.fillWithPhase(level, pos, state, Phase.LAVA)
+            : state.getBlock() instanceof LiquidBlockContainer container
+                && container.placeLiquid(level, pos, state, Fluids.WATER.getSource(false));
+        if (filled) {
+            level.playSound(null, pos, lava ? SoundEvents.BUCKET_EMPTY_LAVA : SoundEvents.BUCKET_EMPTY,
+                SoundSource.BLOCKS, 1.0F, 1.0F);
+            level.gameEvent(null, GameEvent.FLUID_PLACE, pos);
+        }
+        return filled;
+    }
+
+    /**
+     * 空桶收取核心（audit v2 缺口 B，0.1.15 修）：按 {@code BucketPickup} 语义收取——
+     * 含水宿主只收水、保宿主（0.1.14 及以前直接 setBlock(AIR) 连方块一起毁）。
+     * {@return 产物物品；null = 没有可收目标}
+     */
+    public static ItemStack collectWithEmptyBucket(Level level, BlockPos pos, BlockState state) {
+        if (PhaseHelper.isLava(state)) {
+            level.setBlock(pos, PhaseHelper.withPhase(state, Phase.NONE), Block.UPDATE_ALL);
+            level.playSound(null, pos, SoundEvents.BUCKET_FILL_LAVA, SoundSource.BLOCKS, 1.0F, 1.0F);
+            return new ItemStack(Items.LAVA_BUCKET);
+        }
+        if (state.getBlock() instanceof BucketPickup pickup) {
+            ItemStack picked = liquidphase$pickup(pickup, level, pos, state);
+            if (!picked.isEmpty()) {
+                level.gameEvent(null, GameEvent.FLUID_PICKUP, pos);
+                return picked;
+            }
+        }
+        FluidState fluid = level.getFluidState(pos);
+        if (fluid.isSource() && (fluid.is(Fluids.WATER) || fluid.is(Fluids.LAVA))) {
+            boolean lava = fluid.is(Fluids.LAVA);
+            level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+            level.playSound(null, pos, lava ? SoundEvents.BUCKET_FILL_LAVA : SoundEvents.BUCKET_FILL,
+                SoundSource.BLOCKS, 1.0F, 1.0F);
+            return new ItemStack(lava ? Items.LAVA_BUCKET : Items.WATER_BUCKET);
+        }
+        return null;
+    }
+
+    /** {@link BucketPickup#pickupBlock} 的版本分支（≤1.20.1 无 user 参数）。 */
+    private static ItemStack liquidphase$pickup(BucketPickup pickup, Level level, BlockPos pos, BlockState state) {
+        //? if 1.19.4 || 1.20.1 {
+        /*return pickup.pickupBlock(level, pos, state);
+         *///?} elif 1.21.1 {
+        /*return pickup.pickupBlock(null, level, pos, state);
+         *///?} else {
+        return pickup.pickupBlock(null, level, pos, state);
+        //?}
     }
 
     /** 复刻 vanilla 的 consumeWithRemainder：消耗 1，产物进槽或掉落。 */
@@ -202,17 +278,9 @@ public final class LiquidInteractions {
             }
             return null;
         }
-        if (PhaseHelper.isLava(frontState)) {
-            level.setBlock(front, PhaseHelper.withPhase(frontState, Phase.NONE), Block.UPDATE_ALL);
-            level.playSound(null, front, SoundEvents.BUCKET_FILL_LAVA, SoundSource.BLOCKS, 1.0F, 1.0F);
-            return consumeWithRemainderHelper(source, stack, new ItemStack(Items.LAVA_BUCKET));
-        }
-        FluidState fluid = level.getFluidState(front);
-        if (fluid.isSource() && (fluid.is(Fluids.WATER) || fluid.is(Fluids.LAVA))) {
-            boolean lava = fluid.is(Fluids.LAVA);
-            level.setBlock(front, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
-            level.playSound(null, front, lava ? SoundEvents.BUCKET_FILL_LAVA : SoundEvents.BUCKET_FILL, SoundSource.BLOCKS, 1.0F, 1.0F);
-            return consumeWithRemainderHelper(source, stack, new ItemStack(lava ? Items.LAVA_BUCKET : Items.WATER_BUCKET));
+        ItemStack collected = collectWithEmptyBucket(level, front, frontState);
+        if (collected != null) {
+            return consumeWithRemainderHelper(source, stack, collected);
         }
         return null;
     }

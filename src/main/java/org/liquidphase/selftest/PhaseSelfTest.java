@@ -76,6 +76,8 @@ public final class PhaseSelfTest {
             checkAdjacentLavaFilling(level, base);
             checkPlacementAbsorption(level, base);
             checkBucketInteraction(level, base);
+            checkDispenserHostFilling(level, base);
+            checkLavaReflowWiring(level, base);
             checkSlabVariantRendering();
         } catch (Throwable t) {
             failed++;
@@ -119,7 +121,7 @@ public final class PhaseSelfTest {
             }
             String id = String.valueOf(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block));
             runtime.add(id);
-            if (!block.defaultBlockState().hasProperty(PhaseHelper.PHASE)) {
+            if (!block.defaultBlockState().hasProperty(PhaseHelper.FILLING)) {
                 missing.add(id);
                 continue;
             }
@@ -680,7 +682,7 @@ public final class PhaseSelfTest {
         // 1.21.10+ 每个方块状态各一条，加载日志被刷屏。
         String stairs = liquidphase$resource("/assets/minecraft/blockstates/oak_stairs.json");
         assertTrue("host parts carry no phase condition at all (no always-true warnings)",
-            stairs != null && !stairs.contains("\"phase\":\"none|lava|obsidian"));
+            stairs != null && !stairs.contains("\"filling\":\"none|lava|obsidian"));
 
         // (b) The render layer fix lives in a mixin (the BlockRenderLayerMap table is rebuilt
         // by the resource reload and would silently lose an init-time putBlock). Assert the
@@ -798,7 +800,7 @@ public final class PhaseSelfTest {
      */
     private static boolean liquidphase$hasShellForEveryPower(String json) {
         for (int power = 0; power < 16; power++) {
-            if (!json.contains("\"phase\":\"redstone_" + power + "\"")) {
+            if (!json.contains("\"filling\":\"redstone_" + power + "\"")) {
                 return false;
             }
             if (!json.contains("liquidphase:block/redstone_phase_" + power + "\"")) {
@@ -816,7 +818,7 @@ public final class PhaseSelfTest {
      * 会判定它恒真并打 {@code Condition ... is always true} 警告（每个状态一条）。
      */
     private static boolean hostPartsCarryNoPhaseCondition(String json) {
-        return !json.contains("\"phase\":\"none|lava|obsidian");
+        return !json.contains("\"filling\":\"none|lava|obsidian");
     }
 
     // ------------------------------------------------------------------
@@ -1158,6 +1160,97 @@ public final class PhaseSelfTest {
     }
 
     /**
+     * 发射器灌宿主 + 空桶保宿主（audit v2 缺口 A/B，0.1.15 修）：
+     * 0.1.14 及以前发射器液体桶对宿主整桶弹射、空桶把含水宿主连方块一起毁。
+     * 直接调 {@code LiquidInteractions.dispenseIntoHost} / {@code collectWithEmptyBucket}
+     * （发射器行为类的共享核心，与真实触发链同参）。
+     */
+    private static void checkDispenserHostFilling(ServerLevel level, BlockPos base) {
+        BlockPos pos = base.offset(24, 1, 0);
+        for (Block host : new Block[]{Blocks.OAK_FENCE, Blocks.OAK_LEAVES}) {
+            // (A) 熔岩灌入宿主
+            level.setBlock(pos, host.defaultBlockState(), Block.UPDATE_ALL);
+            assertTrue("dispenser lava fills " + host,
+                Boolean.TRUE.equals(org.liquidphase.interact.LiquidInteractions.dispenseIntoHost(
+                    level, pos, level.getBlockState(pos), true))
+                    && PhaseHelper.isLava(level.getBlockState(pos)));
+            // (A) 反向 1：熔岩相宿主拒绝再灌熔岩（phase != NONE）
+            assertTrue("dispenser lava rejected by lava-phased " + host,
+                Boolean.FALSE.equals(org.liquidphase.interact.LiquidInteractions.dispenseIntoHost(
+                    level, pos, level.getBlockState(pos), true)));
+            // (A) 反向 2：含水宿主拒绝熔岩（水与相互斥）
+            level.setBlock(pos, host.defaultBlockState()
+                .setValue(BlockStateProperties.WATERLOGGED, true), Block.UPDATE_ALL);
+            assertTrue("dispenser lava rejected by waterlogged " + host,
+                Boolean.FALSE.equals(org.liquidphase.interact.LiquidInteractions.dispenseIntoHost(
+                    level, pos, level.getBlockState(pos), true))
+                    && level.getBlockState(pos).getValue(BlockStateProperties.WATERLOGGED)
+                    && !PhaseHelper.isLava(level.getBlockState(pos)));
+            level.setBlock(pos, host.defaultBlockState(), Block.UPDATE_ALL);
+            // (A) 水灌入宿主
+            assertTrue("dispenser water waterlogs " + host,
+                Boolean.TRUE.equals(org.liquidphase.interact.LiquidInteractions.dispenseIntoHost(
+                    level, pos, level.getBlockState(pos), false))
+                    && level.getBlockState(pos).getValue(BlockStateProperties.WATERLOGGED));
+            // (B) 空桶收含水宿主：只收水、保宿主
+            ItemStack bucket = org.liquidphase.interact.LiquidInteractions.collectWithEmptyBucket(
+                level, pos, level.getBlockState(pos));
+            assertTrue("dispenser empty bucket scoops water from " + host + " and keeps the block",
+                bucket != null && bucket.is(net.minecraft.world.item.Items.WATER_BUCKET)
+                    && level.getBlockState(pos).is(host)
+                    && !level.getBlockState(pos).getValue(BlockStateProperties.WATERLOGGED));
+            // (B) 反向：干宿主无可收目标
+            assertTrue("dispenser empty bucket ignores dry " + host,
+                org.liquidphase.interact.LiquidInteractions.collectWithEmptyBucket(
+                    level, pos, level.getBlockState(pos)) == null);
+            level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        }
+        // (B) 熔岩相宿主：收相、保宿主
+        level.setBlock(pos, PhaseHelper.withPhase(Blocks.OAK_FENCE.defaultBlockState(), Phase.LAVA),
+            Block.UPDATE_ALL);
+        ItemStack lavaBucket = org.liquidphase.interact.LiquidInteractions.collectWithEmptyBucket(
+            level, pos, level.getBlockState(pos));
+        assertTrue("dispenser empty bucket scoops the lava phase and keeps the host",
+            lavaBucket != null && lavaBucket.is(net.minecraft.world.item.Items.LAVA_BUCKET)
+                && level.getBlockState(pos).is(Blocks.OAK_FENCE)
+                && !PhaseHelper.isLava(level.getBlockState(pos)));
+        level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+    }
+
+    /**
+     * 熔岩相重流接线（audit v2 缺口 C，0.1.15 修）：scheduleLavaFlowTick 此前是死代码，
+     * 邻居变化后源不再重排流体 tick。这里用 hasScheduledTick 做同步判别：
+     * 放置本身不排 tick，邻居更新后必须排上。
+     */
+    private static void checkLavaReflowWiring(ServerLevel level, BlockPos base) {
+        BlockPos fencePos = base.offset(28, 1, 0);
+        BlockPos leavesPos = base.offset(29, 1, 0);
+        for (Block host : new Block[]{Blocks.OAK_FENCE, Blocks.OAK_LEAVES}) {
+            BlockPos pos = host == Blocks.OAK_FENCE ? fencePos : leavesPos;
+            // Fluids.LAVA 的 scheduled tick 会随存档持久化——历次自检/探针用过的坐标都可能带
+            // 未到期的残留 tick。先清空该位置的流体 tick，判别才可复现。
+            clearFluidTicks(level, pos);
+            clearFluidTicks(level, pos.east());
+            level.setBlock(pos, PhaseHelper.withPhase(host.defaultBlockState(), Phase.LAVA),
+                Block.UPDATE_CLIENTS);
+            // 放置后把 tick 再清一次：这样后面出现的 tick 只可能来自
+            // "邻居变化 → handleNeighborChanged → scheduleLavaFlowTick"这条接线（缺口 C）。
+            clearFluidTicks(level, pos);
+            level.setBlock(pos.east(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+            assertTrue("lava phase " + host + " reschedules its flow tick on neighbour change",
+                level.getFluidTicks().hasScheduledTick(pos, Fluids.LAVA));
+            level.setBlock(pos.east(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+            level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        }
+    }
+
+    /** 清空某位置全部流体 scheduled tick（自检场地复用坐标，残留 tick 会污染 hasScheduledTick）。 */
+    private static void clearFluidTicks(ServerLevel level, BlockPos pos) {
+        ((net.minecraft.world.ticks.LevelChunkTicks<net.minecraft.world.level.material.Fluid>) level.getChunkAt(pos).getFluidTicks())
+            .removeIf(tick -> tick.pos().equals(pos));
+    }
+
+    /**
      * 台阶的整格判定按**变体**（audit §4.1，0.1.13 修）：type=double 引用整块模型，
      * 固体相换整格相材质；type=bottom/top 保持宿主常驻 + 内缩覆盖层。0.1.12 及以前
      * 整格判定按方块（all(...)），混合模型必然判否 → 双台阶的覆盖层整个藏在宿主模型里。
@@ -1172,13 +1265,13 @@ public final class PhaseSelfTest {
         assertTrue("double slab swaps in the full phase material for solid phases",
             slab.contains("phase_ice_full") && slab.contains("phase_obsidian_full"));
         assertTrue("the full overlay is conditioned on the double variant",
-            slab.contains("\"type\":\"double\",\"phase\":\"obsidian\""));
+            slab.contains("\"type\":\"double\",\"filling\":\"obsidian\""));
         assertTrue("the double slab host part keeps rendering under redstone phases",
-            slab.contains("\"type\":\"double\",\"phase\":\"none|lava|redstone_0|\"")
-                || slab.contains("\"type\":\"double\",\"phase\":\"none|lava|"));
+            slab.contains("\"type\":\"double\",\"filling\":\"none|lava|redstone_0|\"")
+                || slab.contains("\"type\":\"double\",\"filling\":\"none|lava|"));
         // 半砖变体：内缩覆盖层，且限定在非 double 变体（避免双台阶同时叠两种覆盖层）。
         assertTrue("non-double slab variants keep the inset overlay",
-            slab.contains("\"type\":\"!double\",\"phase\":\"obsidian\"")
+            slab.contains("\"type\":\"!double\",\"filling\":\"obsidian\"")
                 && slab.contains("liquidphase:block/phase_obsidian\""));
         // 反向：部分覆盖宿主（楼梯）不应突然获得整格层（现有断言已在 checkRedstoneRenderParts 覆盖）。
     }
@@ -1205,7 +1298,7 @@ public final class PhaseSelfTest {
     }
 
     private static void clearArea(ServerLevel level, BlockPos base) {
-        for (int x = -1; x <= 26; x++) {
+        for (int x = -1; x <= 31; x++) {
             for (int y = 0; y <= 2; y++) {
                 for (int z = -1; z <= 9; z++) {
                     level.setBlock(base.offset(x, y, z), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);

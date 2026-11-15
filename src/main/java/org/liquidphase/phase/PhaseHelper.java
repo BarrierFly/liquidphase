@@ -34,8 +34,13 @@ import net.minecraft.world.attribute.EnvironmentAttributes;
  * 所有 mixin 与接口默认方法都委托到这里；版本差异（签名/蒸发判定）用 stonecutter 分支处理。
  */
 public final class PhaseHelper {
-    /** 相属性：取值见 {@link Phase}；注入到全部可含水方块（PhaseCapable）。 */
-    public static final EnumProperty<Phase> PHASE = EnumProperty.create("phase", Phase.class);
+    /**
+     * 填充相属性：取值见 {@link Phase}；注入到全部可含水方块（PhaseCapable）。
+     * <p>
+     * 属性名 0.1.15 起为 {@code filling}（填充相口径；0.1.14 及以前叫 {@code phase}，
+     * 属性名变更会使旧存档的相丢失，与移除 mod 同口径）。Java 侧沿用 Phase 命名。
+     */
+    public static final EnumProperty<Phase> FILLING = EnumProperty.create("filling", Phase.class);
 
     /** 原版 LiquidBlock.shouldSpreadLiquid 检查水的方向组（DOWN,SOUTH,NORTH,EAST,WEST，取 opposite 后即 UP+四水平向）。 */
     private static final Direction[] POSSIBLE_FLOW_DIRECTIONS = {Direction.DOWN, Direction.SOUTH, Direction.NORTH, Direction.EAST, Direction.WEST};
@@ -48,11 +53,11 @@ public final class PhaseHelper {
     // ------------------------------------------------------------------
 
     public static boolean hasPhaseProperty(BlockState state) {
-        return state.hasProperty(PHASE);
+        return state.hasProperty(FILLING);
     }
 
     public static Phase getPhase(BlockState state) {
-        return state.hasProperty(PHASE) ? state.getValue(PHASE) : Phase.NONE;
+        return state.hasProperty(FILLING) ? state.getValue(FILLING) : Phase.NONE;
     }
 
     public static boolean isLava(BlockState state) {
@@ -74,10 +79,10 @@ public final class PhaseHelper {
      * （红石相现在是 phase 的一个取值，同样走这里。）
      */
     public static BlockState withPhase(BlockState state, Phase phase) {
-        if (!state.hasProperty(PHASE)) {
+        if (!state.hasProperty(FILLING)) {
             return state;
         }
-        BlockState result = state.setValue(PHASE, phase);
+        BlockState result = state.setValue(FILLING, phase);
         if (result.hasProperty(BlockStateProperties.WATERLOGGED)) {
             result = result.setValue(BlockStateProperties.WATERLOGGED, phase == Phase.NONE && result.getValue(BlockStateProperties.WATERLOGGED));
         }
@@ -86,7 +91,7 @@ public final class PhaseHelper {
 
     /** 融化：冰相 → 水相（waterlogged=true, phase=none）；蒸发维度直接去掉相。 */
     public static BlockState meltedState(BlockState state, boolean evaporates) {
-        BlockState result = state.setValue(PHASE, Phase.NONE);
+        BlockState result = state.setValue(FILLING, Phase.NONE);
         if (!evaporates && result.hasProperty(BlockStateProperties.WATERLOGGED)) {
             result = result.setValue(BlockStateProperties.WATERLOGGED, true);
         }
@@ -105,7 +110,7 @@ public final class PhaseHelper {
      * 避免误杀树叶/格栅等整格方块。
      */
     public static boolean canAcceptPhase(BlockState state, BlockGetter level, BlockPos pos, Phase phase) {
-        if (phase == Phase.NONE || !state.hasProperty(PHASE) || state.getValue(PHASE) != Phase.NONE) {
+        if (phase == Phase.NONE || !state.hasProperty(FILLING) || state.getValue(FILLING) != Phase.NONE) {
             return false;
         }
         if (state.hasProperty(BlockStateProperties.WATERLOGGED) && state.getValue(BlockStateProperties.WATERLOGGED)) {
@@ -220,8 +225,8 @@ public final class PhaseHelper {
             return true;
         }
         BlockState state = level.getBlockState(pos);
-        return state.hasProperty(PHASE)
-            && state.getValue(PHASE) == Phase.NONE
+        return state.hasProperty(FILLING)
+            && state.getValue(FILLING) == Phase.NONE
             && state.hasProperty(BlockStateProperties.WATERLOGGED)
             && state.getValue(BlockStateProperties.WATERLOGGED);
     }

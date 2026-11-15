@@ -33,11 +33,11 @@ public abstract class BlockBehaviourMixin {
 
     /** 需要形状兜底的状态：带相且不是 none（红石相也在内，形状表同样可能查不到）。 */
     private static boolean liquidphase$needsFallback(BlockState state) {
-        return state.hasProperty(PhaseHelper.PHASE) && state.getValue(PhaseHelper.PHASE) != Phase.NONE;
+        return state.hasProperty(PhaseHelper.FILLING) && state.getValue(PhaseHelper.FILLING) != Phase.NONE;
     }
 
     private static BlockState liquidphase$sibling(BlockState state) {
-        return state.hasProperty(PhaseHelper.PHASE) ? state.setValue(PhaseHelper.PHASE, Phase.NONE) : state;
+        return state.hasProperty(PhaseHelper.FILLING) ? state.setValue(PhaseHelper.FILLING, Phase.NONE) : state;
     }
 
     @Inject(method = "getCollisionShape", at = @At("RETURN"), cancellable = true)

@@ -35,14 +35,14 @@ public abstract class CrossCollisionShapeMixin {
     @Inject(method = "getShape", at = @At("HEAD"), cancellable = true)
     private void liquidphase$getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context, CallbackInfoReturnable<VoxelShape> cir) {
         if (PhaseHelper.getPhase(state) != Phase.NONE) {
-            cir.setReturnValue(this.shapes.apply(state.setValue(PhaseHelper.PHASE, Phase.NONE)));
+            cir.setReturnValue(this.shapes.apply(state.setValue(PhaseHelper.FILLING, Phase.NONE)));
         }
     }
 
     @Inject(method = "getCollisionShape", at = @At("HEAD"), cancellable = true)
     private void liquidphase$getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context, CallbackInfoReturnable<VoxelShape> cir) {
         if (PhaseHelper.getPhase(state) != Phase.NONE) {
-            cir.setReturnValue(this.collisionShapes.apply(state.setValue(PhaseHelper.PHASE, Phase.NONE)));
+            cir.setReturnValue(this.collisionShapes.apply(state.setValue(PhaseHelper.FILLING, Phase.NONE)));
         }
     }
     //?}

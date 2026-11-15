@@ -28,7 +28,7 @@ public abstract class FenceOcclusionMixin {
     @Inject(method = "getOcclusionShape", at = @At("HEAD"), cancellable = true)
     private void liquidphase$getOcclusionShape(BlockState state, CallbackInfoReturnable<VoxelShape> cir) {
         if (PhaseHelper.getPhase(state) != Phase.NONE) {
-            cir.setReturnValue(this.occlusionShapes.apply(state.setValue(PhaseHelper.PHASE, Phase.NONE)));
+            cir.setReturnValue(this.occlusionShapes.apply(state.setValue(PhaseHelper.FILLING, Phase.NONE)));
         }
     }
     //?}

@@ -69,7 +69,7 @@ def bad_conditions(data):
 def always_true_conditions(data):
     """原版 `KeyValueCondition` 对"覆盖属性全部取值"的条件会打 always-true 警告。
 
-    我们生成的 `phase` 条件里，一个 `|` 分隔值若包含全部 24 个相取值就算恒真。
+    我们生成的 `filling` 条件里，一个 `|` 分隔值若包含全部 24 个相取值就算恒真。
     每个方块状态一条警告，1.21.10+ 会把加载日志刷爆。
     """
     all_values = {'none', 'lava', 'obsidian', 'ice',
@@ -86,7 +86,7 @@ def always_true_conditions(data):
                 for sub in (value if isinstance(value, list) else []):
                     walk(sub)
                 continue
-            if key == 'phase' and isinstance(value, str):
+            if key == 'filling' and isinstance(value, str):
                 terms = {t.lstrip('!') for t in value.split('|')}
                 if all_values <= terms:
                     hits += 1
@@ -185,7 +185,7 @@ for ver, jar in jars():
             # 必须有一条 `phase=redstone_N` 且指向该档位外壳模型的 part。
             for power in (0, 15):
                 wanted = 'liquidphase:block/redstone_phase_%d' % power
-                if not any(part.get('when') == {'phase': 'redstone_%d' % power}
+                if not any(part.get('when') == {'filling': 'redstone_%d' % power}
                            and wanted in json.dumps(part.get('apply') or {})
                            for part in (data.get('multipart') or [])):
                     empty_states.append('%s@redstone_%d' % (block, power))
