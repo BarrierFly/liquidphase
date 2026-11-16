@@ -600,6 +600,7 @@ public final class PhaseSelfTest {
         java.util.List<String> noShell = new java.util.ArrayList<>();
         java.util.List<String> badHost = new java.util.ArrayList<>();
         java.util.List<String> fullCubeBroken = new java.util.ArrayList<>();
+        java.util.List<String> fullCubeOverlayReferenced = new java.util.ArrayList<>();
         int scanned = 0;
         if (raw != null) {
             for (String line : raw.split("\\R")) {
@@ -616,24 +617,29 @@ public final class PhaseSelfTest {
                 if (!liquidphase$hasShellForEveryPower(json)) {
                     noShell.add(id);
                 }
-                // 全格宿主会把宿主 part 限制在"宿主可见"的相上；其余宿主不该带 phase 条件。
-                boolean fullCube = json.contains("phase_ice_full");
-                if (!fullCube && !hostPartsCarryNoPhaseCondition(json)) {
+                // 0.1.18 起**所有**宿主（含整格/混合）的宿主 part 都不带相条件：
+                // 相只作为内缩叠加层，宿主始终可见（与含熔岩一致）。
+                if (!hostPartsCarryNoPhaseCondition(json)) {
                     badHost.add(id);
                 }
-                // 全格宿主的宿主 part 必须保留 redstone_* —— 一旦删掉，含红石相就整块隐形
-                // （0.1.8 的实机 bug）。
-                if (fullCube && !json.contains("redstone_15")) {
+                // 每个宿主的宿主 part 都必须在红石相下保留 —— 一旦屏蔽，含红石相就整块
+                // 隐形（0.1.8 的实机 bug），或变成"只剩外壳、宿主消失"。
+                if (!json.contains("redstone_15")) {
                     fullCubeBroken.add(id);
+                }
+                // 0.1.18 起不再使用整格相材质（与宿主模型共面会 z-fighting）。
+                if (json.contains("liquidphase:block/phase_obsidian_full")
+                    || json.contains("liquidphase:block/phase_ice_full")) {
+                    fullCubeOverlayReferenced.add(id);
                 }
             }
         }
         assertTrue("scanned more than just a handful of blockstates (" + scanned + " scanned)", scanned > 10);
         assertTrue("every phased blockstate has one shell part per power level (broken: " + noShell + ")",
             noShell.isEmpty());
-        assertTrue("non-full-cube hosts carry no phase condition on the host part (broken: " + badHost + ")",
+        assertTrue("no host part carries a phase condition — every host stays visible (broken: " + badHost + ")",
             badHost.isEmpty());
-        assertTrue("full-cube hosts keep their host part visible under redstone phases "
+        assertTrue("every host part still renders under redstone phases "
                 + "(broken: " + fullCubeBroken + ")", fullCubeBroken.isEmpty());
 
         // 整格宿主（树叶/铜格栅/红树根）单独确认：宿主 part 在红石相下仍然渲染。
@@ -654,13 +660,23 @@ public final class PhaseSelfTest {
         }
 
         // ---- regression for the 0.1.11 bugs ----
-        // 整格宿主要靠模型几何自动判定，不能用手写白名单：26.3 新增的白杨树叶就是
-        // 漏登记的例子，漏了等于"含冰相完全看不见"。
+        // 整格宿主的相用**内缩**覆盖层（0.1.18 起）：宿主模型是 0..16 整格，
+        // 若相也用 0..16 会与之共面 z-fighting，含相时树叶与相随机互相遮挡。
+        // 内缩后树叶稳定在外层、相从贴图缝隙透出，与含熔岩的观感一致。
         String poplar = liquidphase$resource("/assets/minecraft/blockstates/orange_poplar_leaves.json");
         if (poplar != null) {
-            assertTrue("new full-cube host (orange poplar leaves) is detected as full-cube",
-                poplar.contains("phase_ice_full"));
+            assertTrue("full-cube host (orange poplar leaves) uses the inset overlay, not the full one",
+                poplar.contains("liquidphase:block/phase_ice")
+                    && !poplar.contains("phase_ice_full"));
+            assertTrue("full-cube host keeps its own model visible (no phase gating on the host part)",
+                poplar.contains("minecraft:block/orange_poplar_leaves")
+                    && hostPartsCarryNoPhaseCondition(poplar));
         }
+        // 树叶同样：宿主 part 无条件、相用内缩覆盖层。
+        assertTrue("leaves host part is unconditional and the overlay is inset",
+            leaves != null
+                && leaves.contains("\"model\":\"minecraft:block/oak_leaves\"")
+                && !leaves.contains("phase_ice_full"));
         // 反向：部分覆盖的宿主必须留在内缩路径（整格替换会把它的空隙吃掉）。
         String stairsRes = liquidphase$resource("/assets/minecraft/blockstates/oak_stairs.json");
         assertTrue("partial host (oak stairs) keeps the inset overlay",
@@ -686,13 +702,12 @@ public final class PhaseSelfTest {
         assertTrue("redstone shell power models use distinct textures",
             dimShell != null && brightShell != null
                 && dimShell.contains("redstone_phase_0") && brightShell.contains("redstone_phase_15"));
-        // Full-cube overlays sit exactly on the block boundary, so cullface is legitimate there.
-        String full = liquidphase$resource("/assets/liquidphase/models/block/phase_ice_full.json");
-        assertTrue("full-cube overlay exists", full != null);
-        if (full != null) {
-            assertTrue("full-cube overlay keeps cullface (faces are on the boundary)",
-                full.contains("\"cullface\""));
-        }
+        // 0.1.18 起所有宿主的相都用内缩覆盖层（含整格宿主），因此 _full 系列模型
+        // 不再被任何 blockstate 引用；仍留在资源里只为兼容旧存档/旧包引用。
+        // 这里改为断言"产物里不出现 phase_*_full"——一旦回退到整格替换，
+        // 树叶/铜格栅会与宿主共面 z-fighting，必须由断言拦住。
+        assertTrue("no generated blockstate uses the full-cube phase material any more",
+            fullCubeOverlayReferenced.isEmpty());
 
         // (a2) 宿主 part 不能再带"覆盖全部 24 个相"的恒真条件：原版
         // KeyValueCondition.instantiate 会为它打 `Condition ... is always true` 警告，
@@ -1553,12 +1568,14 @@ public final class PhaseSelfTest {
             return;
         }
         String slabJson = slabMerged.toString();
-        assertTrue("merged slab gates the double variant on host-visible fillings",
-            slabJson.contains("\"type\":\"double\",\"filling\":\"none|lava|"));
+        // 0.1.18 起不再按变体门控宿主：所有宿主 part 一律保持渲染，相只用内缩覆盖层。
+        assertTrue("merged slab keeps every host variant ungated (host always visible)",
+            slabJson.contains("\"type\":\"double\"") && !slabJson.contains("\"type\":\"double\",\"filling\""));
         assertTrue("merged slab keeps the bottom/top variants ungated",
             slabJson.contains("\"type\":\"bottom\"") && !slabJson.contains("\"type\":\"bottom\",\"filling\""));
-        assertTrue("merged slab appends the full overlays and the redstone shell",
-            slabJson.contains("liquidphase:block/phase_ice_full")
+        assertTrue("merged slab appends the inset overlays and the redstone shell",
+            slabJson.contains("liquidphase:block/phase_ice")
+                && !slabJson.contains("phase_ice_full")
                 && slabJson.contains("liquidphase:block/redstone_phase_0")
                 && slabJson.contains("liquidphase:block/redstone_phase_15"));
 
@@ -1581,8 +1598,9 @@ public final class PhaseSelfTest {
             stairsJson.contains("liquidphase:block/phase_obsidian")
                 && stairsJson.contains("liquidphase:block/redstone_phase_8"));
 
-        // (4b) 合并核心 × 整格宿主（树叶）：空 when gate 命中**全部** part——
-        // 原版树叶是无条件单一变体，第三方包拆成 per-distance 变体时也要全部门控。
+        // (4b) 合并核心 × 整格宿主（树叶）：宿主 part 一律保持渲染，相用内缩覆盖层。
+        // 原始树叶是无条件单一变体，第三方包常拆成 per-distance 变体；
+        // 两种形态下宿主都必须可见、相都必须内缩（否则与 0..16 的树叶共面 z-fighting）。
         JsonObject leavesWinner = com.google.gson.JsonParser.parseString(
             liquidphase$foreignFixture("oak_leaves")).getAsJsonObject();
         JsonObject leavesFragment = com.google.gson.JsonParser.parseString(
@@ -1593,11 +1611,14 @@ public final class PhaseSelfTest {
             return;
         }
         String leavesJson = leavesMerged.toString();
-        assertTrue("empty-when gate applies to every split variant",
-            leavesJson.contains("\"distance\":\"1\",\"persistent\":\"false\",\"filling\":\"none|lava|")
-                && leavesJson.contains("\"distance\":\"3\",\"persistent\":\"true\",\"filling\":\"none|lava|"));
-        assertTrue("full-cube host swaps in the full phase material for solid phases",
-            leavesJson.contains("liquidphase:block/phase_ice_full"));
+        assertTrue("split leaf variants stay ungated (host visible under every phase)",
+            leavesJson.contains("\"distance\":\"1\",\"persistent\":\"false\"")
+                && leavesJson.contains("\"distance\":\"3\",\"persistent\":\"true\"")
+                && !leavesJson.contains("\"persistent\":\"false\",\"filling\"")
+                && !leavesJson.contains("\"persistent\":\"true\",\"filling\""));
+        assertTrue("full-cube host uses the inset phase material (no z-fighting with its 0..16 model)",
+            leavesJson.contains("liquidphase:block/phase_ice")
+                && !leavesJson.contains("phase_ice_full"));
 
         // (5) 代理包装：幂等 + 透传（用 ResourceManager.Empty 做最小可调用的 RM）。
         // 合并开关强制打开，避免本机配置文件影响自检结论（内存态，不落盘）。
@@ -1625,9 +1646,12 @@ public final class PhaseSelfTest {
     }
 
     /**
-     * 台阶的整格判定按**变体**（audit §4.1，0.1.13 修）：type=double 引用整块模型，
-     * 固体相换整格相材质；type=bottom/top 保持宿主常驻 + 内缩覆盖层。0.1.12 及以前
-     * 整格判定按方块（all(...)），混合模型必然判否 → 双台阶的覆盖层整个藏在宿主模型里。
+     * 台阶的相渲染（0.1.18 起统一）：所有变体都用**内缩覆盖层**，宿主 part 一律保持渲染。
+     * <p>
+     * 0.1.13–0.1.17 按变体拆分（type=double 换 phase_*_full 并屏蔽宿主）。问题有两个：
+     * 屏蔽宿主让双台阶含固相变成"一整块冰/黑曜石"，与含熔岩（流体渲染、宿主照常可见）不一致；
+     * phase_*_full 与 double 变体的整块模型共面，会 z-fighting。
+     * 现在双台阶与半砖外观一致，宿主始终可见。
      */
     private static void checkSlabVariantRendering() {
         String slab = liquidphase$resource("/assets/minecraft/blockstates/stone_slab.json");
@@ -1635,18 +1659,20 @@ public final class PhaseSelfTest {
         if (slab == null) {
             return;
         }
-        // 双台阶变体：整格相材质，宿主 part 限制在"宿主可见"的相（none|lava|redstone_*）。
-        assertTrue("double slab swaps in the full phase material for solid phases",
-            slab.contains("phase_ice_full") && slab.contains("phase_obsidian_full"));
-        assertTrue("the full overlay is conditioned on the double variant",
-            slab.contains("\"type\":\"double\",\"filling\":\"obsidian\""));
-        assertTrue("the double slab host part keeps rendering under redstone phases",
-            slab.contains("\"type\":\"double\",\"filling\":\"none|lava|redstone_0|\"")
-                || slab.contains("\"type\":\"double\",\"filling\":\"none|lava|"));
-        // 半砖变体：内缩覆盖层，且限定在非 double 变体（避免双台阶同时叠两种覆盖层）。
-        assertTrue("non-double slab variants keep the inset overlay",
-            slab.contains("\"type\":\"!double\",\"filling\":\"obsidian\"")
-                && slab.contains("liquidphase:block/phase_obsidian\""));
+        assertTrue("double slab uses the inset phase material (not the full one)",
+            !slab.contains("phase_ice_full") && !slab.contains("phase_obsidian_full"));
+        // 三个阶段变体（bottom/double/top）都保持宿主 part 常驻，不带相条件。
+        assertTrue("every slab variant keeps its host part ungated",
+            slab.contains("\"type\":\"bottom\"")
+                && slab.contains("\"type\":\"double\"")
+                && slab.contains("\"type\":\"top\"")
+                && !slab.contains("\"type\":\"double\",\"filling\"")
+                && !slab.contains("\"type\":\"bottom\",\"filling\"")
+                && !slab.contains("\"type\":\"top\",\"filling\""));
+        // 内缩覆盖层：条件只有 filling，不再按变体拆分（也没有 "!double" 取反）。
+        assertTrue("the inset overlay is unconditional on slab variant (only filling gates it)",
+            slab.contains("{\"when\":{\"filling\":\"obsidian\"}")
+                && !slab.contains("!double"));
         // 反向：部分覆盖宿主（楼梯）不应突然获得整格层（现有断言已在 checkRedstoneRenderParts 覆盖）。
     }
 

@@ -333,45 +333,38 @@ def convert(state_json, geometry):
         mode = "inset"
 
     if mode == "full":
-        for part in parts:
-            part["when"] = and_condition(part.get("when"), FULL_CUBE_HOST_CONDITION)
-        overlays = [(value, model, {"filling": value}) for value, model in FULL_OVERLAYS]
+        # 整格宿主（树叶 / 铜格栅 / 红树根）：宿主**照常渲染**，相用内缩覆盖层。
+        #
+        # 0.1.18 起不再"宿主 part 限制在宿主可见的相 + 整格相材质替换"：
+        # 那样含固相时宿主整个消失、只剩一整块冰/黑曜石，与熔岩相（流体渲染、
+        # 宿主照常可见）表现不一致，用户明确要求"树叶在上层、相在下层"。
+        #
+        # 为什么必须用**内缩**覆盖层而不是 phase_*_full：树叶宿主模型是 0..16 整格，
+        # phase_*_full 也是 0..16，两者完全共面 → z-fighting，树叶与相随机互相遮挡。
+        # 内缩 0.25px 后树叶稳定在外层：不透明树叶遮住相，贴图缝隙里露出相，
+        # 正是熔岩相给人的观感。
+        overlays = [(value, model, {"filling": value}) for value, model in OVERLAYS]
     elif mode == "inset":
         overlays = [(value, model, {"filling": value}) for value, model in OVERLAYS]
     else:
-        full_whens = []
-        seen = set()
-        for part, full in zip(parts, full_flags):
-            if not full:
-                continue
-            key = json.dumps(part["when"], sort_keys=True)
-            if key not in seen:
-                seen.add(key)
-                full_whens.append(part["when"])
-            part["when"] = and_condition(part.get("when"), FULL_CUBE_HOST_CONDITION)
-        is_full_state = full_whens[0] if len(full_whens) == 1 else {"OR": full_whens}
-        is_inset_state = negate_condition(is_full_state)
-        overlays = [(value, model, and_with_phase(value, is_full_state))
-                    for value, model in FULL_OVERLAYS]
-        overlays += [(value, model, and_with_phase(value, is_inset_state))
-                     for value, model in OVERLAYS]
+        # 混合宿主（台阶）：整格变体（type=double）与半砖变体（bottom/top）统一用
+        # **内缩覆盖层**，宿主 part 一律保持渲染。
+        #
+        # 0.1.18 起不再按变体拆分（原做法：double 变体屏蔽宿主 + phase_*_full）。
+        # 理由与整格宿主相同：屏蔽宿主会让"双台阶含固相"变成一整块冰/黑曜石，
+        # 与熔岩相不一致；而 phase_*_full 与 double 变体的整块模型共面会 z-fighting。
+        # 统一内缩后，双台阶与半砖的相外观一致，宿主始终可见。
+        overlays = [(value, model, {"filling": value}) for value, model in OVERLAYS]
 
     # 资源包兼容片段（0.1.17）：烘焙 JSON 之外，另出一份"纯相部件 + 宿主 part 门控"
     # 的片段（assets/liquidphase/phase_parts/<id>.json）。第三方包整体覆盖宿主
     # blockstate 时，客户端在加载点把片段合并进获胜定义（PhasePackMergeCore），
-    # 使包只生效于宿主 part。gate 的 when 是**门控前**的宿主 part 条件
-    # （Java 侧要求与获胜定义 part 的 when 精确相等才合并，字面不等则降级跳过）。
-    # inset 模式没有 gate：内缩覆盖层与宿主 part 天然叠加，无需隐藏宿主。
+    # 使包只生效于宿主 part。
+    #
+    # 0.1.18 起**所有宿主都不再门控**：宿主 part 一律保持渲染，相只作为内缩叠加层
+    # （见上面三类 mode 的处理）。因此片段不需要 gates——这也是栅栏/楼梯这类
+    # 内缩宿主一直以来的形态，现在整格与混合宿主与它统一。
     host_gates = []
-    if mode == "full":
-        # 整格宿主：**每个** part 都在整格集合里，统一门控是安全的。
-        # gate 的 when 留空 = Java 侧"匹配获胜定义的全部 part"——原版树叶是无条件
-        # 单一变体，第三方包常拆成 per-distance 变体，精确匹配会漏掉它们。
-        host_gates = [{"when": {}, "with": dict(FULL_CUBE_HOST_CONDITION)}]
-    elif mode == "mixed":
-        # 混合宿主：只有整格变体（预处理前 when 已由 mixed 分支收集进 full_whens，
-        # 永不为空——无条件整格 part 会退回 inset 模式）需要门控，用精确匹配。
-        host_gates = [{"when": w or {}, "with": dict(FULL_CUBE_HOST_CONDITION)} for w in full_whens]
     seen_gates = set()
     gates = []
     for gate in host_gates:
