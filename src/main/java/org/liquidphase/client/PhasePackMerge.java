@@ -58,11 +58,16 @@ public final class PhasePackMerge {
     /** {@return 包了合并逻辑的 ResourceManager；功能关闭或已是代理时原样返回} */
     public static ResourceManager wrap(ResourceManager inner) {
         if (!LiquidPhaseConfig.get().packMerge) {
+            // 配置关掉时**必须留痕**：否则表现为"资源包下相部件整体消失，却没有任何日志"，
+            // 与"包没有被识别成覆盖宿主"完全无法区分（排查时踩过）。
+            LiquidPhase.LOGGER.info("[Liquid Phase] pack merge is disabled by config (packMerge=false); "
+                + "phase parts will be lost for any host blockstate a resource pack overrides");
             return inner;
         }
         if (Proxy.isProxyClass(inner.getClass())) {
             return inner;
         }
+        LiquidPhase.LOGGER.info("[Liquid Phase] pack merge active: wrapping resource manager for blockstate loading");
         return (ResourceManager) Proxy.newProxyInstance(
             PhasePackMerge.class.getClassLoader(),
             new Class<?>[]{ResourceManager.class},
@@ -92,6 +97,10 @@ public final class PhasePackMerge {
         Map<Object, Object> out = new LinkedHashMap<>();
         List<String> mergedIds = new ArrayList<>();
         List<String> lostIds = new ArrayList<>();
+        int hosts = 0;
+        int badJson = 0;
+        int selfBaked = 0;
+        int noFragment = 0;
         for (Map.Entry<?, ?> entry : stacks.entrySet()) {
             Object id = entry.getKey();
             List<?> stack = (List<?>) entry.getValue();
@@ -102,23 +111,27 @@ public final class PhasePackMerge {
                 out.put(id, stack);
                 continue;
             }
+            hosts++;
             Resource top = (Resource) stack.get(stack.size() - 1);
             JsonObject winner;
             try (BufferedReader reader = top.openAsReader()) {
                 winner = JsonParser.parseReader(reader).getAsJsonObject();
             } catch (Exception e) {
                 // 让原版管线自己报这份坏 JSON 的错，这里不拦截。
+                badJson++;
                 out.put(id, stack);
                 continue;
             }
             if (PhasePackMergeCore.referencesLiquidphase(winner)) {
                 // 栈顶已经是 mod 烘焙的定义（或针对本 mod 的包），相部件自带，不再合并。
+                selfBaked++;
                 out.put(id, stack);
                 continue;
             }
             JsonObject fragment = readFragment(inner, blockName);
             if (fragment == null) {
                 // 第三方 mod 的相容宿主没有片段（生成器只为原版宿主产出），静默跳过。
+                noFragment++;
                 out.put(id, stack);
                 continue;
             }
@@ -135,6 +148,11 @@ public final class PhasePackMerge {
             out.put(id, newStack);
             mergedIds.add(blockName);
         }
+        // 每次资源重载都打一行汇总：这是"相部件为什么没进 blockstate"的唯一可靠判据，
+        // 只打成功/失败两组列表时，"全部被静默跳过"看起来和"根本没进合并"一模一样。
+        LiquidPhase.LOGGER.info("[Liquid Phase] blockstate merge scan: {} stacks, {} phase hosts "
+                + "({} merged, {} untouched-because-already-baked, {} no-fragment, {} bad-json, {} unmergeable)",
+            stacks.size(), hosts, mergedIds.size(), selfBaked, noFragment, badJson, lostIds.size());
         if (!lostIds.isEmpty()) {
             LiquidPhase.LOGGER.warn(
                 "[Liquid Phase] phase overlay could not be merged into {} foreign blockstate(s); "

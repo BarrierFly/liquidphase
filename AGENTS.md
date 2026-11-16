@@ -482,6 +482,12 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 - **跳过条件**：栈顶定义引用 `liquidphase:` 模型（= mod 烘焙的或针对本 mod 的包）→
   不合并（重复追加部件会把覆盖层画两遍）；宿主无片段（第三方 mod 的相容宿主）→
   静默跳过。
+- **排查入口**：每次资源重载都会打一行
+  `blockstate merge scan: N stacks, M phase hosts (A merged, B already-baked, C no-fragment, D bad-json, E unmergeable)`。
+  合并没生效时先看这一行：`M=0` 说明没有任何资源包覆盖宿主 blockstate；`C=M` 说明片段缺失；
+  完全看不到这一行则是 ResourceManager 没被包装（`packMerge=false` 会单独打一条说明）。
+  该行 0.1.19 起才有；此前只打"成功/失败"两组列表，全部静默跳过时一条日志都没有。
+
 - **性能**：只在资源重载时对"相容宿主且栈顶无 liquidphase 引用"的栈读一次栈顶 JSON，
   正常路径零写入。配置 `packMerge=false` 关闭。
 - **验证**：服务端自检 `checkPackMergeFragments`（片段完整性全量扫描 + fixtures 合并
