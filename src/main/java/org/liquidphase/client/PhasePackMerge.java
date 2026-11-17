@@ -75,13 +75,56 @@ public final class PhasePackMerge {
                 if (method.getDeclaringClass() == Object.class) {
                     return method.invoke(inner, args);
                 }
-                if ("listResourceStacks".equals(method.getName())
-                    && args != null && args.length == 2
-                    && "blockstates".equals(args[0])) {
-                    return mergeStacks(inner, (Map<?, ?>) method.invoke(inner, args));
+                if (isBlockstateStacksCall(args)) {
+                    Object result = method.invoke(inner, args);
+                    if (isStackMap(result)) {
+                        return mergeStacks(inner, (Map<?, ?>) result);
+                    }
+                    return result;
                 }
                 return method.invoke(inner, args);
             });
+    }
+
+    // ------------------------------------------------------------------
+    // 调用识别（0.1.20 修：按实参识别，不按方法名）
+    // ------------------------------------------------------------------
+
+    /**
+     * {@return 这次调用是否为"枚举 blockstates 资源栈"}
+     * <p>
+     * ⚠️ **绝不能按 {@code method.getName()} 分派**：方法名是开发环境的 Yarn 名
+     * （{@code listResourceStacks}），生产环境是 intermediary 名（1.21.11 实测为
+     * {@code method_41265}），loom 只重映射 mixin 注解里的目标、不会重映射普通
+     * Java 字符串。0.1.19 及以前按名比较，生产（launcher）环境必然失配——表现为
+     * 日志有 "pack merge active" 却永远没有 "blockstate merge scan"，第三方包覆盖
+     * 宿主 blockstate 时相部件整体丢失（熔岩相走原版流体渲染不受影响，实机症状）。
+     * <p>
+     * 这里只看**运行时实参**：{@code listResourceStacks} 是 ResourceManager 上唯一
+     * 两参、首参为目录名字符串的方法，而 {@code "blockstates"} 是与映射无关的运行时值。
+     * 若未来某版本出现同形状方法（首参为字符串的枚举类方法），再补返回类型/过滤器类型判断。
+     */
+    public static boolean isBlockstateStacksCall(Object[] args) {
+        return args != null && args.length == 2
+            && args[0] instanceof String dir && "blockstates".equals(dir);
+    }
+
+    /**
+     * {@return 结果是否为"栈表"（值是 {@code List<Resource>} 的 Map）}
+     * <p>
+     * 用于把 {@code listResourceStacks}（值是 List）与 {@code listResources}
+     * （值是单个 Resource）区分开：两者的方法签名同为 {@code (String, 过滤器)}，
+     * 只有结果形状不同。空表（{@code blockstates} 目录不存在，如服务端数据包资源）
+     * 返回 false 直接透传，避免打出无意义的 scan 行。
+     */
+    public static boolean isStackMap(Object result) {
+        if (!(result instanceof Map<?, ?> map)) {
+            return false;
+        }
+        for (Object value : map.values()) {
+            return value instanceof List;
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------

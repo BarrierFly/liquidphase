@@ -463,9 +463,20 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
   1.21.10/1.21.11/26.3 是 `BlockStateModelLoader.loadBlockStates`（公静），
   两者都收 `(ResourceManager, Executor)` 且只经 `listResourceStacks("blockstates", …)`
   枚举资源栈（栈序低→高、"最后者覆盖"）。`PhaseLoaderMixin` 在入口把参数换成
-  `PhasePackMerge.wrap` 的 `Proxy`（按方法名分派、其余透传）——26.3 把
+  `PhasePackMerge.wrap` 的 `Proxy`（按实参/结果形状分派、其余透传）——26.3 把
   `listResourceStacks` 第二参从 `Predicate` 换成 `Selector`、`getResource` 返回
-  `Optional`，代理按名分派全部免分支。
+  `Optional`，代理分派不看签名细节，全部免分支。
+- ⚠️ **动态代理的分派绝不能按 `method.getName()`**（0.1.20 修，实机 bug）：方法名是
+  开发环境的 Yarn 名（`listResourceStacks`），生产环境是 intermediary 名
+  （1.21.11 实测 `method_41265`），loom 只重映射 mixin 注解里的目标、**不会重映射普通
+  Java 字符串**。0.1.19 及以前按名比较，生产（launcher）环境必然失配——表现：日志有
+  "pack merge active" 却永远没有 "blockstate merge scan"，第三方包覆盖宿主 blockstate
+  时相部件整体丢失（熔岩相走原版流体渲染不受影响）。dev 环境所有 gametest 都复现不了，
+  因为 dev 跑的是 named 映射。现在分派只看**运行时实参**（首参为字符串 `"blockstates"`
+  的两参调用）与**结果形状**（值是 `List` 的 Map，区别于 `listResources` 的单资源表），
+  两者都是映射无关的运行时值。同类隐患：`HopperTransferMixin` 反射按字段名含 "ooldown"
+  找冷却字段——生产环境 intermediary 字段名（`field_xxxx`）匹配不上，会静默退化为
+  "无冷却重试"（有降级语义、非本次症状根因，待专门处理）。
 - ⚠️ **stonecutter 分支的 live 代码必须是 1.21.11 的**：active 版本直接编译原始源码、
   `//?` 分支只是注释。`PhaseLoaderMixin` 的 live 分支写错成 `ModelManager` 时，
   1.21.11 客户端启动即 `Critical injection failure: could not find any targets matching
@@ -531,7 +542,7 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
 `ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，断言数按版本为
-**295（1.19.4 / 1.20.1 / 1.21.1 / 1.21.11 / 26.3）/ 296（1.21.10，多一个干化恶魂断言；0.1.16 及以前为 162/163）**——
+**301（1.19.4 / 1.20.1 / 1.21.1 / 1.21.11）/ 302（1.21.10 / 26.3；0.1.20 实测，含 7 条 0.1.20 的分派识别回归；0.1.16 及以前为 162/163）**——
 各版本已经收敛到几乎相同，因为断言改成**全量扫描**而不是写死几个代表方块：
 凡是"原生 RenderShape 不是 MODEL 的 phase 宿主"都会被逐个验证，各版本有几个就查几个
 （实测 1.20.1 有 **51** 个，1.21.11 只有 **2** 个（1.21.11 起是 `barrier`/`light`；1.19.4/1.20.1
@@ -681,7 +692,7 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    > 并集 `V=84` 全宿主 = 1,770,679 / ≈1.4 GiB；并集 `V=84` + 按方块裁剪
    > （白名单 = 楼梯+台阶 5,012 基础状态）= 812,839 / 730 MiB。
    > **扩取值前先确认白名单，墙（26 个方块、8,424 基础状态）必须排除。**
-4. 行为层已做服务端自检（6 版本 295/295/295/296/295/295 项断言全过，0.1.17）+ 启动冒烟 + 6 版本编译；
+4. 行为层已做服务端自检（6 版本 301/301/301/302/301/302 项断言全过，0.1.20）+ 启动冒烟 + 6 版本编译；
    **渲染层与剔除面已在真实客户端（1.21.11 `runClient`）取证修复**：
    带相状态图层为 CUTOUT（半透明宿主保持 TRANSLUCENT）、内缩覆盖层/外扩外壳的
    quad 进入不可剔除列表、几何坐标在宿主外侧；

@@ -1629,6 +1629,31 @@ public final class PhaseSelfTest {
         assertTrue("wrap is idempotent", org.liquidphase.client.PhasePackMerge.wrap(proxied) == proxied);
         assertTrue("proxy preserves empty blockstate listings",
             proxied.listResourceStacks("blockstates", id -> true).isEmpty());
+
+        // (6) 分派识别回归（0.1.20）：识别必须只看**运行时实参/结果形状**，与方法名无关。
+        // 生产环境方法名是 intermediary（1.21.11 实测 listResourceStacks = method_41265），
+        // 0.1.19 及以前按 Yarn 名分派在生产环境静默失配——表现正是本 bug：
+        // 日志有 "pack merge active" 却没有 "blockstate merge scan"，相部件整体丢失。
+        // 断言参数里没有 Method 对象，结构上杜绝"再改回按名分派"。
+        assertTrue("blockstates stack call is recognized by args alone",
+            org.liquidphase.client.PhasePackMerge.isBlockstateStacksCall(
+                new Object[]{"blockstates", new Object()}));
+        assertTrue("other directories are not intercepted",
+            !org.liquidphase.client.PhasePackMerge.isBlockstateStacksCall(
+                new Object[]{"models", new Object()}));
+        assertTrue("non-string first args are not intercepted",
+            !org.liquidphase.client.PhasePackMerge.isBlockstateStacksCall(
+                new Object[]{new Object(), new Object()}));
+        assertTrue("wrong arity is not intercepted",
+            !org.liquidphase.client.PhasePackMerge.isBlockstateStacksCall(new Object[]{"blockstates"}));
+        assertTrue("stack maps (List values) get merged",
+            org.liquidphase.client.PhasePackMerge.isStackMap(
+                Map.of("minecraft:blockstates/oak_fence.json", List.of())));
+        assertTrue("single-resource maps are passed through",
+            !org.liquidphase.client.PhasePackMerge.isStackMap(
+                Map.of("minecraft:blockstates/oak_fence.json", new Object())));
+        assertTrue("empty maps are passed through",
+            !org.liquidphase.client.PhasePackMerge.isStackMap(Map.of()));
     }
 
     /** {@return 仿第三方包的 winner fixture 文本（assets/liquidphase/packmerge_test/）} */
