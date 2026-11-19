@@ -15,7 +15,6 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LayeredCauldronBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import org.liquidphase.LiquidPhaseConfig;
-import org.liquidphase.phase.PhaseHelper;
 //? if 26.3 {
 /*import org.liquidphase.mixin.DispatcherAccessor;
  *///?}

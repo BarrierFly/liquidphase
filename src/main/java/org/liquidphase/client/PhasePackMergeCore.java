@@ -8,7 +8,7 @@ import java.util.Map;
 
 /**
  * 资源包兼容合并的**纯 JSON 核心**（0.1.17）：不依赖任何 Minecraft 类，只有 Gson——
- * 这样合并算法可以被 {@code tools/test_packmerge.py} 离线对真实产物断言（防漂移），
+ * 合并算法可以在服务端自检（{@code checkPackMergeFragments} 的 fixtures 断言）中直接运行，
  * Minecraft 侧的接线在 {@link PhasePackMerge}。
  *
  * <h2>问题</h2>

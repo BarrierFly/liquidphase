@@ -1,13 +1,10 @@
 package org.liquidphase.cauldron;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import org.liquidphase.LiquidPhase;
 
 /**
  * 混凝土粉末 → 混凝土 的 16 色映射（规划 §4；与 cauldronfix 的映射一致）。

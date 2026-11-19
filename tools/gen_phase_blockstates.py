@@ -4,30 +4,30 @@
 对每个相容方块 id：从 Minecraft 客户端 jar 提取原版 blockstate JSON，
 把 variants 转换为等价的 multipart（每个变体一条 when 条件），并追加：
 
-- 固体相覆盖层（obsidian / ice / frosted_0..3）：普通宿主用内缩 1/64 的立方体，
-  整格模型宿主用 0..16 的整格模型。内缩覆盖层**不带 cullface**：它的面不在方块边界上，
+- 固体相覆盖层（obsidian / ice / frosted_0..3）：**全部宿主**统一用内缩 1/64（0.25px）
+  的立方体叠加层（0.1.18 起，整格替换已退役）。内缩覆盖层**不带 cullface**：它的面不在方块边界上，
   原版 cullface 会拿"邻居是否盖住整面"去判断，对台阶/楼梯这类部分覆盖的邻居会错误剔掉
   不该剔的面（0.1.9 的实机 bug）。
-- 红石相外壳：16 条 ``when{phase: redstone_N}`` 的 part，各自指向按功率着色的外壳模型
+- 红石相外壳：16 条 ``when{filling: redstone_N}`` 的 part，各自指向按功率着色的外壳模型
   （``gen_redstone_assets.py`` 生成）。外壳是**叠加层**，宿主照常渲染。
 
 熔岩相不覆盖——由原版流体渲染直接绘制。
 
 整格模型宿主（树叶 / 铜格栅 / 红树根 / 白杨树叶等原版模型本身就是 0..16 完整立方体）
-改用整格（0..16）覆盖模型 phase_*_full，并把原版 part 的 when 合并上
-"filling": "none|lava|<redstone>"——这些相下宿主模型不渲染、只渲染整格覆盖层
-（与这些相"整格实心碰撞"的设定一致）；否则内缩的覆盖层会被完整立方体
-宿主挡住（树叶贴图小孔外完全看不到相）。
+同样用这份内缩覆盖层、宿主 part 照常渲染（0.1.18 的核心修正）。曾经的做法是屏蔽宿主
+part、换成整格 phase_*_full——结果"含冰/黑曜石时树叶整个消失"，而熔岩相走原版流体
+渲染、宿主照常可见，同一个方块两种相观感不同；且 phase_*_full 与 0..16 的宿主模型
+完全共面会 z-fighting。内缩后宿主稳定在外层：不透明树叶遮住相、贴图缝隙里露出相，
+与含熔岩一致。
 
 **整格宿主的判定不再是手写白名单**：这里直接从客户端 jar 解析每个宿主 blockstate
 能引用的全部模型，按几何判定"是否恰好铺满 0..16 立方体且六个边界面都被完全覆盖"。
-26.3 新增的白杨树叶就是靠这条自动判定才被正确识别的（手写清单会漏，漏了就等于
-"含冰相完全看不见"）。
+26.3 新增的白杨树叶就是靠这条自动判定才被正确识别的（手写清单会漏）。
 
 判定粒度是 **part（变体）**（0.1.13 修，audit §4.1）：台阶这类"混合模型"宿主里，
 `type=double` 变体引用整块模型（整格），`type=bottom/top` 引用半砖模型（非整格）——
-整格变体按整格宿主处理（宿主 part 限制在"宿主可见"的相 + 固体相整格相材质），
-非整格变体保持内缩覆盖层。方块粒度的 `all(...)` 会把双台阶的覆盖层整个藏进宿主模型。
+方块级 `all(...)` 必然判否。0.1.18 起该判定只用于分类统计与断言（full/mixed/inset
+三类宿主的产物完全一致），不再影响产物形状。
 
 用法: python gen_phase_blockstates.py <client-jar> <ids-file> <out-dir>
 输出: <out-dir>/assets/minecraft/blockstates/<id>.json
@@ -37,8 +37,8 @@ import sys
 import zipfile
 from pathlib import Path
 
-# 相覆盖模型：键 = phase 取值，值 = 模型 id。熔岩相（lava）不需要覆盖层。
-# 普通宿主用内缩版；整格模型宿主用整格版（phase_*_full）。
+# 相覆盖模型：键 = filling 取值，值 = 模型 id。熔岩相（lava）不需要覆盖层。
+# 0.1.18 起全部宿主统一内缩版；phase_*_full 已退役（模型资源仅作旧包兼容保留）。
 OVERLAYS = [
     ("obsidian", "liquidphase:block/phase_obsidian"),
     ("ice", "liquidphase:block/phase_ice"),
@@ -48,26 +48,7 @@ OVERLAYS = [
     ("frosted_3", "liquidphase:block/phase_frosted_3"),
 ]
 
-FULL_OVERLAYS = [
-    ("obsidian", "liquidphase:block/phase_obsidian_full"),
-    ("ice", "liquidphase:block/phase_ice_full"),
-    ("frosted_0", "liquidphase:block/phase_frosted_0_full"),
-    ("frosted_1", "liquidphase:block/phase_frosted_1_full"),
-    ("frosted_2", "liquidphase:block/phase_frosted_2_full"),
-    ("frosted_3", "liquidphase:block/phase_frosted_3_full"),
-]
-
 REDSTONE_POWERS = range(16)
-REDSTONE_PHASES = "|".join("redstone_%d" % i for i in REDSTONE_POWERS)
-
-# 整格宿主的原版 part 只在"宿主本身可见"的相下渲染：熔岩相仍是原版流体渲染，
-# 红石相是"宿主 + 外壳叠加"（0.1.8 曾把宿主排除掉，结果树叶直接隐形）。
-# 固体相（obsidian / ice / frosted_*）不在这里——那些相由整格覆盖层替换宿主外观。
-#
-# 注意**不能**把这 24 个取值全写进来：原版 KeyValueCondition.instantiate 发现
-# "条件覆盖属性的全部取值"时会直接返回恒真谓词并打 `Condition ... is always true`
-# 警告，1.21.10+ 每个方块状态各一条，加载日志直接被刷屏。
-FULL_CUBE_HOST_CONDITION = {"filling": "none|lava|" + REDSTONE_PHASES}
 
 
 def redstone_model(power):
@@ -176,40 +157,6 @@ class ModelGeometry:
         return result
 
 
-def _is_combiner(when):
-    return isinstance(when, dict) and len(when) == 1 and next(iter(when)) in ("AND", "OR")
-
-
-def and_condition(when, extra):
-    """把 when 与 extra（{属性: "a|b"}）按 AND 合并成**原版合法**的 multipart 条件。
-
-    原版 `when` 的语法（见 KeyValueCondition / CombinedCondition）：
-    - 一个 object 内的多个键 = AND；
-    - 值里的 `a|b` = 同一属性的 OR；
-    - 跨属性组合必须显式写成 {"AND": [...]} / {"OR": [...]}，
-      且一个 object 里**不能**同时出现 AND/OR 与属性键（解码会整条失败）。
-
-    所以**绝对不能用 "(a)&(b)" 这种拼接**：原版会把它当成一个属性取值去查，
-    抛 `Unknown value ...`，整个 blockstate 文件加载失败，
-    该方块所有状态都退化成 missing model（紫黑方块）。
-    """
-    when = dict(when) if when else {}
-    extra = dict(extra) if extra else {}
-    if not extra:
-        return when
-    if not when:
-        return extra
-    # 已经以 AND 开头：扁平化追加一项
-    if _is_combiner(when) and "AND" in when:
-        return {"AND": list(when["AND"]) + [extra]}
-    # OR 或不含冲突键的普通属性表：
-    if _is_combiner(when) or (set(extra) & set(when)):
-        return {"AND": [when, extra]}
-    merged = dict(when)
-    merged.update(extra)
-    return merged
-
-
 def variant_entry_to_apply(entry):
     """variants 条目 → multipart 的 apply 值（丢弃 weight，multipart 不支持）。"""
     if isinstance(entry, list):
@@ -269,33 +216,6 @@ def part_models(part):
     return models
 
 
-def negate_condition(when):
-    """when 的取反，展开成**原版合法**的 AND/OR 组合。
-
-    NOT(a AND b) = OR(!a, !b)；NOT(key = "v1|v2") = AND(key != v1, key != v2)。
-    空条件（恒真）取反是恒假，返回 None，由调用方特判。
-    """
-    if not when:
-        return None
-    terms = []
-    for key, value in when.items():
-        values = value.split("|") if isinstance(value, str) else [str(value)]
-        negs = [{key: "!" + v.lstrip("!")} for v in values]
-        terms.append(negs[0] if len(negs) == 1 else {"AND": negs})
-    return terms[0] if len(terms) == 1 else {"OR": terms}
-
-
-def and_with_phase(value, cond):
-    """{"filling": 值} 与宿主条件按 AND 合并（结果必须是原版合法的 multipart 条件）。"""
-    if not cond:
-        return {"filling": value}
-    if _is_combiner(cond):
-        return {"AND": [cond, {"filling": value}]}
-    merged = dict(cond)
-    merged["filling"] = value
-    return merged
-
-
 def convert(state_json, geometry):
     """宿主原版 part + 相覆盖层 + 红石外壳。
 
@@ -325,53 +245,22 @@ def convert(state_json, geometry):
         mode = "full"
     elif parts and not any(full_flags):
         mode = "inset"
-    elif any(f and p.get("when") is None for f, p in zip(full_flags, parts)):
-        # 无条件的整格 part 会匹配**所有**状态，"非整格变体"不存在——按变体拆分无意义。
-        # 退回全内缩（相永远可见优先；这种 host 目前只在理论上存在）。
-        print("WARNING: host has an unconditional full-cube part; falling back to inset overlays",
-              file=sys.stderr)
-        mode = "inset"
 
-    if mode == "full":
-        # 整格宿主（树叶 / 铜格栅 / 红树根）：宿主**照常渲染**，相用内缩覆盖层。
-        #
-        # 0.1.18 起不再"宿主 part 限制在宿主可见的相 + 整格相材质替换"：
-        # 那样含固相时宿主整个消失、只剩一整块冰/黑曜石，与熔岩相（流体渲染、
-        # 宿主照常可见）表现不一致，用户明确要求"树叶在上层、相在下层"。
-        #
-        # 为什么必须用**内缩**覆盖层而不是 phase_*_full：树叶宿主模型是 0..16 整格，
-        # phase_*_full 也是 0..16，两者完全共面 → z-fighting，树叶与相随机互相遮挡。
-        # 内缩 0.25px 后树叶稳定在外层：不透明树叶遮住相，贴图缝隙里露出相，
-        # 正是熔岩相给人的观感。
-        overlays = [(value, model, {"filling": value}) for value, model in OVERLAYS]
-    elif mode == "inset":
-        overlays = [(value, model, {"filling": value}) for value, model in OVERLAYS]
-    else:
-        # 混合宿主（台阶）：整格变体（type=double）与半砖变体（bottom/top）统一用
-        # **内缩覆盖层**，宿主 part 一律保持渲染。
-        #
-        # 0.1.18 起不再按变体拆分（原做法：double 变体屏蔽宿主 + phase_*_full）。
-        # 理由与整格宿主相同：屏蔽宿主会让"双台阶含固相"变成一整块冰/黑曜石，
-        # 与熔岩相不一致；而 phase_*_full 与 double 变体的整块模型共面会 z-fighting。
-        # 统一内缩后，双台阶与半砖的相外观一致，宿主始终可见。
-        overlays = [(value, model, {"filling": value}) for value, model in OVERLAYS]
+    # 0.1.18 起三类宿主（整格 / 混合 / 非整格）的产物完全一致：宿主 part 一律常驻，
+    # 相统一用**内缩覆盖层**。曾经的做法是"宿主 part 限制在宿主可见的相 + 整格相
+    # 材质替换（phase_*_full）"——含固相时宿主整个消失，与熔岩相（流体渲染、宿主
+    # 照常可见）表现不一致；且 phase_*_full 与 0..16 的宿主模型完全共面会 z-fighting。
+    # 内缩后宿主稳定在外层，双台阶与半砖的相外观一致。
+    overlays = [(value, model, {"filling": value}) for value, model in OVERLAYS]
 
-    # 资源包兼容片段（0.1.17）：烘焙 JSON 之外，另出一份"纯相部件 + 宿主 part 门控"
-    # 的片段（assets/liquidphase/phase_parts/<id>.json）。第三方包整体覆盖宿主
+    # 资源包兼容片段（0.1.17）：烘焙 JSON 之外，另出一份"纯相部件"的片段
+    # （assets/liquidphase/phase_parts/<id>.json）。第三方包整体覆盖宿主
     # blockstate 时，客户端在加载点把片段合并进获胜定义（PhasePackMergeCore），
     # 使包只生效于宿主 part。
     #
-    # 0.1.18 起**所有宿主都不再门控**：宿主 part 一律保持渲染，相只作为内缩叠加层
-    # （见上面三类 mode 的处理）。因此片段不需要 gates——这也是栅栏/楼梯这类
-    # 内缩宿主一直以来的形态，现在整格与混合宿主与它统一。
-    host_gates = []
-    seen_gates = set()
-    gates = []
-    for gate in host_gates:
-        key = json.dumps(gate, sort_keys=True)
-        if key not in seen_gates:
-            seen_gates.add(key)
-            gates.append(gate)
+    # 0.1.18 起**所有宿主都不再门控**：宿主 part 一律保持渲染，相只作为内缩叠加层，
+    # 因此片段不再产出 gates；键位保留为空列表（Java 侧对旧片段/旧包的 gate
+    # 匹配继续兼容）。
     fragment_parts = [{"when": when, "apply": {"model": model}} for value, model, when in overlays]
 
     for value, model, when in overlays:
@@ -388,7 +277,7 @@ def convert(state_json, geometry):
         }
         parts.append(shell_part)
         fragment_parts.append({"when": dict(shell_part["when"]), "apply": dict(shell_part["apply"])})
-    fragment = {"parts": fragment_parts, "gates": gates}
+    fragment = {"parts": fragment_parts, "gates": []}
     return {"multipart": parts}, mode, fragment
 
 
@@ -500,15 +389,10 @@ def main():
             bad = validate_result(result, known)
             if bad:
                 problems.append((block_id, bad[:3]))
-            # 片段的部件与 gate 条件走同一套校验（合并后同样要被原版 multipart 解析器接受）。
+            # 片段的部件走同一套校验（合并后同样要被原版 multipart 解析器接受）。
             fragment_bad = validate_result({"multipart": fragment["parts"]}, known)
             if fragment_bad:
                 problems.append(("%s (fragment parts)" % block_id, fragment_bad[:3]))
-            gate_parts = [{"when": gate["when"]} for gate in fragment["gates"]]
-            gate_parts += [{"when": gate["with"]} for gate in fragment["gates"]]
-            fragment_bad_gates = validate_result({"multipart": gate_parts}, known)
-            if fragment_bad_gates:
-                problems.append(("%s (fragment gates)" % block_id, fragment_bad_gates[:3]))
             target = out_dir / "assets" / "minecraft" / "blockstates" / ("%s.json" % block_id)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(json.dumps(result, separators=(",", ":"), sort_keys=False), encoding="utf-8")

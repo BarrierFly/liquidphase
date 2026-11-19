@@ -9,3 +9,6 @@ versions/*/run-clientgametest/
 .idea/
 __pycache__/
 *.pyc
+
+# 0.1.20 排查用 VanillaTweaks 测试包（本地留存，不入库）
+_vt_dl/

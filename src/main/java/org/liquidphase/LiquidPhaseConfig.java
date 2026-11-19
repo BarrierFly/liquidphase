@@ -79,10 +79,4 @@ public final class LiquidPhaseConfig {
             LiquidPhase.LOGGER.error("[Liquid Phase] failed to save config", e);
         }
     }
-
-    /** 炼药锅转化类是否全部关闭（用于跳过 neighborChanged 挂钩）。 */
-    public boolean anyCauldronFeatureEnabled() {
-        return this.cauldronObsidian || this.cauldronStone || this.cauldronCollectFluid
-            || this.cauldronConcrete || this.cauldronPowderSnow;
-    }
 }

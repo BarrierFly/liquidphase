@@ -32,9 +32,4 @@ public final class PhaseRenderSupport {
     public static boolean hasPhase(BlockState state) {
         return state.hasProperty(PhaseHelper.FILLING) && state.getValue(PhaseHelper.FILLING) != Phase.NONE;
     }
-
-    /** {@return the same state with the phase cleared (the host state); unchanged if it has no phase} */
-    public static BlockState hostSibling(BlockState state) {
-        return state.hasProperty(PhaseHelper.FILLING) ? state.setValue(PhaseHelper.FILLING, Phase.NONE) : state;
-    }
 }

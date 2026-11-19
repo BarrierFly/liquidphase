@@ -30,14 +30,10 @@
 
 `--history` 逐个提交重算 A/B/C/S（需要 liquidphase 的 git 历史；较慢，约 1–2 分钟）。
 """
-import json
 import re
 import subprocess
 import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import gen_phase_blocks as gpb  # noqa: E402
 
 VERSIONS = ["1.19.4", "1.20.1", "1.21.1", "1.21.10", "1.21.11", "26.3"]
 

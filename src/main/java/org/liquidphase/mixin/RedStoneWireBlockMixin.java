@@ -2,7 +2,6 @@ package org.liquidphase.mixin;
 
 //? if !(26.3) {
 
-import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.RedStoneWireBlock;
 import net.minecraft.world.level.block.state.BlockState;

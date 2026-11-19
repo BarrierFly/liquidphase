@@ -1,12 +1,8 @@
 package org.liquidphase.phase;
 
-import java.util.Optional;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.sounds.SoundEvents;
-import net.minecraft.sounds.SoundSource;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.BlockGetter;
@@ -17,13 +13,10 @@ import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.LiquidBlockContainer;
-import net.minecraft.world.level.block.SimpleWaterloggedBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.EnumProperty;
-import net.minecraft.world.level.material.Fluid;
 import net.minecraft.world.level.material.Fluids;
 //? if 1.21.11 || 26.3 {
 import net.minecraft.world.attribute.EnvironmentAttributes;
@@ -62,10 +55,6 @@ public final class PhaseHelper {
 
     public static boolean isLava(BlockState state) {
         return getPhase(state) == Phase.LAVA;
-    }
-
-    public static boolean isIceOrFrosted(BlockState state) {
-        return getPhase(state).isFrozen();
     }
 
     public static boolean isSolidPhase(BlockState state) {
@@ -416,23 +405,6 @@ public final class PhaseHelper {
         //?}
     }
 
-    /** 熔岩相被空桶收取后的产物：功能三开 → 液体熔岩物品；关 → 熔岩桶。 */
-    public static Optional<net.minecraft.world.item.ItemStack> lavaPickupResult(boolean liquidInteractionEnabled) {
-        return liquidInteractionEnabled
-            ? Optional.empty()
-            : Optional.of(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.LAVA_BUCKET));
-    }
-
-    /** 熔岩相收取音效。 */
-    public static void playLavaFillSound(Level level, BlockPos pos) {
-        level.playSound(null, pos, SoundEvents.BUCKET_FILL_LAVA, SoundSource.BLOCKS, 1.0F, 1.0F);
-    }
-
-    /** 熔岩相倒出音效。 */
-    public static void playLavaEmptySound(Level level, BlockPos pos) {
-        level.playSound(null, pos, SoundEvents.BUCKET_EMPTY_LAVA, SoundSource.BLOCKS, 1.0F, 1.0F);
-    }
-
     /**
      * 火蔓延（决策点 D6：做）：熔岩相的随机刻直接委托原版熔岩流体的 randomTick，
      * 原版的火规则（gamerule、可燃物判定、版本差异）全部免费继承。
@@ -448,10 +420,5 @@ public final class PhaseHelper {
         if (getPhase(state) == Phase.LAVA && level instanceof ServerLevel serverLevel) {
             serverLevel.scheduleTick(pos, Fluids.LAVA, Fluids.LAVA.getTickDelay(serverLevel));
         }
-    }
-
-    /** 调试输出用：相状态字符串。 */
-    public static String describe(BlockState state) {
-        return state.getBlock() + "[" + getPhase(state).getSerializedName() + "]";
     }
 }

@@ -488,8 +488,8 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
   获胜定义是 variants → 转等价 multipart；片段 `gates` 给获胜宿主 part 合并
   `filling` 条件。0.1.18 起**生成器不再产出任何 gate**（所有宿主都保持常驻），
   所以正常路径下 gates 为空；Java 侧仍保留 gate 匹配实现（含空 when gate 命中
-  全部 part、非空 gate 精确匹配），以便旧 jar/旧片段或针对本 mod 的包继续工作。
-  `and_condition` 是生成器同名函数的移植。
+  全部 part、非空 gate 精确匹配），以便旧 jar/旧片段或针对本 mod 的包继续工作
+  （0.1.21 起生成器侧的同名 `and_condition` 已随 gate 产出退役，条件合并逻辑只此一份）。
 - **跳过条件**：栈顶定义引用 `liquidphase:` 模型（= mod 烘焙的或针对本 mod 的包）→
   不合并（重复追加部件会把覆盖层画两遍）；宿主无片段（第三方 mod 的相容宿主）→
   静默跳过。

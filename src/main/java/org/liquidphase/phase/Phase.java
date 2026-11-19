@@ -64,18 +64,6 @@ public enum Phase implements StringRepresentable {
         return this.name;
     }
 
-    public boolean isNone() {
-        return this == NONE;
-    }
-
-    public boolean isLava() {
-        return this == LAVA;
-    }
-
-    public boolean isObsidian() {
-        return this == OBSIDIAN;
-    }
-
     public boolean isIce() {
         return this == ICE;
     }
