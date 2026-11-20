@@ -211,10 +211,9 @@ public final class PhaseSelfTest {
 
     private static void checkShapeAndBlockIdentity(ServerLevel level, BlockPos base) {
         BlockPos pos = base.offset(0, 1, 0);
-        // 邻近放一个红石块：写入 REDSTONE_15 后 onPlace 会按邻居重算（0.1.22 起，
-        // 与原版红石线"放置即重算"一致），没有电源的话写入值会被结算回 0。
-        level.setBlock(pos.east(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
         BlockState host = Blocks.OAK_STAIRS.defaultBlockState();
+        // 直接 setBlock 写入的含红石相状态原样保留（写入不是重新放置，0.1.22 起不再
+        // 在 onPlace 自动重算）；后续邻居变化才会触发重算（checkInstantUpdate 覆盖）。
         BlockState redstone = PhaseHelper.withPhase(host, Phase.REDSTONE_15);
         level.setBlock(pos, redstone, Block.UPDATE_ALL);
 
@@ -241,7 +240,6 @@ public final class PhaseSelfTest {
                 && !RedstoneBlocks.exposed(doubleSlab, Direction.NORTH));
 
         level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
-        level.setBlock(pos.east(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
     }
 
     // ------------------------------------------------------------------
@@ -298,17 +296,22 @@ public final class PhaseSelfTest {
     }
 
     // ------------------------------------------------------------------
-    // 组装初始状态（0.1.22）：后放的一相落地即"单独放置"的初始状态，功率 0，
-    // 真实功率由 onPlace 按邻居重算——不再继承线格功率或预填 15。
+    // 组装初始状态（0.1.22）：口径按"是不是重新放置"区分——
+    //   新放置（红石粉点宿主、改写层写入线状态）：落地即"单独放置"的初始状态（功率 0），
+    //   并立即按邻居重算出真实功率；
+    //   吸收（宿主落进线格/下落落进线格）：那格的红石线本来就在，不是重新放置，
+    //   功率沿用原线，落地不重算。
     // ------------------------------------------------------------------
 
     /**
-     * 红石相的三条组装路径初始功率都应为 0（与单独放置红石粉一致）：
+     * 红石相组装的初始功率语义：
      * <ol>
-     *   <li>红石粉点宿主：无电源时初始/重算功率都是 0，来电源后重算为 15；</li>
-     *   <li>宿主放进无电源线格：功率 0；</li>
-     *   <li>宿主放进通电线格但电源位于宿主遮蔽的面上：重算跳过遮蔽面 → 功率 0，
-     *       （0.1.21 及以前继承线功率 15，这条能识破"继承而非重算"的回归）。</li>
+     *   <li>红石粉点宿主（新放置）：无电源时初始/重算功率都是 0，来电源后重算为 15，
+     *       电源已在旁边时落地即 15（onPlace 重算）；</li>
+     *   <li>宿主放进无电源线格（吸收）：功率 0（沿用原线的 0）；</li>
+     *   <li>宿主放进通电线格（吸收）：功率沿用原线的 15——即使电源位于宿主遮蔽的面上
+     *       也不重算置 0（吸收不是重新放置红石粉）；</li>
+     *   <li>改写层把线状态写进宿主格（新放置）：重算回邻居真实值（无电源 → 0）。</li>
      * </ol>
      */
     private static void checkRedstonePhaseInitialState(ServerLevel level, BlockPos base) {
@@ -334,7 +337,20 @@ public final class PhaseSelfTest {
         level.setBlock(stairs, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(stairs.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
 
-        // (2) 楼梯放进无电源线格 → 初始功率 0。
+        // (1b) 电源已在旁边时点粉：新放置路径落地即重算 → 15，不会停在初始 0。
+        BlockPos stairs2 = base.offset(39, 1, 0);
+        level.setBlock(stairs2.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(stairs2.east(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(stairs2, Blocks.OAK_STAIRS.defaultBlockState(), Block.UPDATE_ALL);
+        liquidphase$placeBlockInto(level, Blocks.REDSTONE_WIRE, stairs2, Direction.UP);
+        assertTrue("dust on host next to a source: power settles to 15 immediately (got "
+                + RedstoneBlocks.getPower(level.getBlockState(stairs2)) + ")",
+            RedstoneBlocks.getPower(level.getBlockState(stairs2)) == 15);
+        level.setBlock(stairs2, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(stairs2.east(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(stairs2.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+        // (2) 楼梯放进无电源线格（吸收）→ 沿用原线的 0。
         BlockPos wireTile = base.offset(37, 1, 0);
         level.setBlock(wireTile.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(wireTile, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
@@ -342,15 +358,15 @@ public final class PhaseSelfTest {
             level.getBlockState(wireTile).getValue(BlockStateProperties.POWER) == 0);
         liquidphase$placeBlockInto(level, Blocks.OAK_STAIRS, wireTile.below(), Direction.UP);
         BlockState hostInWire = level.getBlockState(wireTile);
-        assertTrue("host into unpowered wire: redstone phase with power 0 (got "
+        assertTrue("host into unpowered wire: redstone phase keeps power 0 (got "
                 + RedstoneBlocks.getPower(hostInWire) + ")",
             hostInWire.is(Blocks.OAK_STAIRS) && RedstoneBlocks.isRedstonePhase(hostInWire)
                 && RedstoneBlocks.getPower(hostInWire) == 0);
         level.setBlock(wireTile, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(wireTile.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
 
-        // (3) 楼梯放进通电线格，电源在楼梯遮蔽的北面：重算跳过遮蔽面 → 功率 0，
-        // 不继承线的 15（楼梯默认朝北，北面被本体遮住，§3.4"被覆盖的面不接收"）。
+        // (3) 楼梯放进通电线格（吸收）：功率沿用原线的 15——即便电源位于宿主遮蔽的北面
+        // （楼梯默认朝北），吸收不是重新放置红石粉，不重算置 0。
         BlockPos coveredWire = base.offset(38, 1, 0);
         level.setBlock(coveredWire.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(coveredWire, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
@@ -360,11 +376,10 @@ public final class PhaseSelfTest {
             level.getBlockState(coveredWire).getValue(BlockStateProperties.POWER) == 15);
         liquidphase$placeBlockInto(level, Blocks.OAK_STAIRS, coveredWire.below(), Direction.UP);
         BlockState coveredHost = level.getBlockState(coveredWire);
-        assertTrue("host into powered wire with the source on a covered face: power recalculates "
-                        + "to 0 instead of inheriting the wire power (got "
-                        + RedstoneBlocks.getPower(coveredHost) + ")",
+        assertTrue("host absorbs the powered wire's power (absorption is not re-placement; got "
+                + RedstoneBlocks.getPower(coveredHost) + ")",
             coveredHost.is(Blocks.OAK_STAIRS) && RedstoneBlocks.isRedstonePhase(coveredHost)
-                && RedstoneBlocks.getPower(coveredHost) == 0);
+                && RedstoneBlocks.getPower(coveredHost) == 15);
         level.setBlock(coveredWire, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(coveredWire.north(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(coveredWire.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
@@ -1469,12 +1484,16 @@ public final class PhaseSelfTest {
         level.setBlock(pos, Blocks.OBSIDIAN.defaultBlockState(), Block.UPDATE_ALL);
         assertTrue("universal: obsidian setBlock replaces the phased host (mutex)",
             level.getBlockState(pos).is(Blocks.OBSIDIAN));
-        // (3) 红石线写进栅栏格 → 栅栏 + 红石相（功率随线）
+        // (3) 红石线写进栅栏格 → 栅栏 + 红石相（新放置口径：初始 0 并立即按邻居重算，
+        // 场景无电源 → 0；来料状态自带的 POWER 不作为初始状态）。
         level.setBlock(pos, Blocks.OAK_FENCE.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(pos, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
         assertTrue("universal: wire setBlock into fence becomes redstone phase",
             level.getBlockState(pos).is(Blocks.OAK_FENCE)
                 && RedstoneBlocks.isRedstonePhase(level.getBlockState(pos)));
+        assertTrue("universal: rewritten redstone phase recalculates from neighbours (got "
+                + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
+            RedstoneBlocks.getPower(level.getBlockState(pos)) == 0);
         // (4) 水写进栅栏格 → 不在材料口径（走容器路径），原版覆盖
         level.setBlock(pos, Blocks.OAK_FENCE.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(pos, net.minecraft.world.level.material.Fluids.WATER.defaultFluidState().createLegacyBlock(),

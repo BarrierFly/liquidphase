@@ -10,6 +10,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.BlockHitResult;
 import org.liquidphase.phase.Phase;
 import org.liquidphase.phase.PhaseAbsorption;
@@ -49,11 +50,11 @@ public abstract class BlockItemMixin {
     /**
      * {@return 写进方块前补好相位的状态}
      * <p>
-     * 目标格此刻仍是红石线 → 把这次要放的宿主状态补上红石相，初始功率 0——
-     * 与"单独放置一根红石粉"一致（原版放置给 POWER=0，落地后由 onPlace 按邻居重算），
-     * 不继承线格原来的功率。用"目标格现在是红石线"而不是"上下文里带着标记"：
-     * 这样无论方块是通过 {@code BlockItem.place} 直接放进来的，还是物品先自己搜索落点
-     * （{@code updatePlacementContext}）再进来，判定都成立。
+     * 目标格此刻仍是红石线 → 把这次要放的宿主状态补上红石相，功率**沿用原线**：
+     * 吸收一格已存在的红石线不算重新放置红石粉，线的现有状态原样带进填充相
+     * （"单独放置"的初始 0 口径只适用于点粉那条新放置路径）。用"目标格现在是红石线"
+     * 而不是"上下文里带着标记"：这样无论方块是通过 {@code BlockItem.place} 直接放进来的，
+     * 还是物品先自己搜索落点（{@code updatePlacementContext}）再进来，判定都成立。
      * <p>
      * 挂 {@code placeBlock} 而不是 {@code getPlacementState}：告示牌/床这类子类会整个
      * 覆写 {@code getPlacementState} 且不调 super，但它们的 {@code placeBlock} 仍走这里。
@@ -69,7 +70,9 @@ public abstract class BlockItemMixin {
         if (!target.is(Blocks.REDSTONE_WIRE)) {
             return state;
         }
-        return PhaseHelper.withPhase(state, Phase.REDSTONE_0);
+        int power = target.hasProperty(BlockStateProperties.POWER)
+            ? target.getValue(BlockStateProperties.POWER) : 0;
+        return PhaseHelper.withPhase(state, Phase.redstone(power));
     }
 
     @Inject(method = "place", at = @At("HEAD"), cancellable = true)
