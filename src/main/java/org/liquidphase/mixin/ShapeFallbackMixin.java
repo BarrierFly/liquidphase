@@ -17,7 +17,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 /**
  * 状态级形状注入（{@code BlockStateBase} 是统一分发点，宿主覆写块级方法不会遮蔽这里）：
  * <p>
- * ① 固相"整格碰撞"（决策点 D7）：固体相（冰/霜冰/黑曜石）的碰撞 = 整格实心。
+ * ① 固相"两相组合碰撞"（决策点 D7，0.1.22 改口径）：固相（冰/霜冰/黑曜石）的碰撞 =
+ *    宿主碰撞 ∪ 整格实心。0.1.21 及以前是"整格替换"，会丢掉栅栏/墙这类宿主延伸到
+ *    方块外的碰撞（它们的碰撞柱高达 1.5 格，被整格覆盖后 1.0～1.5 段凭空消失）。
+ *    整格宿主的组合结果仍是整格——保留 {@code == Shapes.block()} 的恒等返回，
+ *    {@code BlockCollisions} 的快路径不因本注入而退化。
  *    必须挂在**状态级**——块级 {@code BlockBehaviour.getCollisionShape} 会被
  *    {@code CrossCollisionBlock}（栅栏/玻璃板/铁栏杆/铜栏杆）、{@code WallBlock}、
  *    {@code WallHangingSignBlock}、{@code ScaffoldingBlock}、{@code SculkShriekerBlock}、
@@ -58,7 +62,17 @@ public abstract class ShapeFallbackMixin {
     private void liquidphase$collisionFallback(BlockGetter level, BlockPos pos, CollisionContext context, CallbackInfoReturnable<VoxelShape> cir) {
         BlockState self = (BlockState) (Object) this;
         if (PhaseHelper.isSolidPhase(self)) {
-            cir.setReturnValue(Shapes.block());
+            // 组合碰撞 = 宿主碰撞 ∪ 整格。宿主形状优先用本次调用的返回值（形状表宿主已被
+            // 各自的 Shape mixin 重定向回 phase=none 的形状；带上下文的宿主如脚手架也能
+            // 拿到本次上下文的形状），查不到才落回兄弟状态查询。
+            VoxelShape host = cir.getReturnValue();
+            if (host == null) {
+                host = liquidphase$vanillaSibling(self).getCollisionShape(level, pos, context);
+            }
+            if (host != Shapes.block()) {
+                cir.setReturnValue(host == null ? Shapes.block() : Shapes.or(host, Shapes.block()));
+            }
+            // host 已是整格时保持原返回值：组合结果就是整格，恒等实例留给 BlockCollisions 的快路径。
         } else if (cir.getReturnValue() == null && liquidphase$isPhased(self)) {
             cir.setReturnValue(liquidphase$vanillaSibling(self).getCollisionShape(level, pos, context));
         }
@@ -67,7 +81,7 @@ public abstract class ShapeFallbackMixin {
     /**
      * 两参版本（无 CollisionContext）：它**不走**上面的三参方法——
      * {@code cache != null} 时直接返回 {@code Cache.collisionShape}（启动期按块级方法算好的
-     * 宿主形状），只有 {@code cache == null} 才落到三参。不挂这条，固相的整格碰撞
+     * 宿主形状），只有 {@code cache == null} 才落到三参。不挂这条，固相的组合碰撞
      * 在缓存路径（含 {@code isCollisionShapeFullBlock}）上仍是宿主形状。
      */
     @Inject(method = "getCollisionShape(Lnet/minecraft/world/level/BlockGetter;Lnet/minecraft/core/BlockPos;)Lnet/minecraft/world/phys/shapes/VoxelShape;",
@@ -75,7 +89,15 @@ public abstract class ShapeFallbackMixin {
     private void liquidphase$solidPhaseCollisionCached(BlockGetter level, BlockPos pos, CallbackInfoReturnable<VoxelShape> cir) {
         BlockState self = (BlockState) (Object) this;
         if (PhaseHelper.isSolidPhase(self)) {
-            cir.setReturnValue(Shapes.block());
+            VoxelShape host = cir.getReturnValue();
+            if (host == null || host.isEmpty()) {
+                // 缓存值缺失（形状表宿主查不到新状态时被 CacheShapeGuardMixin 换成了空形状）
+                // → 兄弟状态的缓存里是启动期算好的宿主形状。
+                host = liquidphase$vanillaSibling(self).getCollisionShape(level, pos);
+            }
+            if (host != Shapes.block()) {
+                cir.setReturnValue(host == null ? Shapes.block() : Shapes.or(host, Shapes.block()));
+            }
         }
     }
 

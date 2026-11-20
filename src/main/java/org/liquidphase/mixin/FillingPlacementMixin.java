@@ -4,7 +4,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import org.liquidphase.phase.Phase;
 import org.liquidphase.phase.PhaseAbsorption;
 import org.liquidphase.phase.PhaseCapable;
@@ -23,8 +22,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * 冰/霜冰/黑曜石/红石相不可替换，材料照原版覆盖。
  * <p>
  * 材料口径：冰/霜冰/黑曜石（{@code PhaseAbsorption.phaseOfBlock}）与红石线
- * （功率随线）。水/熔岩**不在**材料口径——它们走流体容器路径
- * （{@code LiquidBlockContainer.placeLiquid}，含水/熔岩相由那里处理）。
+ * （初始功率 0，落地后按邻居重算——与单独放置一致）。水/熔岩**不在**材料口径——
+ * 它们走流体容器路径（{@code LiquidBlockContainer.placeLiquid}，含水/熔岩相由那里处理）。
  * 改写后的目标仍是宿主状态（非材料），再次进入本注入点不会递归。
  * <p>
  * 版本差异：≤1.21.11 的 {@code Level} 声明 3 参 {@code setBlock(pos, state, flags)}
@@ -79,9 +78,10 @@ public abstract class FillingPlacementMixin {
 
     /** {@return 向某状态写入的填充相；非填充相材料返回 null} */
     private static Phase liquidphase$fillingOf(BlockState state) {
+        // 红石相初始功率一律 0（与单独放置一致），写入后由 onPlace 按邻居重算出真实功率；
+        // 不读取来料线状态自带的功率，否则"后放相"会拿到单独放置拿不到的初始状态。
         if (state.is(Blocks.REDSTONE_WIRE)) {
-            return Phase.redstone(state.hasProperty(BlockStateProperties.POWER)
-                ? state.getValue(BlockStateProperties.POWER) : 0);
+            return Phase.REDSTONE_0;
         }
         return PhaseAbsorption.phaseOfBlock(state);
     }

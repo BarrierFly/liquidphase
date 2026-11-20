@@ -129,6 +129,14 @@ public abstract class BlockStateBaseMixin {
     private void liquidphase$onPlace(Level level, BlockPos pos, BlockState oldState, boolean movedByPiston, CallbackInfo ci) {
         BlockState self = (BlockState) (Object) this;
         PhaseHelper.scheduleFrostTickIfNeeded(level, pos, self);
+        // 红石相按邻居重算（原版红石线 onPlace → updatePowerStrength 的镜像）：无论哪条
+        // 写入路径（点粉、放进线格、下落方块、通用改写层）落地的都是"单独放置"的初始
+        // 状态 redstone_0，真实功率在落地后立即由邻居结算出来。
+        // 终止性：updatePower 只在功率真的变了才 setBlock，setBlock 触发的下一次
+        // onPlace 发现功率已一致即停；仅服务端执行（客户端不重算）。
+        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {
+            org.liquidphase.redstone.RedstoneBlocks.neighborChanged(level, pos, self);
+        }
     }
 
     // ------------------------------------------------------------------

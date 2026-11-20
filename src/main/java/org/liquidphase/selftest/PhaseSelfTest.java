@@ -20,7 +20,10 @@ import net.minecraft.world.level.block.state.properties.SlabType;
 import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.BooleanOp;
 import net.minecraft.world.phys.shapes.CollisionContext;
+import net.minecraft.world.phys.shapes.Shapes;
+import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraft.server.packs.resources.ResourceManager;
 import org.liquidphase.LiquidPhase;
 import org.liquidphase.phase.Phase;
@@ -65,6 +68,7 @@ public final class PhaseSelfTest {
             checkShapeAndBlockIdentity(level, base);
             checkSignal(level, base);
             checkInstantUpdate(level, base);
+            checkRedstonePhaseInitialState(level, base);
             checkPlaceIntoWire(level, base);
             checkPlaceIntoWireByPlayer(level, base);
             checkScaffoldingStacking(level, base);
@@ -207,6 +211,9 @@ public final class PhaseSelfTest {
 
     private static void checkShapeAndBlockIdentity(ServerLevel level, BlockPos base) {
         BlockPos pos = base.offset(0, 1, 0);
+        // 邻近放一个红石块：写入 REDSTONE_15 后 onPlace 会按邻居重算（0.1.22 起，
+        // 与原版红石线"放置即重算"一致），没有电源的话写入值会被结算回 0。
+        level.setBlock(pos.east(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
         BlockState host = Blocks.OAK_STAIRS.defaultBlockState();
         BlockState redstone = PhaseHelper.withPhase(host, Phase.REDSTONE_15);
         level.setBlock(pos, redstone, Block.UPDATE_ALL);
@@ -234,6 +241,7 @@ public final class PhaseSelfTest {
                 && !RedstoneBlocks.exposed(doubleSlab, Direction.NORTH));
 
         level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(pos.east(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
     }
 
     // ------------------------------------------------------------------
@@ -287,6 +295,79 @@ public final class PhaseSelfTest {
         assertTrue("power drops immediately when source removed (got "
                 + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
             RedstoneBlocks.getPower(level.getBlockState(pos)) == 0);
+    }
+
+    // ------------------------------------------------------------------
+    // 组装初始状态（0.1.22）：后放的一相落地即"单独放置"的初始状态，功率 0，
+    // 真实功率由 onPlace 按邻居重算——不再继承线格功率或预填 15。
+    // ------------------------------------------------------------------
+
+    /**
+     * 红石相的三条组装路径初始功率都应为 0（与单独放置红石粉一致）：
+     * <ol>
+     *   <li>红石粉点宿主：无电源时初始/重算功率都是 0，来电源后重算为 15；</li>
+     *   <li>宿主放进无电源线格：功率 0；</li>
+     *   <li>宿主放进通电线格但电源位于宿主遮蔽的面上：重算跳过遮蔽面 → 功率 0，
+     *       （0.1.21 及以前继承线功率 15，这条能识破"继承而非重算"的回归）。</li>
+     * </ol>
+     */
+    private static void checkRedstonePhaseInitialState(ServerLevel level, BlockPos base) {
+        // (1) 红石粉点楼梯（无电源）→ 功率 0；来电源 → 15；撤电源 → 0。
+        BlockPos stairs = base.offset(36, 1, 0);
+        level.setBlock(stairs.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(stairs, Blocks.OAK_STAIRS.defaultBlockState(), Block.UPDATE_ALL);
+        liquidphase$placeBlockInto(level, Blocks.REDSTONE_WIRE, stairs, Direction.UP);
+        BlockState phased = level.getBlockState(stairs);
+        assertTrue("dust on host: redstone phase written",
+            RedstoneBlocks.isRedstonePhase(phased));
+        assertTrue("dust on host: initial power is 0 like a standalone wire (got "
+                + RedstoneBlocks.getPower(phased) + ")",
+            RedstoneBlocks.getPower(phased) == 0);
+        level.setBlock(stairs.east(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        assertTrue("dust on host: recalculated to 15 when a source arrives (got "
+                + RedstoneBlocks.getPower(level.getBlockState(stairs)) + ")",
+            RedstoneBlocks.getPower(level.getBlockState(stairs)) == 15);
+        level.setBlock(stairs.east(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        assertTrue("dust on host: power drops to 0 when the source leaves (got "
+                + RedstoneBlocks.getPower(level.getBlockState(stairs)) + ")",
+            RedstoneBlocks.getPower(level.getBlockState(stairs)) == 0);
+        level.setBlock(stairs, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(stairs.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+        // (2) 楼梯放进无电源线格 → 初始功率 0。
+        BlockPos wireTile = base.offset(37, 1, 0);
+        level.setBlock(wireTile.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(wireTile, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
+        assertTrue("scene(2): wire starts unpowered",
+            level.getBlockState(wireTile).getValue(BlockStateProperties.POWER) == 0);
+        liquidphase$placeBlockInto(level, Blocks.OAK_STAIRS, wireTile.below(), Direction.UP);
+        BlockState hostInWire = level.getBlockState(wireTile);
+        assertTrue("host into unpowered wire: redstone phase with power 0 (got "
+                + RedstoneBlocks.getPower(hostInWire) + ")",
+            hostInWire.is(Blocks.OAK_STAIRS) && RedstoneBlocks.isRedstonePhase(hostInWire)
+                && RedstoneBlocks.getPower(hostInWire) == 0);
+        level.setBlock(wireTile, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(wireTile.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+        // (3) 楼梯放进通电线格，电源在楼梯遮蔽的北面：重算跳过遮蔽面 → 功率 0，
+        // 不继承线的 15（楼梯默认朝北，北面被本体遮住，§3.4"被覆盖的面不接收"）。
+        BlockPos coveredWire = base.offset(38, 1, 0);
+        level.setBlock(coveredWire.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(coveredWire, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(coveredWire.north(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        assertTrue("scene(3): wire is powered from the north (got "
+                + level.getBlockState(coveredWire).getValue(BlockStateProperties.POWER) + ")",
+            level.getBlockState(coveredWire).getValue(BlockStateProperties.POWER) == 15);
+        liquidphase$placeBlockInto(level, Blocks.OAK_STAIRS, coveredWire.below(), Direction.UP);
+        BlockState coveredHost = level.getBlockState(coveredWire);
+        assertTrue("host into powered wire with the source on a covered face: power recalculates "
+                        + "to 0 instead of inheriting the wire power (got "
+                        + RedstoneBlocks.getPower(coveredHost) + ")",
+            coveredHost.is(Blocks.OAK_STAIRS) && RedstoneBlocks.isRedstonePhase(coveredHost)
+                && RedstoneBlocks.getPower(coveredHost) == 0);
+        level.setBlock(coveredWire, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(coveredWire.north(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(coveredWire.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
     }
 
     // ------------------------------------------------------------------
@@ -506,6 +587,28 @@ public final class PhaseSelfTest {
         sand.discard();
         level.setBlock(sandWire, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(sandWire.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+        // ---- (3) 相容宿主落进无电源线格：红石相初始功率 0（不继承任何非 0 初值）----
+        BlockPos plainWire = base.offset(19, 1, 0);
+        level.setBlock(plainWire.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(plainWire, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
+
+        net.minecraft.world.entity.item.FallingBlockEntity host2 =
+            net.minecraft.world.entity.item.FallingBlockEntity.fall(level, plainWire.above(3), dripstone);
+        host2.setPos(plainWire.getX() + 0.5, plainWire.getY() + 0.02, plainWire.getZ() + 0.5);
+        host2.setOnGround(true);
+        host2.tick();
+
+        BlockState plainAfter = level.getBlockState(plainWire);
+        assertTrue("falling host into unpowered wire: redstone phase at power 0 (got "
+                + RedstoneBlocks.getPower(plainAfter) + ")",
+            plainAfter.is(Blocks.POINTED_DRIPSTONE) && RedstoneBlocks.isRedstonePhase(plainAfter)
+                && RedstoneBlocks.getPower(plainAfter) == 0);
+
+        host2.discard();
+        level.setBlock(plainWire, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(plainWire.above(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(plainWire.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
     }
 
     // ------------------------------------------------------------------
@@ -920,33 +1023,59 @@ public final class PhaseSelfTest {
         BlockPos pos = base.offset(0, 1, 0);
         // 代表宿主逐个断言：形状表宿主（栅栏/墙/墙悬挂告示牌）、自建形状宿主（脚手架/大垂滴叶）、
         // 以及基类分发的普通宿主（楼梯/台阶）。既查三参（实体碰撞），也查两参（缓存路径）。
+        // 组合口径（0.1.22）：固相碰撞 = 宿主碰撞 ∪ 整格——栅栏/墙延伸到方块外的碰撞柱必须保留。
         for (Block block : new Block[]{Blocks.OAK_FENCE, Blocks.BRICK_WALL, Blocks.OAK_WALL_HANGING_SIGN,
                 Blocks.SCAFFOLDING, Blocks.BIG_DRIPLEAF, Blocks.OAK_STAIRS, Blocks.STONE_SLAB}) {
-            BlockState solid = PhaseHelper.withPhase(block.defaultBlockState(), Phase.OBSIDIAN);
-            assertTrue("solid phase collision is a full cube via the 3-arg query (" + block + ")",
-                Block.isShapeFullBlock(solid.getCollisionShape(level, pos, CollisionContext.empty())));
-            assertTrue("solid phase collision is a full cube via the cached 2-arg query (" + block + ")",
-                Block.isShapeFullBlock(solid.getCollisionShape(level, pos)));
+            BlockState vanilla = block.defaultBlockState();
+            BlockState solid = PhaseHelper.withPhase(vanilla, Phase.OBSIDIAN);
+            assertTrue("solid phase collision = host ∪ cube via the 3-arg query (" + block + ")",
+                liquidphase$sameShape(solid.getCollisionShape(level, pos, CollisionContext.empty()),
+                    Shapes.or(vanilla.getCollisionShape(level, pos, CollisionContext.empty()), Shapes.block())));
+            assertTrue("solid phase collision = host ∪ cube via the cached 2-arg query (" + block + ")",
+                liquidphase$sameShape(solid.getCollisionShape(level, pos),
+                    Shapes.or(vanilla.getCollisionShape(level, pos), Shapes.block())));
         }
-        // 全量：每个相容宿主的固相碰撞都必须是整格（新增宿主自动被扫进来）。
+        // 栅栏回归断言（0.1.21 及以前整格覆盖丢了 1.0～1.5 的碰撞柱）。
+        BlockState fenceSolid = PhaseHelper.withPhase(Blocks.OAK_FENCE.defaultBlockState(), Phase.OBSIDIAN);
+        assertTrue("fence keeps its above-cube collision post under the solid phase (3-arg)",
+            fenceSolid.getCollisionShape(level, pos, CollisionContext.empty()).max(Direction.Axis.Y) > 1.0);
+        assertTrue("fence keeps its above-cube collision post under the solid phase (2-arg)",
+            fenceSolid.getCollisionShape(level, pos).max(Direction.Axis.Y) > 1.0);
+        // 全量：每个相容宿主的固相碰撞都必须 = 宿主碰撞 ∪ 整格（新增宿主自动被扫进来）。
         java.util.List<String> broken = new java.util.ArrayList<>();
         for (Block block : net.minecraft.core.registries.BuiltInRegistries.BLOCK) {
             if (!(block instanceof org.liquidphase.phase.PhaseCapable)
                 || !PhaseHelper.hasPhaseProperty(block.defaultBlockState())) {
                 continue;
             }
-            BlockState solid = PhaseHelper.withPhase(block.defaultBlockState(), Phase.OBSIDIAN);
-            if (!Block.isShapeFullBlock(solid.getCollisionShape(level, pos, CollisionContext.empty()))
-                || !Block.isShapeFullBlock(solid.getCollisionShape(level, pos))) {
+            BlockState vanilla = block.defaultBlockState();
+            BlockState solid = PhaseHelper.withPhase(vanilla, Phase.OBSIDIAN);
+            boolean ok3 = liquidphase$sameShape(solid.getCollisionShape(level, pos, CollisionContext.empty()),
+                Shapes.or(vanilla.getCollisionShape(level, pos, CollisionContext.empty()), Shapes.block()));
+            boolean ok2 = liquidphase$sameShape(solid.getCollisionShape(level, pos),
+                Shapes.or(vanilla.getCollisionShape(level, pos), Shapes.block()));
+            if (!ok3 || !ok2) {
                 broken.add(String.valueOf(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block)));
             }
         }
-        assertTrue("every phase host has full-cube solid-phase collision (broken: " + broken + ")",
+        assertTrue("every phase host combines host collision with the solid phase cube (broken: " + broken + ")",
             broken.isEmpty());
-        // 反向：红石相不参与整格碰撞，保持宿主形状。
-        BlockState redstoneFence = PhaseHelper.withPhase(Blocks.OAK_FENCE.defaultBlockState(), Phase.REDSTONE_15);
-        assertTrue("redstone phase keeps the host collision shape",
-            !Block.isShapeFullBlock(redstoneFence.getCollisionShape(level, pos, CollisionContext.empty())));
+        // 反向：红石相/熔岩相不加碰撞，组合碰撞 = 宿主形状（三参、缓存两参都查）。
+        for (Phase phase : new Phase[]{Phase.REDSTONE_15, Phase.LAVA}) {
+            BlockState fencePhased = PhaseHelper.withPhase(Blocks.OAK_FENCE.defaultBlockState(), phase);
+            BlockState fenceVanilla = Blocks.OAK_FENCE.defaultBlockState();
+            assertTrue("non-solid phase keeps the host collision shape (3-arg, " + phase + ")",
+                liquidphase$sameShape(fencePhased.getCollisionShape(level, pos, CollisionContext.empty()),
+                    fenceVanilla.getCollisionShape(level, pos, CollisionContext.empty())));
+            assertTrue("non-solid phase keeps the host collision shape (2-arg, " + phase + ")",
+                liquidphase$sameShape(fencePhased.getCollisionShape(level, pos),
+                    fenceVanilla.getCollisionShape(level, pos)));
+        }
+    }
+
+    /** {@return 两个形状逐点相同（NOT_SAME 区域为空，与 {@code Block.isShapeFullBlock} 同判法）} */
+    private static boolean liquidphase$sameShape(VoxelShape a, VoxelShape b) {
+        return !Shapes.joinIsNotEmpty(a, b, BooleanOp.NOT_SAME);
     }
 
     /**
@@ -1723,7 +1852,7 @@ public final class PhaseSelfTest {
     }
 
     private static void clearArea(ServerLevel level, BlockPos base) {
-        for (int x = -1; x <= 35; x++) {
+        for (int x = -1; x <= 40; x++) {
             for (int y = 0; y <= 2; y++) {
                 for (int z = -1; z <= 9; z++) {
                     level.setBlock(base.offset(x, y, z), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);

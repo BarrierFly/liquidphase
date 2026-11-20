@@ -9,7 +9,6 @@ import net.minecraft.world.item.context.DirectionalPlaceContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import org.liquidphase.phase.Phase;
 import org.liquidphase.phase.PhaseCapable;
 import org.liquidphase.phase.PhaseHelper;
@@ -76,7 +75,7 @@ public abstract class FallingBlockIntoWireMixin {
             ? new ItemStack(item) : ItemStack.EMPTY;
     }
 
-    /** {@return 落位要写的状态（目标格是红石线且自己是相容宿主时带上原线功率）} */
+    /** {@return 落位要写的状态（目标格是红石线且自己是相容宿主时带上初始功率 0 的红石相）} */
     private BlockState liquidphase$landingState(Level level, BlockPos pos, BlockState state) {
         if (!PhaseHelper.hasPhaseProperty(state)) {
             return state;
@@ -89,8 +88,8 @@ public abstract class FallingBlockIntoWireMixin {
         if (!landing.is(Blocks.REDSTONE_WIRE)) {
             return state;
         }
-        int power = landing.getValue(BlockStateProperties.POWER);
-        return PhaseHelper.withPhase(state, Phase.redstone(power));
+        // 初始功率 0（与单独放置一致）；真实功率由 onPlace 的邻居重算结算，不继承线格原功率。
+        return PhaseHelper.withPhase(state, Phase.REDSTONE_0);
     }
 
     //? if 26.3 {

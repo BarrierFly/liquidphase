@@ -29,7 +29,9 @@
   > `small_dripleaf`、26.3 的 `sulfur_spike`）例外：破坏时**不留下相**。
 - **收走相**：功能三开启时空桶左键；关闭时空桶右键。固体相（冰/霜冰/黑曜石）不响应右键收取。
 - **放置吸收**：拿冰/黑曜石物品指向可含水方块 → 写入该格；把可含水方块放进冰/黑曜石/熔岩源所在的格子 → 吸收该相。
-- **碰撞**：冰/黑曜石相按整格实心；熔岩相不额外加碰撞。
+- **碰撞**：固相（冰/黑曜石）的组合碰撞 = **宿主碰撞 ∪ 整格实心**——栅栏/墙这类碰撞柱
+  延伸到方块外（高 1.5 格）的宿主，方块外的部分照常保留（0.1.21 及以前被整格覆盖丢失）；
+  熔岩相不额外加碰撞（内部是流体）；红石相不加碰撞。
   对所有宿主一致（状态级注入），包括自己覆写碰撞形状的栅栏/玻璃板/铁栏杆、墙、
   墙悬挂告示牌、脚手架、`sculk_shrieker`、`big_dripleaf`。逐版本数字见 `docs/host-coverage-audit.md`。
 - **直接挖相**：准星指向相露出的部分时，挖掘速度与掉落按相材质计算（黑曜石需钻石镐；冰/霜冰不精准采集则化水，霜冰无物品）。
@@ -87,13 +89,14 @@
 3. 雨天放一个含水楼梯（水桶点楼梯）→ 低温会冻成含冰楼梯；光照够了会化回水相。
 4. 空桶左键水源 → 掉落"水"物品；拿着它右键空气 → 放一个水源，物品消失、没有桶。
 5. 熔岩锅旁边倒水 → 掉黑曜石；水锅上倒熔岩 → 按水位掉石头/圆石/圆石台阶。
-6. 拿红石粉点楼梯 → 楼梯变成**含红石线的楼梯**：方块本身还是那格楼梯，只是多了 `filling` 取值
+6. 拿红石粉点楼梯 → 楼梯变成**含红石线的楼梯**：方块本身还是那格楼梯，只是多了一个 `filling` 取值
    （`redstone_0`…`redstone_15` 编码功率）。外面罩一层 16³ 红石粉尘外壳
    （透明底 cutout，贴图是**短碎屑铺满整面**的疏松红石纹理，
    **亮度随功率变化**——0 档接近熄灭、15 档满亮，和原版红石线一致），
    形状/碰撞/掉落仍是楼梯自己的。
-   按红石线规则衰减传递信号（对相邻红石线 -1，对灯/活塞等元件满功率），被宿主遮住的面不输出；
-   破坏它 → 留下对应功率的红石线。
+   功率与单独放置红石粉一致：落地时是 0，随后立即按周围信号源结算（有电源就是 15，
+   被宿主遮住的面不接收）；按红石线规则衰减传递信号（对相邻红石线 -1，对灯/活塞等元件满功率），
+   被宿主遮住的面不输出；破坏它 → 留下对应功率的红石线。
    也可以反过来：把楼梯/台阶等可含水方块**放进红石线所在的那一格**，那条线就被吸进宿主、
    变成含红石相的方块（功率沿原线）。这一步走的是普通方块放置流程，和谁在放无关：
 7. 拿空桶**左键**水锅/熔岩锅 → 整锅拆空、掉落"水"/"熔岩"物品；**锅本身保留**。
@@ -127,14 +130,19 @@
   红石粉也能替换水/熔岩），冰/霜冰/黑曜石/红石相不可替换、材料按不可放置处理。
   水的流体路径不变：水桶/水流仍只进无相宿主，水不能直接替换熔岩相
   （含熔岩相宿主遇水邻居走凝固成黑曜石相）。
+- **组合方块的后放相按"单独放置"的初始状态落地**（0.1.22 起）：无论哪种组装顺序
+  （红石粉点宿主、宿主放进线格、下落方块落进线格、通用改写层），红石相一律以
+  功率 0 落地，随后立即按邻居结算出真实功率——和单独放置一根红石粉完全一致
+  （原版放置即 POWER 0、`onPlace` 后按邻居重算）。不再预填 15 或继承线格原功率；
+  若原线功率来自被宿主遮蔽的面，结算结果就是 0（被覆盖的面不接收）。
 - **告示牌/箱子/屏障/光源方块等原生"不渲染方块模型"的宿主也能显示相**：带相状态一律按
   方块模型渲染，宿主本体仍由各自的原版渲染路径绘制。
 - **状态数**：`filling` 共 24 个取值（其中 16 个 `redstone_*` 编码功率），
   1.21.11 加载后总状态数约 51 万，启动注入时间相应变长；低内存环境请留意。
-- 含固相方块的**相覆盖层**是一层内缩 0.25px 的相材质立方体，碰撞是**整格实心**
+- 含固相方块的**相覆盖层**是一层内缩 0.25px 的相材质立方体，碰撞是**宿主 ∪ 整格的组合形状**
   （对所有宿主一致，挂在状态级；栅栏/玻璃板/铁栏杆、墙、墙悬挂告示牌、脚手架这些
-  自己覆写碰撞的宿主也生效）。挖掘按双口径：准星落在宿主露出的部分就挖宿主，
-  落在相露出的部分就挖相。黑曜石相需要钻石镐才能挖动相本身
+  自己覆写碰撞的宿主也生效——栅栏/墙延伸到方块外的碰撞柱照常保留）。挖掘按双口径：
+  准星落在宿主露出的部分就挖宿主，落在相露出的部分就挖相。黑曜石相需要钻石镐才能挖动相本身
   （没有钻石镐时按黑曜石速度计算，非常慢——有意的设计，不是卡死）。
   - 宿主模型**始终照常渲染**，相从宿主贴图的缝隙里露出；整格宿主（树叶/铜格栅/红树根）
     与台阶的各变体都如此，与含熔岩的观感一致。
@@ -180,7 +188,10 @@ lava, obsidian, ice, frosted ice, and redstone wire. One block = solid phase (th
 - **Removing the phase**: empty bucket with left-click when feature 3 is on (right-click when it is off). Solid phases cannot be collected.
 - **Placement absorption**: point an ice/obsidian item at a waterloggable block to fill it; place a waterloggable block into a tile holding
   ice/obsidian/a lava source to absorb that phase.
-- **Collision**: ice and obsidian phases are full-cube (matching the "phase fills the host's gaps" visuals); lava adds no collision.
+- **Collision**: the solid-phase (ice/obsidian) combined collision is the **host's collision ∪ a full
+  cube** — hosts whose collision column extends above the block (fences and walls are 1.5 blocks tall)
+  keep the part outside the block (up to 0.1.21 the full cube replaced the host shape and that part was
+  lost); lava adds no collision (it is a fluid) and the redstone phase adds none either.
 - **Mining the phase directly**: when the crosshair points at an exposed phase, mining speed and drops follow the phase material
   (obsidian needs a diamond pickaxe; ice melts to water without silk touch; frosted ice has no item).
 - **Full-cube hosts**: leaves, copper grates and mangrove roots (whose vanilla model already fills the whole 16³ cube) render as
@@ -250,10 +261,12 @@ SOLID); translucent hosts (glass panes, stained glass) keep TRANSLUCENT. The sam
 `getMovingBlockRenderType`, so falling blocks and piston-moved phased blocks are not drawn on the opaque layer.
 This must be a mixin: the `BlockRenderLayerMap` table is rebuilt by the resource reload and silently loses mappings
 registered during client init.
-Phased blocks with a solid phase look like a full cube of that material, and the full-cube collision applies to **every** host
-(state-level, including fences, panes, bars, walls, wall hanging signs and scaffolding that override the block-level
-shape); mining is two-lane: aim at the exposed host and it mines at host speed, aim at the exposed phase and it mines as the phase
-material (obsidian still needs a diamond pickaxe — that slowness is intended).
+Phased blocks with a solid phase look like a full cube of that material, and the combined collision
+(host ∪ full cube) applies to **every** host (state-level, including fences, panes, bars, walls, wall
+hanging signs and scaffolding that override the block-level shape — the fence/wall collision columns
+that stick out above the block are kept); mining is two-lane: aim at the exposed host and it mines at
+host speed, aim at the exposed phase and it mines as the phase material (obsidian still needs a diamond
+pickaxe — that slowness is intended).
 Every host keeps rendering its own model while phased: the phase is a 0.25px-inset cube of the phase material, so it shows through the
 gaps in the host's texture (opaque leaves hide it, transparent pixels reveal it) — the same look as a lava-filled host.
 ⚠️ Thin hosts (fences, panes, bars, walls, ladders) are therefore enclosed by the phase: their geometry lies entirely inside the inset

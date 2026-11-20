@@ -21,10 +21,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * null；{@code Cache} 构造时会 NPE。这里在块级把 null 兜回 {@code phase=none} 的兄弟状态。
  * 兜底必须留在块级：{@code Cache.<init>} 直接调块级 {@code getCollisionShape}，状态级钩子管不到它。
  * <p>
- * 固相"整格碰撞"（决策点 D7）**不在**这里：块级注入会被自己覆写 {@code getCollisionShape}
- * 的宿主（栅栏/玻璃板/铁栏杆、墙、墙悬挂告示牌、脚手架、sculk_shrieker、big_dripleaf）
- * 整个遮蔽。它已移到状态级 {@code ShapeFallbackMixin}（见 docs/host-coverage-audit.md §4.4），
- * 对全部宿主一致生效。红石相两种注入都不参与：它用宿主原有形状。
+ * 固相"两相组合碰撞"（决策点 D7，0.1.22 起为 宿主碰撞 ∪ 整格）**不在**这里：块级注入会被
+ * 自己覆写 {@code getCollisionShape} 的宿主（栅栏/玻璃板/铁栏杆、墙、墙悬挂告示牌、脚手架、
+ * sculk_shrieker、big_dripleaf）整个遮蔽。它已移到状态级 {@code ShapeFallbackMixin}（见
+ * docs/host-coverage-audit.md §4.4），对全部宿主一致生效。红石相两种注入都不参与：它用宿主原有形状。
  */
 @Mixin(BlockBehaviour.class)
 public abstract class BlockBehaviourMixin {

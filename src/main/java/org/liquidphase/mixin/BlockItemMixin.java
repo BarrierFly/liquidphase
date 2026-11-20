@@ -10,7 +10,6 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.BlockHitResult;
 import org.liquidphase.phase.Phase;
 import org.liquidphase.phase.PhaseAbsorption;
@@ -50,10 +49,11 @@ public abstract class BlockItemMixin {
     /**
      * {@return 写进方块前补好相位的状态}
      * <p>
-     * 目标格此刻仍是红石线 → 把这次要放的宿主状态写成 {@code phase=redstone_<功率>}。
-     * 用"目标格现在是红石线"而不是"上下文里带着标记"：这样无论方块是通过
-     * {@code BlockItem.place} 直接放进来的，还是物品先自己搜索落点（
-     * {@code updatePlacementContext}）再进来，判定都成立。
+     * 目标格此刻仍是红石线 → 把这次要放的宿主状态补上红石相，初始功率 0——
+     * 与"单独放置一根红石粉"一致（原版放置给 POWER=0，落地后由 onPlace 按邻居重算），
+     * 不继承线格原来的功率。用"目标格现在是红石线"而不是"上下文里带着标记"：
+     * 这样无论方块是通过 {@code BlockItem.place} 直接放进来的，还是物品先自己搜索落点
+     * （{@code updatePlacementContext}）再进来，判定都成立。
      * <p>
      * 挂 {@code placeBlock} 而不是 {@code getPlacementState}：告示牌/床这类子类会整个
      * 覆写 {@code getPlacementState} 且不调 super，但它们的 {@code placeBlock} 仍走这里。
@@ -69,9 +69,7 @@ public abstract class BlockItemMixin {
         if (!target.is(Blocks.REDSTONE_WIRE)) {
             return state;
         }
-        int power = target.hasProperty(BlockStateProperties.POWER)
-            ? target.getValue(BlockStateProperties.POWER) : 0;
-        return PhaseHelper.withPhase(state, Phase.redstone(power));
+        return PhaseHelper.withPhase(state, Phase.REDSTONE_0);
     }
 
     @Inject(method = "place", at = @At("HEAD"), cancellable = true)
@@ -114,13 +112,14 @@ public abstract class BlockItemMixin {
         Player player = context.getPlayer();
         ItemStack stack = context.getItemInHand();
 
-        // (a0) 红石粉指向相容宿主 → 该格写入红石相（§3.4）。
+        // (a0) 红石粉指向相容宿主 → 该格写入红石相（§3.4）。初始功率 0，与单独放置
+        // 红石粉一致；真实功率由 onPlace 的邻居重算立即结算（见 RedstoneBlocks.setRedstonePhase）。
         // 门控统一走 canAcceptPhase（0.1.17 可替换填充相规则）：现有填充相是水/熔岩
         // （可替换）时同样写红石相，不可替换相（冰/霜冰/黑曜石/红石）按不可放置处理。
         if (held == Blocks.REDSTONE_WIRE
             && targetState.getBlock() instanceof PhaseCapable
             && PhaseHelper.canAcceptPhase(targetState, level, target, Phase.REDSTONE_15)
-            && RedstoneBlocks.setRedstonePhase(level, target, targetState, 15)) {
+            && RedstoneBlocks.setRedstonePhase(level, target, targetState)) {
             liquidphase$consume(stack, player);
             return true;
         }

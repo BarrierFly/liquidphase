@@ -169,16 +169,19 @@ public final class RedstoneBlocks {
     // ------------------------------------------------------------------
 
     /**
-     * 把该格换成含红石相的宿主（功率沿用传入值）。
+     * 把该格换成含红石相的宿主。
      * <p>
-     * 与红石粉交互、以及"把可含水方块放进红石线格"共用这个入口；
-     * 方块本身不变，只写 phase 值。
+     * 与红石粉交互共用这个入口；方块本身不变，只写 phase 值。初始功率一律为 0——
+     * 与"单独放置一根红石粉"一致（原版 {@code getStateForPlacement} 给 POWER=0），
+     * 真实功率由 {@code onPlace} 的邻居重算（{@code BlockStateBaseMixin.liquidphase$onPlace}）
+     * 立即结算出来；**不要**在这里预填"线的原功率"或任何非 0 初值，那会让组合方块的
+     * 后放相拿到单独放置拿不到的初始状态。
      */
-    public static boolean setRedstonePhase(Level level, BlockPos pos, BlockState state, int power) {
+    public static boolean setRedstonePhase(Level level, BlockPos pos, BlockState state) {
         if (!PhaseHelper.hasPhaseProperty(state)) {
             return false;
         }
-        BlockState target = PhaseHelper.withPhase(state, Phase.redstone(power));
+        BlockState target = PhaseHelper.withPhase(state, Phase.REDSTONE_0);
         if (target == state) {
             return false;
         }
