@@ -100,6 +100,7 @@ public final class PhaseSelfTest {
             checkAbsorptionGateConsistency(level, base);
             checkPackMergeFragments(level, base);
             checkSlabVariantRendering();
+            checkPortalWaterHosts(level, base);
             checkPersistenceRoundTrip(level, base);
         } catch (Throwable t) {
             failed++;
@@ -332,6 +333,97 @@ public final class PhaseSelfTest {
     // ------------------------------------------------------------------
 
     /** 旁路表本身（不依赖关卡）：put/get/remove/chunkCount/entries/clear。 */
+    /**
+     * 传送门三件套的含水（0.2.0）：它们原本没有 {@code WATERLOGGED}，由注入器补上，
+     * 之后与其它宿主走同一套 {@code WaterloggedPhaseCapable} 语义。
+     * <p>
+     * 下界门需要合法框架才能存活（它的 {@code updateShape} 会检查框架），所以用 4×5
+     * 黑曜石框架 + 2×3 传送门内部格来测真实 {@code placeLiquid}/pickup 路径；
+     * 末地门/折跃门没有框架检查，直接测。
+     */
+    private static void checkPortalWaterHosts(ServerLevel level, BlockPos base) {
+        org.liquidphase.LiquidPhase.LOGGER.info("[selftest] portal water hosts begin");
+
+        // ---- 下界门：合法框架 ----
+        BlockPos origin = base.offset(60, 1, 0);
+        for (int x = 0; x <= 3; x++) {
+            for (int y = 0; y <= 4; y++) {
+                boolean border = x == 0 || x == 3 || y == 0 || y == 4;
+                if (border) {
+                    level.setBlock(origin.offset(x, y, 0), Blocks.OBSIDIAN.defaultBlockState(), Block.UPDATE_CLIENTS);
+                }
+            }
+        }
+        BlockState portalState = Blocks.NETHER_PORTAL.defaultBlockState()
+            .setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_AXIS,
+                net.minecraft.core.Direction.Axis.X);
+        BlockPos portalPos = origin.offset(1, 1, 0);
+        level.setBlock(portalPos, portalState, Block.UPDATE_CLIENTS);
+
+        assertTrue("nether portal has WATERLOGGED after injection",
+            level.getBlockState(portalPos)
+                .hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED));
+        assertTrue("nether portal has filling after injection",
+            PhaseHelper.hasPhaseProperty(level.getBlockState(portalPos)));
+
+        boolean waterAccepted = ((net.minecraft.world.level.block.LiquidBlockContainer) Blocks.NETHER_PORTAL)
+            .placeLiquid(level, portalPos, level.getBlockState(portalPos), Fluids.WATER.getSource(false));
+        assertTrue("nether portal accepts water like a normal host",
+            waterAccepted
+                && level.getBlockState(portalPos).getValue(
+                    net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)
+                && level.getFluidState(portalPos).is(Fluids.WATER));
+
+        BlockState waterloggedPortal = level.getBlockState(portalPos);
+        net.minecraft.world.item.ItemStack picked;
+        //? if 1.19.4 || 1.20.1 {
+        /*picked = ((net.minecraft.world.level.block.BucketPickup) Blocks.NETHER_PORTAL)
+            .pickupBlock(level, portalPos, waterloggedPortal);
+         *///?} elif 1.21.1 {
+        /*picked = ((net.minecraft.world.level.block.BucketPickup) Blocks.NETHER_PORTAL)
+            .pickupBlock((net.minecraft.world.entity.player.Player) null, level, portalPos, waterloggedPortal);
+         *///?} else {
+        picked = ((net.minecraft.world.level.block.BucketPickup) Blocks.NETHER_PORTAL)
+            .pickupBlock((net.minecraft.world.entity.LivingEntity) null, level, portalPos, waterloggedPortal);
+        //?}
+        assertTrue("waterlogged nether portal can be picked up with a bucket",
+            picked.is(net.minecraft.world.item.Items.WATER_BUCKET)
+                && !level.getBlockState(portalPos).getValue(
+                    net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED));
+
+        // 有材料相时拒水（与其它宿主同规则）
+        level.setBlock(portalPos, PhaseHelper.withPhase(portalState, Phase.ICE), Block.UPDATE_CLIENTS);
+        boolean rejected = !((net.minecraft.world.level.block.LiquidBlockContainer) Blocks.NETHER_PORTAL)
+            .placeLiquid(level, portalPos, level.getBlockState(portalPos), Fluids.WATER.getSource(false));
+        assertTrue("nether portal with ice phase rejects water", rejected);
+        level.setBlock(portalPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+
+        // ---- 末地门 / 末地折跃门：无框架检查 ----
+        net.minecraft.world.level.block.Block[] endPortals = {Blocks.END_PORTAL, Blocks.END_GATEWAY};
+        String[] names = {"end portal", "end gateway"};
+        for (int i = 0; i < endPortals.length; i++) {
+            BlockPos pos = base.offset(70 + i, 1, 0);
+            level.setBlock(pos, endPortals[i].defaultBlockState(), Block.UPDATE_CLIENTS);
+            boolean hasWaterlogged = level.getBlockState(pos)
+                .hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED);
+            boolean accepted = ((net.minecraft.world.level.block.LiquidBlockContainer) endPortals[i])
+                .placeLiquid(level, pos, level.getBlockState(pos), Fluids.WATER.getSource(false));
+            assertTrue(names[i] + " gets WATERLOGGED and accepts water",
+                hasWaterlogged && accepted
+                    && level.getBlockState(pos).getValue(
+                        net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)
+                    && level.getFluidState(pos).is(Fluids.WATER));
+            level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+        }
+
+        // 框架拆掉，避免影响后续断言/存档
+        for (int x = 0; x <= 3; x++) {
+            for (int y = 0; y <= 4; y++) {
+                level.setBlock(origin.offset(x, y, 0), Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+            }
+        }
+    }
+
     /**
      * 持久化往返：写一条元件条目 → {@code PhasePersistence.save} → 清掉 → {@code load} →
      * 逐字段读回。走真实的 NBT 文件（{@code world/data/liquidphase_<dim>.dat}）。

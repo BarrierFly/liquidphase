@@ -3,6 +3,7 @@ package org.liquidphase;
 import net.fabricmc.api.ModInitializer;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import org.liquidphase.interact.LiquidInteractions;
 import org.liquidphase.phase.Phase;
 import org.liquidphase.phase.PhaseCapable;
@@ -72,8 +73,15 @@ public final class LiquidPhase implements ModInitializer {
      */
     private static void injectPhaseProperty() {
         int injected = 0;
+        int waterloggedInjected = 0;
         for (Block block : BuiltInRegistries.BLOCK) {
             if (block instanceof PhaseCapable) {
+                // 传送门三件套没有原版 WATERLOGGED，但语义上要和其他宿主一样能含水：
+                // 先补这个布尔属性，再补 filling（顺序不能反——filling 的变体要带上它）。
+                if (block.getStateDefinition().getProperty("waterlogged") == null) {
+                    addWaterloggedProperty(block);
+                    waterloggedInjected++;
+                }
                 addPhaseProperty(block);
                 injected++;
             }
@@ -83,6 +91,17 @@ public final class LiquidPhase implements ModInitializer {
          *///?}
         LOGGER.info("[Liquid Phase] injected phase property into {} blocks (total states: {})",
             injected, Block.BLOCK_STATE_REGISTRY.size());
+        if (waterloggedInjected > 0) {
+            LOGGER.info("[Liquid Phase] injected WATERLOGGED into {} hosts that lacked it (portal blocks)", waterloggedInjected);
+        }
+    }
+
+    private static void addWaterloggedProperty(Block block) {
+        //? if 1.19.4 || 1.20.1 {
+        /*virtuoel.statement.api.StateRefresher.INSTANCE.addBlockProperty(block, BlockStateProperties.WATERLOGGED, false);
+         *///?} else {
+        org.liquidphase.state.PhaseStateRefresher.addBlockProperty(block, BlockStateProperties.WATERLOGGED, false);
+        //?}
     }
 
     private static void addPhaseProperty(Block block) {

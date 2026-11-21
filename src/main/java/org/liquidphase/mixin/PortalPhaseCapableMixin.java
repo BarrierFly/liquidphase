@@ -19,5 +19,5 @@ import org.spongepowered.asm.mixin.Mixin;
  * 这是"固相 = 整格实心"的直接后果，写进 README。
  */
 @Mixin({NetherPortalBlock.class, EndPortalBlock.class, EndGatewayBlock.class})
-public abstract class PortalPhaseCapableMixin implements PhaseCapable {
+public abstract class PortalPhaseCapableMixin implements org.liquidphase.phase.WaterloggedPhaseCapable {
 }

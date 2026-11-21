@@ -162,7 +162,7 @@
   强制 `getRenderShape = MODEL`，宿主本体仍由各自的原版渲染路径绘制；
   这些方块的 blockstate 模型本身没有 `elements`，不会凭空多出宿主几何。
 - **状态数**：`filling` 共 **8** 个取值（`none` + 7 个材料类别）。
-  1.21.11 注入 **413** 个方块、总状态 **176,531**（方案 C 预算档）；启动注入时间仍随宿主数增长。
+  1.21.11 注入 **413** 个方块、总状态 **176,563**（含给传送门补的 WATERLOGGED）（方案 C 预算档）；启动注入时间仍随宿主数增长。
 - 含固相方块的**相覆盖层**是一层内缩 0.25px 的相材质立方体，碰撞是**宿主 ∪ 整格的组合形状**
   （对所有宿主一致，挂在状态级；栅栏/玻璃板/铁栏杆、墙、墙悬挂告示牌、脚手架这些
   自己覆写碰撞的宿主也生效——栅栏/墙延伸到方块外的碰撞柱照常保留）。挖掘按双口径：
@@ -173,8 +173,9 @@
   装饰陶罐收纳、搁物架/铜傀儡雕像交互**）→ 原版行为优先、不灌入，
   和"水桶点活板门只会开关它"一样。要给这些宿主灌相：**潜行右键**（原版绕过方块交互）、
   发射器、或放置吸收（拿方块放进熔岩源格）。
-- **传送门也是宿主**：下界门 / 末地门 / 末地折跃门可含填充相（它们没有 `WATERLOGGED`，
-  只实现基接口的熔岩分支）；含冰/霜冰/黑曜石时整格碰撞会堵住传送门（见已知限制）。
+- **传送门也是宿主**：下界门 / 末地门 / 末地折跃门可含填充相。它们原版没有 `WATERLOGGED`，
+  0.2.0 起由注入器补上该布尔属性，含水语义与其它宿主完全一致（水桶灌入/空桶取水/
+  水流判定/融化回水）；含冰/霜冰/黑曜石时整格碰撞会堵住传送门（见已知限制）。
 - 1.21.1+ 的 `barrier` 仍是相容宿主（红石相正常显示），但桶/放置吸收/相邻熔岩充不进相：
   原版对 barrier 的流体接受是"创造模式限定"，而相充入的探测调用不携带玩家身份
   （熔岩桶点 barrier 只是拒绝，不会崩）。
@@ -339,9 +340,10 @@ Lava buckets follow the vanilla water-bucket interaction priority: hosts whose v
 shelves/statues act) are not filled by a plain right-click — sneak right-click, dispensers and placing a block into a
 lava source still fill them; every other host fills on right-click through the vanilla `useItem` path, identical on
 all six versions.
-Portals are hosts too: nether portals / end portals / end gateways accept material fillings (they have no
-`WATERLOGGED` and only implement the lava branch of the base interface); with ice/frosted ice/obsidian the
-full-cube collision blocks the portal (see known limitations).
+Portals are hosts too: nether portals / end portals / end gateways accept material fillings and were given a
+`WATERLOGGED` property at injection time, so waterlogging works exactly like on any other host (bucket fill,
+bucket pickup, water flow, melting back to water); with ice/frosted ice/obsidian the full-cube collision blocks the
+portal (see known limitations).
 `barrier` is not a phase host on 1.19.4/1.20.1 (those versions have no `WATERLOGGED` on it); on 1.21.1+ it stays a
 host, but bucket/placement filling is refused there (vanilla only accepts fluids on barriers in creative mode).
 Slabs/candles/campfires/dried ghasts accept lava from neighbouring lava sources (their shadowed

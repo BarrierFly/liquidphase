@@ -9,6 +9,7 @@ import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.block.SimpleWaterloggedBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.material.Fluid;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.level.material.Fluids;
@@ -33,6 +34,9 @@ public interface WaterloggedPhaseCapable extends PhaseCapable, SimpleWaterlogged
         if (fluid == Fluids.LAVA) {
             return PhaseHelper.canAcceptPhase(state, level, pos, Phase.LAVA);
         }
+        if (!state.hasProperty(BlockStateProperties.WATERLOGGED)) {
+            return false;
+        }
         if (PhaseHelper.getPhase(state) != Phase.NONE
             || !PhaseExtra.isEmpty(PhaseExtras.get(level, pos))) {
             return false;
@@ -46,6 +50,9 @@ public interface WaterloggedPhaseCapable extends PhaseCapable, SimpleWaterlogged
         if (fluid == Fluids.LAVA) {
             return PhaseHelper.canAcceptPhase(state, level, pos, Phase.LAVA);
         }
+        if (!state.hasProperty(BlockStateProperties.WATERLOGGED)) {
+            return false;
+        }
         if (PhaseHelper.getPhase(state) != Phase.NONE
             || !PhaseExtra.isEmpty(PhaseExtras.get(level, pos))) {
             return false;
@@ -57,6 +64,9 @@ public interface WaterloggedPhaseCapable extends PhaseCapable, SimpleWaterlogged
     default boolean canPlaceLiquid(LivingEntity user, BlockGetter level, BlockPos pos, BlockState state, Fluid fluid) {
         if (fluid == Fluids.LAVA) {
             return PhaseHelper.canAcceptPhase(state, level, pos, Phase.LAVA);
+        }
+        if (!state.hasProperty(BlockStateProperties.WATERLOGGED)) {
+            return false;
         }
         if (PhaseHelper.getPhase(state) != Phase.NONE
             || !PhaseExtra.isEmpty(PhaseExtras.get(level, pos))) {
@@ -71,6 +81,9 @@ public interface WaterloggedPhaseCapable extends PhaseCapable, SimpleWaterlogged
         if (fluidState.is(Fluids.LAVA)) {
             return PhaseHelper.fillWithPhase(level, pos, state, Phase.LAVA);
         }
+        if (!state.hasProperty(BlockStateProperties.WATERLOGGED)) {
+            return false;
+        }
         if (PhaseHelper.getPhase(state) != Phase.NONE
             || !PhaseExtra.isEmpty(PhaseExtras.get(level, pos))) {
             return false;
@@ -84,6 +97,9 @@ public interface WaterloggedPhaseCapable extends PhaseCapable, SimpleWaterlogged
         if (PhaseHelper.getPhase(state) == Phase.LAVA) {
             return PhaseCapable.super.pickupBlock(level, pos, state);
         }
+        if (!state.hasProperty(BlockStateProperties.WATERLOGGED)) {
+            return ItemStack.EMPTY;
+        }
         return SimpleWaterloggedBlock.super.pickupBlock(level, pos, state);
     }
      *///?} elif 1.21.1 {
@@ -93,6 +109,9 @@ public interface WaterloggedPhaseCapable extends PhaseCapable, SimpleWaterlogged
         if (PhaseHelper.getPhase(state) == Phase.LAVA) {
             return PhaseCapable.super.pickupBlock(user, level, pos, state);
         }
+        if (!state.hasProperty(BlockStateProperties.WATERLOGGED)) {
+            return ItemStack.EMPTY;
+        }
         return SimpleWaterloggedBlock.super.pickupBlock(user, level, pos, state);
     }
      *///?} else {
@@ -100,6 +119,9 @@ public interface WaterloggedPhaseCapable extends PhaseCapable, SimpleWaterlogged
     default ItemStack pickupBlock(LivingEntity user, LevelAccessor level, BlockPos pos, BlockState state) {
         if (PhaseHelper.getPhase(state) == Phase.LAVA) {
             return PhaseCapable.super.pickupBlock(user, level, pos, state);
+        }
+        if (!state.hasProperty(BlockStateProperties.WATERLOGGED)) {
+            return ItemStack.EMPTY;
         }
         return SimpleWaterloggedBlock.super.pickupBlock(user, level, pos, state);
     }

@@ -32,7 +32,7 @@ public final class PhaseStateRefresher {
     private PhaseStateRefresher() {
     }
 
-    public static void addBlockProperty(Block block, Property<Phase> property, Phase defaultValue) {
+    public static <T extends Comparable<T>> void addBlockProperty(Block block, Property<T> property, T defaultValue) {
         @SuppressWarnings("unchecked")
         StateDefinition<Block, BlockState> definition = block.getStateDefinition();
         if (definition.getProperty(property.getName()) != null) {
@@ -59,7 +59,11 @@ public final class PhaseStateRefresher {
         @SuppressWarnings("unchecked")
         MapCodec<BlockState> codec = (MapCodec<BlockState>) definitionDuck.liquidphase$rebuildCodec(properties, defaultState);
 
-        // 既有状态原地补默认值；再为每个旧状态 × 每个 phase 变体（除默认）创建新状态。
+        // 既有状态原地补默认值；再为每个旧状态 × 每个非默认取值创建新状态。
+        // 泛型化之后同一套机械扩展既用于 filling（7 个非默认相），也用于给传送门补
+        // waterlogged（1 个非默认值 true）。
+        List<T> variants = new ArrayList<>(property.getPossibleValues());
+        variants.remove(defaultValue);
         ImmutableList<BlockState> oldStates = definition.getPossibleStates();
         Map<Map<Property<?>, Comparable<?>>, BlockState> statesByValues = new LinkedHashMap<>();
         for (BlockState state : oldStates) {
@@ -67,12 +71,12 @@ public final class PhaseStateRefresher {
             statesByValues.put(snapshot(state), state);
         }
 
-        List<BlockState> newStates = new ArrayList<>(oldStates.size() * Phase.FILLED.length);
+        List<BlockState> newStates = new ArrayList<>(oldStates.size() * variants.size());
         for (BlockState state : oldStates) {
-            for (Phase phase : Phase.FILLED) {
+            for (T value : variants) {
                 Map<Property<?>, Comparable<?>> values =
                     new LinkedHashMap<>(((StateHolderDuck<Block, BlockState>) state).liquidphase$snapshotValues());
-                values.put(property, phase);
+                values.put(property, value);
                 BlockState created = definitionDuck.liquidphase$createState(properties, values, codec);
                 newStates.add(created);
                 statesByValues.put(snapshot(created), created);

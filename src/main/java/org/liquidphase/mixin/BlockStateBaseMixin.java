@@ -42,6 +42,14 @@ public abstract class BlockStateBaseMixin {
         BlockState self = (BlockState) (Object) this;
         if (PhaseHelper.isLava(self)) {
             cir.setReturnValue(Fluids.LAVA.defaultFluidState());
+            return;
+        }
+        // 含水宿主（含 0.2.0 起补了 WATERLOGGED 的传送门）要像原版含水方块一样
+        // 报告水为源，流体渲染与流体刻才会把它当水。带材料相时互斥（filling != none）。
+        if (self.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)
+            && self.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)
+            && PhaseHelper.getPhase(self) == Phase.NONE) {
+            cir.setReturnValue(Fluids.WATER.getSource(false));
         }
     }
 

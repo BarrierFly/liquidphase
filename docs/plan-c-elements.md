@@ -17,6 +17,12 @@
 **红石相与元件相（中继器/比较器/侦测器）不再占用状态值**：它们在旁路表里，
 取值域只有上面 8 个（相对原版新增 7 个）。
 
+**传送门三件套**（`nether_portal` / `end_portal` / `end_gateway`）原版没有 `WATERLOGGED`。
+0.2.0 在注入 `filling` 之前先给它们补上 `WATERLOGGED`（`LiquidPhase.injectPhaseProperty` 里
+"没有该属性的宿主补一个"），于是它们和普通宿主一样走 `WaterloggedPhaseCapable` 的水分支：
+水桶灌入/空桶取水/`getFluidState` 报告水源/带材料相时拒水。基接口 `PhaseCapable` 仍然
+不读 `WATERLOGGED`，只作为"没有该属性时也不崩"的兜底（若注入失败，水分支直接拒绝）。
+
 ### 1.2 旁路表（参数）
 
 每格一条 `PhaseExtra`（包进一个 `int`）：
@@ -86,6 +92,8 @@
 
 1. 类别集取 8 个**材料类别**，红石相与元件相整个进旁路表（文档 C 的原意）。
    `(N − B) + B × 8` ⇒ 1.21.11 约 176,503 状态（文档 C 的 257 MiB 档）。
+   实际值为 **176,563**：传送门三件套额外补注入 `WATERLOGGED`（+32 状态），
+   这样它们和普通宿主一样能含水（水桶灌/取、流体态、带相拒水）。
 2. 旁路表按 **Level 分组（chunk → cells）**，不是 `LevelChunkSection` 内的表：
    省掉 `LevelChunkSection` / `ChunkSerializer` / `SerializableChunkData` 三条
    版本差异最大的存档路径，持久化改用 mod 自己的 NBT 文件。稀疏性、按区块同步粒度
