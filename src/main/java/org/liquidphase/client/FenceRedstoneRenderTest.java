@@ -89,12 +89,14 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
                 buildScene(server, dark, false);
                 buildElementScene(server, bright);
             });
-            context.waitTicks(12);
-
-            for (String line : sp.getServer().computeOnServer(server -> readBackPhases(server, bright))) {
+            // 侦测器是 2 tick 开、2 tick 关的脉冲：必须在脉冲窗口内读（中继器 2 tick 后也亮了）。
+            context.waitTicks(3);
+            for (String line : sp.getServer().computeOnServer(server -> readBackElements(server, bright))) {
                 LiquidPhase.LOGGER.info("[gametest] {}", line);
             }
-            for (String line : sp.getServer().computeOnServer(server -> readBackElements(server, bright))) {
+            context.waitTicks(9);
+
+            for (String line : sp.getServer().computeOnServer(server -> readBackPhases(server, bright))) {
                 LiquidPhase.LOGGER.info("[gametest] {}", line);
             }
 
@@ -286,6 +288,10 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
         level.setBlockAndUpdate(repeaterPos.relative(net.minecraft.core.Direction.NORTH),
             Blocks.REDSTONE_BLOCK.defaultBlockState());
         level.updateNeighborsAt(repeaterPos, Blocks.SMOOTH_STONE_SLAB);
+        // 侦测器观察面（EAST）邻居变化：updateShape → 2 tick 后 powered。
+        BlockPos observerPos = origin.offset(4, 0, 21);
+        level.setBlockAndUpdate(observerPos.relative(net.minecraft.core.Direction.EAST),
+            Blocks.STONE.defaultBlockState());
     }
 
     private static List<String> readBackElements(MinecraftServer server, BlockPos origin) {
@@ -305,6 +311,9 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
             }
             if (i == 0 && !PhaseExtra.powered(extra)) {
                 out.add("element z=%d FAIL repeater did not turn on (input redstone block)".formatted(20 + i));
+            }
+            if (i == 1 && !PhaseExtra.powered(extra)) {
+                out.add("element z=%d FAIL observer did not flip on a facing-neighbour change".formatted(20 + i));
             }
         }
         return out;

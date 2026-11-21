@@ -55,19 +55,11 @@ public final class PhaseDynamicModelModern {
     /** 全部子模型（相对 {@code liquidphase:} 的路径）：16 外壳 + 16 中继器 + 4 比较器 + 2 侦测器。 */
     private static final String[] SUB_PATHS = buildSubPaths();
 
-    private static final ModelBaker.SharedOperationKey<Map<String, Part>> PARTS_KEY =
+    private static final ModelBaker.SharedOperationKey<Map<String, Object>> PARTS_KEY =
         PhaseDynamicModelModern::bakeParts;
 
     private PhaseDynamicModelModern() {
     }
-
-    //? if 26.3 {
-    /*private interface Part extends net.minecraft.client.renderer.block.dispatch.BlockStateModelPart {
-    }
-     *///?} else {
-    private interface Part extends BlockModelPart {
-    }
-    //?}
 
     private static String[] buildSubPaths() {
         String[] ids = new String[16 + 16 + 4 + 2];
@@ -100,10 +92,12 @@ public final class PhaseDynamicModelModern {
     }
     //?}
 
-    private static Map<String, Part> bakeParts(ModelBaker baker) {
-        Map<String, Part> baked = new HashMap<>(SUB_PATHS.length * 2);
+    // 值类型故意用 Object：1.21.10/11 是 BlockModelPart、26.3 是 BlockStateModelPart，
+    // 而真正发射时统一走 FabricBlockModelPart / FabricBlockStateModelPart 接口。
+    private static Map<String, Object> bakeParts(ModelBaker baker) {
+        Map<String, Object> baked = new HashMap<>(SUB_PATHS.length * 2);
         for (String path : SUB_PATHS) {
-            baked.put(path, (Part) new Variant(id(path)).bake(baker));
+            baked.put(path, new Variant(id(path)).bake(baker));
         }
         return baked;
     }
@@ -143,7 +137,7 @@ public final class PhaseDynamicModelModern {
     // 动态模型
     // ------------------------------------------------------------------
 
-    private record DynamicModel(BlockStateModel base, Map<String, Part> parts)
+    private record DynamicModel(BlockStateModel base, Map<String, Object> parts)
         implements FabricBlockStateModel, BlockStateModel {
 
         //? if 26.3 {
@@ -183,7 +177,7 @@ public final class PhaseDynamicModelModern {
             if (!ElementRenderSupport.hasGeometry(extra)) {
                 return;
             }
-            Part part = this.parts.get(ElementRenderSupport.subModelPath(extra));
+            Object part = this.parts.get(ElementRenderSupport.subModelPath(extra));
             if (part == null) {
                 return;
             }

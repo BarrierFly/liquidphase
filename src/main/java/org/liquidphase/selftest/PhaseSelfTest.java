@@ -100,6 +100,7 @@ public final class PhaseSelfTest {
             checkAbsorptionGateConsistency(level, base);
             checkPackMergeFragments(level, base);
             checkSlabVariantRendering();
+            checkPersistenceRoundTrip(level, base);
         } catch (Throwable t) {
             failed++;
             LiquidPhase.LOGGER.error("[Liquid Phase][selftest] crashed", t);
@@ -331,8 +332,30 @@ public final class PhaseSelfTest {
     // ------------------------------------------------------------------
 
     /** 旁路表本身（不依赖关卡）：put/get/remove/chunkCount/entries/clear。 */
-    private static void checkExtraStorage() {
-        PhaseStorage storage = new PhaseStorage();
+    /**
+     * 持久化往返：写一条元件条目 → {@code PhasePersistence.save} → 清掉 → {@code load} →
+     * 逐字段读回。走真实的 NBT 文件（{@code world/data/liquidphase_<dim>.dat}）。
+     * <p>
+     * 放在自检最后：{@code load} 会清空整张表（测试场地本应已清干净）。
+     */
+    private static void checkPersistenceRoundTrip(ServerLevel level, BlockPos base) {
+        BlockPos pos = base.offset(41, 1, 0);
+        level.setBlock(pos, Blocks.STONE_SLAB.defaultBlockState(), Block.UPDATE_ALL);
+        int extra = PhaseExtra.element(PhaseExtra.Kind.OBSERVER, Direction.NORTH, 0, false, true);
+        PhaseExtras.set(level, pos, extra);
+        org.liquidphase.phase.PhasePersistence.save(level);
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+        org.liquidphase.phase.PhasePersistence.load(level);
+        int loaded = PhaseExtras.get(level, pos);
+        assertTrue("persistence: side table survives a save/load round-trip",
+            PhaseExtra.isElement(loaded)
+                && PhaseExtra.kind(loaded) == PhaseExtra.Kind.OBSERVER
+                && PhaseExtra.facing(loaded) == Direction.NORTH
+                && PhaseExtra.powered(loaded));
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+    }
+
+    private static void checkExtraStorage() {        PhaseStorage storage = new PhaseStorage();
         BlockPos a = new BlockPos(0, 64, 0);
         BlockPos b = new BlockPos(20, 64, 5);
         assertTrue("storage: put returns EMPTY for a fresh cell",
