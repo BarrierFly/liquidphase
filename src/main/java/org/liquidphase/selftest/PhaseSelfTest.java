@@ -78,6 +78,7 @@ public final class PhaseSelfTest {
             checkRedstoneUpdatePower(level, base.offset(40, 1, 4));
             checkElementPlacement(level, base.offset(40, 1, 6));
             checkEntryWriteClearsWater(level, base.offset(42, 1, 0));
+            checkElementPlacementByPlayer(level, base);
             checkPistonPhaseBehavior(level, base);
             checkRedstonePhaseInitialState(level, base);
             checkPlaceIntoWire(level, base);
@@ -599,6 +600,55 @@ public final class PhaseSelfTest {
     // 0.2.3 活塞路径：黑曜石相推不动；推动覆盖/破坏列表弹出物品（相不随方块移动）；
     // 拉动/剩余清格实体化留在原位。真实活塞由 PistonBaseBlockInvoker 直驱 triggerEvent。
     // ------------------------------------------------------------------
+
+    /**
+     * 元件装配的**真实玩家点击**路径（0.2.3）：普通半砖 / 含水半砖 / 含熔岩半砖都要能贴元件，
+     * 且写入时水/熔岩相被清掉（清含水、门控合一）。
+     * <p>
+     * 与 {@link #checkElementPlacement} 的区别：那个直接调 {@code ElementBlocks.place}，
+     * 绕过了玩家交互层；这里走 {@code ServerPlayerGameMode.useItemOn}（潜行）——
+     * 0.2.2 的"getClickedPos 指向空气格"就是靠这一层才暴露的。
+     */
+    private static void checkElementPlacementByPlayer(ServerLevel level, BlockPos base) {
+        net.minecraft.server.level.ServerPlayer player = liquidphase$fakePlayer(level);
+        String[] names = {"clean", "waterlogged", "lava"};
+        for (int i = 0; i < names.length; i++) {
+            BlockPos pos = base.offset(50, 1, i * 2);
+            level.setBlock(pos.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+            BlockState host = switch (i) {
+                case 1 -> Blocks.STONE_SLAB.defaultBlockState()
+                    .setValue(BlockStateProperties.WATERLOGGED, true);
+                case 2 -> PhaseHelper.withPhase(Blocks.STONE_SLAB.defaultBlockState(), Phase.LAVA);
+                default -> Blocks.STONE_SLAB.defaultBlockState();
+            };
+            level.setBlock(pos, host, Block.UPDATE_ALL);
+            PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+
+            player.setShiftKeyDown(true);
+            player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
+                new ItemStack(net.minecraft.world.item.Items.REPEATER));
+            Vec3 hitVec = new Vec3(pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5);
+            BlockHitResult hit = new BlockHitResult(hitVec, Direction.UP, pos, false);
+            net.minecraft.world.InteractionResult result = player.gameMode.useItemOn(player, level,
+                player.getMainHandItem(), net.minecraft.world.InteractionHand.MAIN_HAND, hit);
+            player.setShiftKeyDown(false);
+
+            BlockState after = level.getBlockState(pos);
+            int extra = PhaseExtras.get(level, pos);
+            assertTrue("player element on " + names[i] + " host: sneak-click writes a repeater entry (got "
+                    + result + " / " + after.getBlock() + " / " + PhaseExtra.describe(extra) + ")",
+                after.getBlock() == Blocks.STONE_SLAB
+                    && PhaseExtra.kind(extra) == PhaseExtra.Kind.REPEATER);
+            assertTrue("player element on " + names[i] + " host: water/lava phase cleared",
+                PhaseHelper.getPhase(after) == Phase.NONE
+                    && !after.getValue(BlockStateProperties.WATERLOGGED));
+
+            PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+            player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+            level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+            level.setBlock(pos.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        }
+    }
 
     private static void checkPistonPhaseBehavior(ServerLevel level, BlockPos base) {
         // 自检跑在 SERVER_STARTED：测试区块此时可能还不是 entity-ticking，
