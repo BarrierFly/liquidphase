@@ -56,13 +56,17 @@ COMMITS = {
 # 注入 PhaseCapable 会在默认方法里抛 IllegalArgumentException（audit §4.2，0.1.13 起
 # BarrierBlock 只进 1.21.1+ 的目标清单）。
 EXPECTED_COUNTS = {
-    "1.19.4": 308,
-    "1.20.1": 310,
-    "1.21.1": 337,
-    "1.21.10": 410,
-    "1.21.11": 410,
-    "26.3": 505,
+    "1.19.4": 311,
+    "1.20.1": 313,
+    "1.21.1": 340,
+    "1.21.10": 413,
+    "1.21.11": 413,
+    "26.3": 508,
 }
+
+# 不实现 SimpleWaterloggedBlock、但由独立 mixin 注入 PhaseCapable 的宿主（0.2.0）。
+# 它们没有 WATERLOGGED，只走基接口的熔岩分支；解析器从 Blocks.java 推不出来，这里显式补。
+EXTRA_IDS = ("end_gateway", "end_portal", "nether_portal")
 
 COLOR_NAMES = [
     "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray",
@@ -220,6 +224,8 @@ def main():
             consts.update(dict(CONST_DEF.findall(git_show(repo, commit, path))))
 
         found, unresolved = derive_ids(blocks_src, closure, consts)
+        for extra in EXTRA_IDS:
+            found.setdefault(extra, set())
         expected = EXPECTED_COUNTS.get(version)
         problems = []
         if unresolved:

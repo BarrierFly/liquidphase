@@ -59,9 +59,6 @@ public final class PhaseAbsorption {
         if (!(stack.getItem() instanceof BlockItem item)) {
             return null;
         }
-        if (item.getBlock() == Blocks.REDSTONE_WIRE) {
-            return Phase.REDSTONE_15;
-        }
         return phaseOfItem(item.getBlock());
     }
 }

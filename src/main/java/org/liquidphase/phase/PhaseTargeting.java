@@ -62,8 +62,9 @@ public final class PhaseTargeting {
     }
 
     /** {@return 合并瞄准形状 = 宿主轮廓 ∪ 相可见区域；无相时返回 null（调用方直接用原形状）} */
-    public static VoxelShape mergedOutline(BlockState state, VoxelShape vanilla) {
-        if (!isPhaseMineable(state)) {
+    public static VoxelShape mergedOutline(net.minecraft.world.level.BlockGetter level, BlockPos pos,
+                                           BlockState state, VoxelShape vanilla) {
+        if (!isPhaseMineable(level, pos, state)) {
             return null;
         }
         VoxelShape phase = phaseVisibleShape(state);
@@ -88,7 +89,7 @@ public final class PhaseTargeting {
      */
     public static boolean isPhaseTarget(Player player, Level level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
-        if (!isPhaseMineable(state)) {
+        if (!isPhaseMineable(level, pos, state)) {
             return false;
         }
         VoxelShape phase = phaseVisibleShape(state);
@@ -117,16 +118,22 @@ public final class PhaseTargeting {
     }
 
     /** {@return 固相（黑曜石/冰/霜冰）或红石相是否可被直接瞄准挖掘（D8）} */
-    public static boolean isPhaseMineable(BlockState state) {
-        return PhaseHelper.isSolidPhase(state) || org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(state);
+    public static boolean isPhaseMineable(net.minecraft.world.level.BlockGetter level, BlockPos pos, BlockState state) {
+        return PhaseHelper.isSolidPhase(state)
+            || org.liquidphase.phase.PhaseExtra.isRedstone(org.liquidphase.phase.PhaseExtras.get(level, pos));
+    }
+
+    /** {@return 该格是否带元件相（元件先于宿主被破坏）} */
+    public static boolean isElementMineable(net.minecraft.world.level.BlockGetter level, BlockPos pos) {
+        return org.liquidphase.phase.PhaseExtra.isElement(org.liquidphase.phase.PhaseExtras.get(level, pos));
     }
 
     /** {@return 相对应的伪状态（用于挖掘速度与掉落判定）} */
-    public static BlockState pseudoState(BlockState state) {
-        Phase phase = PhaseHelper.getPhase(state);
-        if (phase.isRedstone()) {
+    public static BlockState pseudoState(BlockState state, int extra) {
+        if (org.liquidphase.phase.PhaseExtra.isRedstone(extra)) {
             return net.minecraft.world.level.block.Blocks.REDSTONE_WIRE.defaultBlockState();
         }
+        Phase phase = PhaseHelper.getPhase(state);
         return switch (phase) {
             case OBSIDIAN -> Blocks.OBSIDIAN.defaultBlockState();
             case ICE -> Blocks.ICE.defaultBlockState();
@@ -154,14 +161,21 @@ public final class PhaseTargeting {
      * 冰/霜冰非精准采集时化回水相（对齐原版冰的破坏行为）；霜冰无物品形态，精准采集也不掉落。
      */
     public static void minePhase(Player player, Level level, BlockPos pos, BlockState state) {
-        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(state)) {
+        int extra = org.liquidphase.phase.PhaseExtras.get(level, pos);
+        if (org.liquidphase.phase.PhaseExtra.isElement(extra)) {
+            if (level instanceof net.minecraft.server.level.ServerLevel serverLevel) {
+                org.liquidphase.element.ElementBlocks.mine(serverLevel, pos, state, extra);
+            }
+            return;
+        }
+        if (org.liquidphase.phase.PhaseExtra.isRedstone(extra)) {
             if (level instanceof net.minecraft.server.level.ServerLevel serverLevel) {
                 org.liquidphase.redstone.RedstoneBlocks.mineRedstonePhase(serverLevel, pos, state);
             }
             return;
         }
         Phase phase = PhaseHelper.getPhase(state);
-        BlockState pseudo = pseudoState(state);
+        BlockState pseudo = pseudoState(state, extra);
         if (!player.isCreative() && phase == Phase.OBSIDIAN && player.hasCorrectToolForDrops(pseudo)) {
             pop(level, pos, new ItemStack(Items.OBSIDIAN));
         }

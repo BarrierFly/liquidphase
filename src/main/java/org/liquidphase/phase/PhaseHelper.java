@@ -65,7 +65,6 @@ public final class PhaseHelper {
      * 带相写入；水相相属性互斥（waterlogged=true ⟺ phase=none）。
      * <p>
      * 没有 phase 属性的状态原样返回：直接 setValue 会抛 IllegalArgumentException。
-     * （红石相现在是 phase 的一个取值，同样走这里。）
      */
     public static BlockState withPhase(BlockState state, Phase phase) {
         if (!state.hasProperty(FILLING)) {
@@ -76,6 +75,35 @@ public final class PhaseHelper {
             result = result.setValue(BlockStateProperties.WATERLOGGED, phase == Phase.NONE && result.getValue(BlockStateProperties.WATERLOGGED));
         }
         return result;
+    }
+
+    /**
+     * 真正的"写相"入口：清掉同格的旁路条目（同格只表达一个相），再写方块状态。
+     * <p>
+     * 所有会改 {@code filling} 的路径都必须走这里，否则旁路表与状态会漂移
+     * （例如含红石相/元件的格子被熔岩覆盖后，表里还留着旧条目）。
+     */
+    public static BlockState setPhase(LevelAccessor level, BlockPos pos, BlockState state, Phase phase, int flags) {
+        if (phase != Phase.NONE) {
+            PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+        }
+        BlockState target = withPhase(state, phase);
+        level.setBlock(pos, target, flags);
+        return target;
+    }
+
+    /**
+     * {@return 该格能否写入红石/元件条目}（同格只表达一个相）
+     * <p>
+     * 现有填充相可替换（空/含水/熔岩）时放行——写红石相会把材料相清回 {@code NONE}；
+     * 冰/霜冰/黑曜石相拒绝（与 0.1.17 的互斥语义一致）。
+     */
+    public static boolean canAcceptExtra(BlockGetter level, BlockPos pos, BlockState state) {
+        if (!PhaseExtra.isEmpty(PhaseExtras.get(level, pos))) {
+            return false;
+        }
+        Phase current = getPhase(state);
+        return current == Phase.NONE || current.isReplaceableFilling();
     }
 
     /** 融化：冰相 → 水相（waterlogged=true, phase=none）；蒸发维度直接去掉相。 */
@@ -116,11 +144,15 @@ public final class PhaseHelper {
         if (phase == Phase.NONE || !state.hasProperty(FILLING)) {
             return false;
         }
+        // 同格只表达一个相：已经有红石/元件条目时不允许再写填充相。
+        if (level != null && !PhaseExtra.isEmpty(PhaseExtras.get(level, pos))) {
+            return false;
+        }
         Phase current = state.getValue(FILLING);
         if (current != Phase.NONE && !current.isReplaceableFilling()) {
             return false;
         }
-        if (state.getBlock() instanceof LiquidBlockContainer container) {
+        if (state.getBlock() instanceof LiquidBlockContainer container && state.hasProperty(BlockStateProperties.WATERLOGGED)) {
             return canPlaceWaterProbe(container, level, pos, emptySibling(state));
         }
         return true;
@@ -142,7 +174,7 @@ public final class PhaseHelper {
         if (!canAcceptPhase(state, level, pos, phase)) {
             return false;
         }
-        level.setBlock(pos, withPhase(state, phase), Block.UPDATE_ALL);
+        setPhase(level, pos, state, phase, Block.UPDATE_ALL);
         if (phase == Phase.LAVA) {
             level.scheduleTick(pos, Fluids.LAVA, Fluids.LAVA.getTickDelay(level));
         }
@@ -180,7 +212,7 @@ public final class PhaseHelper {
         }
         for (Direction direction : POSSIBLE_FLOW_DIRECTIONS) {
             if (level.getFluidState(pos.relative(direction.getOpposite())).is(Fluids.WATER)) {
-                level.setBlock(pos, withPhase(state, Phase.OBSIDIAN), Block.UPDATE_ALL);
+                setPhase(level, pos, state, Phase.OBSIDIAN, Block.UPDATE_ALL);
                 fizz(level, pos);
                 return;
             }
@@ -208,7 +240,7 @@ public final class PhaseHelper {
         if (!shouldFreezeHost(level, biome, pos, state)) {
             return false;
         }
-        level.setBlock(pos, withPhase(state, Phase.ICE), Block.UPDATE_ALL);
+        setPhase(level, pos, state, Phase.ICE, Block.UPDATE_ALL);
         return true;
     }
 
@@ -297,7 +329,7 @@ public final class PhaseHelper {
         Phase phase = getPhase(state);
         if (phase.frostedAge() < Phase.FROSTED_MAX_AGE) {
             // 原版 FrostedIceBlock 用 flag 2（UPDATE_CLIENTS，发客户端不排邻居更新）。
-            level.setBlock(pos, withPhase(state, phase.advanceFrost()), 2);
+            setPhase(level, pos, state, phase.advanceFrost(), 2);
             return true;
         }
         melt(level, pos, state);
@@ -307,6 +339,7 @@ public final class PhaseHelper {
     /** 融化为水相（下界/蒸发维度直接消失，规划 §3.0.6）。 */
     public static void melt(ServerLevel level, BlockPos pos, BlockState state) {
         boolean evaporates = waterEvaporates(level, pos);
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
         level.setBlock(pos, meltedState(state, evaporates), Block.UPDATE_ALL);
         if (!evaporates) {
             // 对齐原版 IceBlock.melt 的邻居通知（1.21.10+ 第三参为 Orientation，旧版为 fromPos）。

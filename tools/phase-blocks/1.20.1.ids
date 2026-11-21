@@ -124,6 +124,8 @@ detector_rail
 diorite_slab
 diorite_stairs
 diorite_wall
+end_gateway
+end_portal
 end_stone_brick_slab
 end_stone_brick_stairs
 end_stone_brick_wall
@@ -196,6 +198,7 @@ nether_brick_fence
 nether_brick_slab
 nether_brick_stairs
 nether_brick_wall
+nether_portal
 oak_fence
 oak_hanging_sign
 oak_leaves

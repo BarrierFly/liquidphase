@@ -20,5 +20,13 @@ public final class LiquidPhaseClient implements ClientModInitializer {
     public void onInitializeClient() {
         // Capability handshake: a vanilla server never sends it, so client features stay off.
         new org.liquidphase.sync.PhaseHandshakeClient().onInitializeClient();
+        // 方案 C：旁路表同步 + section 标脏。
+        org.liquidphase.sync.PhaseExtraClientSync.register();
+        // 方案 C：按坐标发射红石外壳/元件几何。
+        //? if 1.19.4 || 1.20.1 || 1.21.1 {
+        /*PhaseDynamicModelLegacy.register();
+         *///?} else {
+        PhaseDynamicModelModern.register();
+        //?}
     }
 }

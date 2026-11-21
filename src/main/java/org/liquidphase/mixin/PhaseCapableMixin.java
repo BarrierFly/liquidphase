@@ -1,7 +1,7 @@
 package org.liquidphase.mixin;
 
 import net.minecraft.world.level.block.*;
-import org.liquidphase.phase.PhaseCapable;
+import org.liquidphase.phase.WaterloggedPhaseCapable;
 import org.spongepowered.asm.mixin.Mixin;
 
 /**
@@ -89,6 +89,6 @@ import org.spongepowered.asm.mixin.Mixin;
         WaterloggedTransparentBlock.class,
         //?}
 })
-public abstract class PhaseCapableMixin implements PhaseCapable {
+public abstract class PhaseCapableMixin implements WaterloggedPhaseCapable {
 
 }

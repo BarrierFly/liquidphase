@@ -18,7 +18,7 @@ public abstract class ClipContextMixin {
 
     @Inject(method = "getBlockShape", at = @At("RETURN"), cancellable = true)
     private void liquidphase$mergePhaseOutline(BlockState state, net.minecraft.world.level.BlockGetter level, net.minecraft.core.BlockPos pos, CallbackInfoReturnable<VoxelShape> cir) {
-        VoxelShape merged = PhaseTargeting.mergedOutline(state, cir.getReturnValue());
+        VoxelShape merged = PhaseTargeting.mergedOutline(level, pos, state, cir.getReturnValue());
         if (merged != null) {
             cir.setReturnValue(merged);
         }

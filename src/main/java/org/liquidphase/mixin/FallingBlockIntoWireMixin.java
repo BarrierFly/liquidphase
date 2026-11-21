@@ -76,23 +76,17 @@ public abstract class FallingBlockIntoWireMixin {
             ? new ItemStack(item) : ItemStack.EMPTY;
     }
 
-    /** {@return 落位要写的状态（目标格是红石线且自己是相容宿主时带上原线功率）} */
-    private BlockState liquidphase$landingState(Level level, BlockPos pos, BlockState state) {
-        if (!PhaseHelper.hasPhaseProperty(state)) {
-            return state;
-        }
-        // Client-side prediction must wait for the server handshake (vanilla server keeps wires).
-        if (!org.liquidphase.sync.PhaseSyncState.canMutateWorld(level)) {
-            return state;
-        }
+    /** 落位写方块后把原线功率写进旁路表（下落方块不走 {@code BlockItem.placeBlock}）。 */
+    private boolean liquidphase$writeWithExtra(Level level, BlockPos pos, BlockState state, int flags) {
         BlockState landing = level.getBlockState(pos);
-        if (!landing.is(Blocks.REDSTONE_WIRE)) {
-            return state;
+        boolean wire = landing.is(Blocks.REDSTONE_WIRE);
+        int power = wire ? landing.getValue(BlockStateProperties.POWER) : -1;
+        boolean written = level.setBlock(pos, state, flags);
+        if (written && wire && state.getBlock() instanceof PhaseCapable
+            && org.liquidphase.sync.PhaseSyncState.canMutateWorld(level)) {
+            org.liquidphase.redstone.RedstoneBlocks.setRedstonePhase(level, pos, power);
         }
-        // 吸收一格已存在的红石线不算重新放置：功率沿用原线（"单独放置=初始 0"口径
-        // 只适用于点粉那条新放置路径）。
-        int power = landing.getValue(BlockStateProperties.POWER);
-        return PhaseHelper.withPhase(state, Phase.redstone(power));
+        return written;
     }
 
     //? if 26.3 {
@@ -102,7 +96,15 @@ public abstract class FallingBlockIntoWireMixin {
             target = "Lnet/minecraft/world/level/Level;setBlockAndUpdate(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;)Z"),
         require = 1)
     private boolean liquidphase$writeWithPhase(Level level, BlockPos pos, BlockState state) {
-        return level.setBlockAndUpdate(pos, liquidphase$landingState(level, pos, state));
+        BlockState landing = level.getBlockState(pos);
+        boolean wire = landing.is(Blocks.REDSTONE_WIRE);
+        int power = wire ? landing.getValue(BlockStateProperties.POWER) : -1;
+        boolean written = level.setBlockAndUpdate(pos, state);
+        if (written && wire && state.getBlock() instanceof PhaseCapable
+            && org.liquidphase.sync.PhaseSyncState.canMutateWorld(level)) {
+            org.liquidphase.redstone.RedstoneBlocks.setRedstonePhase(level, pos, power);
+        }
+        return written;
     }
      *///?} else {
     @Redirect(
@@ -111,7 +113,7 @@ public abstract class FallingBlockIntoWireMixin {
             target = "Lnet/minecraft/world/level/Level;setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z"),
         require = 1)
     private boolean liquidphase$writeWithPhase(Level level, BlockPos pos, BlockState state, int flags) {
-        return level.setBlock(pos, liquidphase$landingState(level, pos, state), flags);
+        return liquidphase$writeWithExtra(level, pos, state, flags);
     }
     //?}
 }

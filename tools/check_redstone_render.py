@@ -1,8 +1,11 @@
 """按原版 multipart 语义，模拟某个具体方块状态命中哪些 part。
 
-用途：确认红石相状态下**宿主模型仍然渲染**（形状/轮廓不消失），
-粉尘外壳只是额外叠加一层。0.1.7 的 bug 就是宿主 part 被排除掉，
-整格只剩一个不透明外壳，看起来像"表面被不透明渲染"。
+用途：确认相覆盖层出现的同时**宿主模型仍然渲染**（形状/轮廓不消失）。
+0.1.7 的 bug 就是宿主 part 被排除掉，整格只剩一个不透明外壳，看起来像"表面被不透明渲染"。
+
+方案 C（0.2.0）起：红石相/元件相不再有 `when{filling: redstone_N}` 的 part，
+改为**一条无条件 part** `liquidphase:block/dynamic`（渲染期按坐标发射几何）。
+所以本脚本在 `redstone` 相上只断言"宿主 + 动态 part 都在"，材料相仍断言覆盖层存在。
 
 用法:
     python tools/check_redstone_render.py [phase] [block] [jar-or-blockstates-dir]
@@ -16,7 +19,7 @@ import re
 import sys
 import zipfile
 
-PHASE = sys.argv[1] if len(sys.argv) > 1 else 'redstone_15'
+PHASE = sys.argv[1] if len(sys.argv) > 1 else 'ice'
 BLOCK = sys.argv[2] if len(sys.argv) > 2 else 'oak_stairs'
 
 
@@ -71,23 +74,21 @@ def load(source, block):
 
 
 # 每个属性都给一个"合法"取值，这样 multipart 条件只按相差异分派。
-# `type` 给台阶用（0.1.13 起混合模型宿主按变体分派；台阶没有 type 属性的宿主不受影响）。
-# 相属性名 0.1.15 起是 `filling`；同时给 `phase` 是为了能继续核对旧产物。
 state = {
     'facing': 'north', 'half': 'bottom', 'shape': 'straight', 'type': 'double',
     'waterlogged': 'false', 'filling': PHASE, 'phase': PHASE,
 }
 
 data = load(SOURCE, BLOCK)
-host = shell = overlay = 0
+host = dynamic = overlay = 0
 for part in data['multipart']:
     if not matches(part.get('when') or {}, state):
         continue
     apply = part['apply']
     models = [e['model'] for e in (apply if isinstance(apply, list) else [apply])]
     for model in models:
-        if 'redstone_phase' in model:
-            shell += 1
+        if model.endswith('liquidphase:block/dynamic'):
+            dynamic += 1
         elif 'phase_' in model:
             overlay += 1
         else:
@@ -96,9 +97,10 @@ for part in data['multipart']:
 print('source         :', SOURCE)
 print('state          :', state)
 print('host parts     :', host, '(must be > 0: the host shape has to keep rendering)')
-print('redstone shell :', shell)
+print('dynamic part   :', dynamic, '(must be 1: redstone/element geometry is emitted at render time)')
 print('phase overlay  :', overlay)
 
-ok = host > 0 and (shell > 0 if PHASE.startswith('redstone') else True)
+material = PHASE.startswith(('obsidian', 'ice', 'frosted'))
+ok = host > 0 and dynamic == 1 and (overlay > 0 if material else True)
 print('RESULT         :', 'OK' if ok else 'BROKEN')
 sys.exit(0 if ok else 1)

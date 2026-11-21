@@ -61,14 +61,16 @@ public abstract class ServerPlayerGameModeMixin {
 
     @Inject(method = "destroyBlock", at = @At("HEAD"), cancellable = true)
     private void liquidphase$minePhase(BlockPos pos, CallbackInfoReturnable<Boolean> cir) {
-        BlockState state = this.liquidphase$level().getBlockState(pos);
-        if (!PhaseTargeting.isPhaseMineable(state)) {
+        Level level = this.liquidphase$level();
+        BlockState state = level.getBlockState(pos);
+        boolean element = PhaseTargeting.isElementMineable(level, pos);
+        if (!element && !PhaseTargeting.isPhaseMineable(level, pos, state)) {
             return;
         }
-        if (!PhaseTargeting.isPhaseTarget(this.player, this.liquidphase$level(), pos)) {
+        if (!element && !PhaseTargeting.isPhaseTarget(this.player, level, pos)) {
             return;
         }
-        PhaseTargeting.minePhase(this.player, this.liquidphase$level(), pos, state);
+        PhaseTargeting.minePhase(this.player, level, pos, state);
         cir.setReturnValue(true);
     }
 }

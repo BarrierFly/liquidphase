@@ -21,12 +21,22 @@ public final class PhaseHandshakeClient implements ClientModInitializer {
         /*net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.registerGlobalReceiver(
             PhaseIds.handshake(), (client, handler, buf, responseSender) -> {
                 int bits = buf.readVarInt();
-                client.execute(() -> PhaseSyncState.update(PhaseHandshake.hasPhase(bits)));
+                client.execute(() -> {
+                    PhaseSyncState.update(PhaseHandshake.hasPhase(bits));
+                    if (PhaseHandshake.hasPhase(bits)) {
+                        PhaseExtraClientSync.requestLoadedNearPlayer();
+                    }
+                });
             });
          *///?} else {
         net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.registerGlobalReceiver(
             PhaseHandshakePayload.TYPE, (payload, context) ->
-                context.client().execute(() -> PhaseSyncState.update(PhaseHandshake.hasPhase(payload.bits()))));
+                context.client().execute(() -> {
+                    PhaseSyncState.update(PhaseHandshake.hasPhase(payload.bits()));
+                    if (PhaseHandshake.hasPhase(payload.bits())) {
+                        PhaseExtraClientSync.requestLoadedNearPlayer();
+                    }
+                }));
         //?}
         // Reset on both edges: leaving a server, and (re)joining one (single player restarts
         // the integrated server, so the old "supported" flag would otherwise leak through).

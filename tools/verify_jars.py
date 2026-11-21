@@ -73,8 +73,7 @@ def always_true_conditions(data):
     每个方块状态一条警告，1.21.10+ 会把加载日志刷爆。
     """
     all_values = {'none', 'lava', 'obsidian', 'ice',
-                  'frosted_0', 'frosted_1', 'frosted_2', 'frosted_3'} \
-                 | {'redstone_%d' % i for i in range(16)}
+                  'frosted_0', 'frosted_1', 'frosted_2', 'frosted_3'}
     hits = 0
 
     def walk(cond):
@@ -119,7 +118,7 @@ for ver, jar in jars():
         block_item = z.read('org/liquidphase/mixin/BlockItemMixin.class')
 
         has_replace_mixin = b'liquidphase$wireIsReplaceableForHost' in replace_mixin
-        has_phase_write = b'liquidphase$redstonePhase' in block_item
+        has_phase_write = b'liquidphase$captureWirePower' in block_item
         removed_wire_use = 'org/liquidphase/mixin/RedstoneWireUseMixin.class' not in names
         removed_wire_ctx = 'org/liquidphase/redstone/WirePlaceContext.class' not in names
 
@@ -163,33 +162,23 @@ for ver, jar in jars():
         if ver not in LAYER_MARKER_VERSIONS and layer_wired:
             missing_markers.append('layer mixin config wired on 26.3')
 
-        # 红石相：**每一个**被本 mod 改写过的 blockstate 都必须真的有一条
-        # `phase=redstone_N` 的外壳 part，否则那个方块含红石相时界面上什么都不画。
-        #
-        # 这里不只抽查几个代表方块，而是扫全部生成产物：历史上出现过
-        # `tools/phase-blocks/*.ids` 漏登记（1.21.10/11 漏 24 个铜方块、26.3 漏 197 个、
-        # 1.19.4/1.20.1 各漏 barrier），表现就是"部分含红石方块不显示红石相"，
-        # 而按代表方块抽查恰好漏掉了它们。
-        empty_states = []
+        # 方案 C：**每一个**被本 mod 改写过的 blockstate 都必须有一条无条件的
+        # `liquidphase:block/dynamic` part（红石外壳/元件相的几何由它按坐标发射）。
+        missing_dynamic = []
         for path in blockstates:
             block = path[len('assets/minecraft/blockstates/'):-len('.json')]
             try:
                 data = json.loads(z.read(path))
             except Exception:
-                empty_states.append(block)
+                missing_dynamic.append(block)
                 continue
-            # 只检查我们生成的那份（原版 blockstate 里不会有 liquidphase 的模型引用）。
             if not any('liquidphase:block/' in json.dumps(part.get('apply') or {})
                        for part in (data.get('multipart') or [])):
                 continue
-            # 必须有一条 `phase=redstone_N` 且指向该档位外壳模型的 part。
-            for power in (0, 15):
-                wanted = 'liquidphase:block/redstone_phase_%d' % power
-                if not any(part.get('when') == {'filling': 'redstone_%d' % power}
-                           and wanted in json.dumps(part.get('apply') or {})
-                           for part in (data.get('multipart') or [])):
-                    empty_states.append('%s@redstone_%d' % (block, power))
-                    break
+            if not any(part.get('when') is None
+                       and 'liquidphase:block/dynamic' in json.dumps(part.get('apply') or {})
+                       for part in (data.get('multipart') or [])):
+                missing_dynamic.append(block)
 
         # 反向：清单里每个 id 都要有产物，且产物集合不能有清单之外的多余项。
         # 只比数量不够——清单两边各错一个、数量一样，漏掉的那个方块仍然不显示红石相。
@@ -217,17 +206,17 @@ for ver, jar in jars():
 
         line_ok = (bad == 0 and has_replace_mixin and has_phase_write
                    and removed_wire_use and removed_wire_ctx
-                   and not missing_markers and not empty_states and not missing_blockstates
+                   and not missing_markers and not missing_dynamic and not missing_blockstates
                    and not cullface_models and not shell_gaps
                    and always_true == 0)
         ok = ok and line_ok
         print('%-8s ver=%-8s blockstates=%-5d bad_conds=%-3d always_true=%-4d replace_mixin=%s '
-              'phase_write=%s render_sync=%s cullface=%s shell=%s empty_phase_states=%s '
+              'phase_write=%s render_sync=%s cullface=%s shell=%s missing_dynamic=%s '
               'unrendered_ids=%s -> %s'
               % (ver, mod['version'], len(blockstates), bad, always_true, has_replace_mixin,
                  has_phase_write, 'ok' if not missing_markers else missing_markers,
                  cullface_models or 'none', shell_gaps or 'ok',
-                 empty_states or 'none', missing_blockstates or 'none',
+                 missing_dynamic or 'none', missing_blockstates or 'none',
                  'OK' if line_ok else 'BROKEN'))
 
 if not jars():

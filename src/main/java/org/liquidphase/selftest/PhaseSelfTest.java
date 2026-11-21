@@ -26,8 +26,12 @@ import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraft.server.packs.resources.ResourceManager;
 import org.liquidphase.LiquidPhase;
+import org.liquidphase.element.ElementBlocks;
 import org.liquidphase.phase.Phase;
+import org.liquidphase.phase.PhaseExtra;
+import org.liquidphase.phase.PhaseExtras;
 import org.liquidphase.phase.PhaseHelper;
+import org.liquidphase.phase.PhaseStorage;
 import org.liquidphase.phase.PhaseTargeting;
 import org.liquidphase.redstone.RedstoneBlocks;
 
@@ -68,6 +72,11 @@ public final class PhaseSelfTest {
             checkShapeAndBlockIdentity(level, base);
             checkSignal(level, base);
             checkInstantUpdate(level, base);
+            // 方案 C 旁路表与元件放置（红石/元件参数不再占状态）
+            checkExtraStorage();
+            checkRedstoneTableReadback(level, base.offset(40, 1, 2));
+            checkRedstoneUpdatePower(level, base.offset(40, 1, 4));
+            checkElementPlacement(level, base.offset(40, 1, 6));
             checkRedstonePhaseInitialState(level, base);
             checkPlaceIntoWire(level, base);
             checkPlaceIntoWireByPlayer(level, base);
@@ -105,15 +114,30 @@ public final class PhaseSelfTest {
     // ------------------------------------------------------------------
 
     private static void checkPhaseEnum() {
-        assertTrue("phase count = 1 + 7 + 16", Phase.values().length == 24);
-        assertTrue("FILLED excludes NONE", Phase.FILLED.length == 23);
-        assertTrue("redstone_0 is redstone", Phase.REDSTONE_0.isRedstone());
-        assertTrue("redstone power roundtrip", Phase.redstone(7).redstonePower() == 7);
-        assertTrue("redstone power clamped", Phase.redstone(99).redstonePower() == 15
-            && Phase.redstone(-5).redstonePower() == 0);
-        assertTrue("frosted stays frosted", Phase.FROSTED_3.isFrosted() && !Phase.FROSTED_3.isRedstone());
+        assertTrue("phase count = 1 + 7 (redstone no longer occupies a state)", Phase.values().length == 8);
+        assertTrue("FILLED excludes NONE", Phase.FILLED.length == 7);
+        assertTrue("redstone_0 bypass entry is redstone", PhaseExtra.isRedstone(PhaseExtra.redstone(0))
+            && PhaseExtra.power(PhaseExtra.redstone(0)) == 0);
+        assertTrue("redstone power roundtrip for 15", PhaseExtra.power(PhaseExtra.redstone(15)) == 15);
+        assertTrue("redstone power is packed into 4 bits",
+            PhaseExtra.power(PhaseExtra.redstone(19)) == 3);
+        assertTrue("repeater element roundtrip",
+            PhaseExtra.kind(PhaseExtra.element(PhaseExtra.Kind.REPEATER, Direction.EAST, 2, false, true))
+                    == PhaseExtra.Kind.REPEATER
+                && PhaseExtra.facing(PhaseExtra.element(PhaseExtra.Kind.REPEATER, Direction.EAST, 2, false, true))
+                    == Direction.EAST
+                && PhaseExtra.delayTicks(
+                    PhaseExtra.element(PhaseExtra.Kind.REPEATER, Direction.EAST, 2, false, true)) == 3
+                && PhaseExtra.powered(
+                    PhaseExtra.element(PhaseExtra.Kind.REPEATER, Direction.EAST, 2, false, true)));
+        assertTrue("comparator subtract mode roundtrip",
+            PhaseExtra.subtractMode(PhaseExtra.element(PhaseExtra.Kind.COMPARATOR, Direction.NORTH, 0, true, false))
+                && !PhaseExtra.isRedstone(
+                    PhaseExtra.element(PhaseExtra.Kind.COMPARATOR, Direction.NORTH, 0, true, false)));
+        assertTrue("frosted stays frosted (frosted=" + Phase.FROSTED_3.isFrosted()
+                + ", frozen=" + Phase.FROSTED_3.isFrozen() + ", ice=" + Phase.FROSTED_3.isIce() + ")",
+            Phase.FROSTED_3.isFrosted() && Phase.FROSTED_3.isFrozen() && !Phase.FROSTED_3.isIce());
         assertTrue("frosted age works", Phase.FROSTED_2.frostedAge() == 2);
-        assertTrue("redstone is not solid", !Phase.REDSTONE_15.isSolid());
         assertTrue("obsidian is solid", Phase.OBSIDIAN.isSolid());
         // 可替换填充相（0.1.17）：只有熔岩相可被新的填充材料替换；水（含水态）在
         // canAcceptPhase 里单独算可替换，不进这个方法。未来加可替换相改 Phase 枚举。
@@ -122,9 +146,11 @@ public final class PhaseSelfTest {
                 && !Phase.OBSIDIAN.isReplaceableFilling()
                 && !Phase.ICE.isReplaceableFilling()
                 && !Phase.FROSTED_0.isReplaceableFilling()
-                && !Phase.REDSTONE_15.isReplaceableFilling()
                 && !Phase.NONE.isReplaceableFilling());
-        assertTrue("none is neither", !Phase.NONE.isSolid() && !Phase.NONE.isRedstone());
+        assertTrue("none is neither solid nor frosted", !Phase.NONE.isSolid() && !Phase.NONE.isFrosted());
+        assertTrue("the bypass table's EMPTY entry is kind NONE",
+            PhaseExtra.isEmpty(PhaseExtra.EMPTY)
+                && PhaseExtra.kind(PhaseExtra.EMPTY) == PhaseExtra.Kind.NONE);
     }
 
     // ------------------------------------------------------------------
@@ -147,21 +173,20 @@ public final class PhaseSelfTest {
                 continue;
             }
             // 每一个拿到 phase 属性的方块都必须有一份被我们改写过的 blockstate：
-            // 改写后的那份带 16 条 `phase=redstone_N` 的外壳 part。原版 blockstate 里
-            // 不会有 `liquidphase:block/redstone_phase_`，所以它就是"这个方块含相时
-            // 画得出东西"的直接证据。
+            // 改写后的那份带一条无条件的 `liquidphase:block/dynamic` part。原版 blockstate
+            // 里不会有这个模型，所以它就是"这个方块含红石/元件相时画得出东西"的直接证据。
             //
             // 这是 0.1.12 的根因：`tools/phase-blocks/*.ids` 漏登记时，方块照样能在运行时
-            // 拿到 phase 属性、照样能被写入 phase=redstone_*，但客户端仍用原版 blockstate，
-            // 没有任何 part 匹配这个状态 —— 表现为"含红石相了但什么都不显示"。
+            // 拿到 phase 属性、照样能被写入旁路条目，但客户端仍用原版 blockstate，
+            // 没有任何 part 触发动态模型 —— 表现为"含红石相了但什么都不显示"。
             String json = liquidphase$blockState(id);
-            if (json == null || !json.contains("liquidphase:block/redstone_phase_")) {
+            if (!liquidphase$hasUnconditionalDynamicPart(json)) {
                 unrendered.add(id);
             }
         }
         assertTrue("every PhaseCapable block has the phase property (missing: " + missing + ")",
             missing.isEmpty());
-        assertTrue("every phased block has a blockstate that can draw the redstone shell "
+        assertTrue("every phased block has an unconditional dynamic part "
                 + "(missing: " + unrendered + ")",
             unrendered.isEmpty());
         checkPhaseBlockListMatchesRuntime(runtime);
@@ -212,17 +237,18 @@ public final class PhaseSelfTest {
     private static void checkShapeAndBlockIdentity(ServerLevel level, BlockPos base) {
         BlockPos pos = base.offset(0, 1, 0);
         // 邻近放一个红石块：红石相落地（onPlace）会立即按邻居重算，电源在旁时写入的
-        // REDSTONE_15 重算后仍是 15（没有电源会被结算回 0，见 checkInstantUpdate）。
+        // 15 重算后仍是 15（没有电源会被结算回 0，见 checkInstantUpdate）。
         level.setBlock(pos.east(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
         BlockState host = Blocks.OAK_STAIRS.defaultBlockState();
-        BlockState redstone = PhaseHelper.withPhase(host, Phase.REDSTONE_15);
-        level.setBlock(pos, redstone, Block.UPDATE_ALL);
+        level.setBlock(pos, host, Block.UPDATE_ALL);
+        PhaseExtras.set(level, pos, PhaseExtra.redstone(15));
 
         BlockState actual = level.getBlockState(pos);
         assertTrue("redstone phase is the same block as host",
             actual.getBlock() == Blocks.OAK_STAIRS);
-        assertTrue("redstone phase carried by phase property",
-            PhaseHelper.getPhase(actual) == Phase.REDSTONE_15);
+        assertTrue("redstone phase carried by the bypass table",
+            RedstoneBlocks.hasRedstone(level, pos)
+                && PhaseExtra.power(PhaseExtras.get(level, pos)) == 15);
         assertTrue("no extra liquidphase redstone blocks registered",
             net.minecraft.core.registries.BuiltInRegistries.BLOCK.keySet().stream()
                 .noneMatch(id -> id.getNamespace().equals("liquidphase") && id.getPath().startsWith("redstone_")));
@@ -230,16 +256,15 @@ public final class PhaseSelfTest {
             !Block.isShapeFullBlock(actual.getShape(level, pos, CollisionContext.empty())));
         assertTrue("collision unchanged (not a solid phase)",
             !Block.isShapeFullBlock(actual.getCollisionShape(level, pos, CollisionContext.empty())));
-        assertTrue("redstone power readable", RedstoneBlocks.getPower(actual) == 15);
+        assertTrue("redstone power readable", RedstoneBlocks.getPower(level, pos) == 15);
         assertTrue("stair UP face exposed", RedstoneBlocks.exposed(actual, Direction.UP));
 
-        BlockState doubleSlab = PhaseHelper.withPhase(
-            Blocks.STONE_SLAB.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.DOUBLE),
-            Phase.REDSTONE_15);
+        BlockState doubleSlab = Blocks.STONE_SLAB.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.DOUBLE);
         assertTrue("double slab hides every face",
             !RedstoneBlocks.exposed(doubleSlab, Direction.UP)
                 && !RedstoneBlocks.exposed(doubleSlab, Direction.NORTH));
 
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
         level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(pos.east(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
     }
@@ -250,8 +275,8 @@ public final class PhaseSelfTest {
 
     private static void checkSignal(ServerLevel level, BlockPos base) {
         BlockPos pos = base.offset(0, 1, 0);
-        level.setBlock(pos, PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.REDSTONE_15),
-            Block.UPDATE_ALL);
+        level.setBlock(pos, Blocks.OAK_STAIRS.defaultBlockState(), Block.UPDATE_ALL);
+        PhaseExtras.set(level, pos, PhaseExtra.redstone(15));
 
         BlockState stairs = level.getBlockState(pos);
         assertTrue("stair host hides NORTH face when facing north", !RedstoneBlocks.exposed(stairs, Direction.NORTH));
@@ -259,8 +284,8 @@ public final class PhaseSelfTest {
 
         level.setBlock(pos.south().below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(pos.south(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
-        assertTrue("redstone phase keeps power 15 (got " + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
-            RedstoneBlocks.getPower(level.getBlockState(pos)) == 15);
+        assertTrue("redstone phase keeps power 15 (got " + RedstoneBlocks.getPower(level, pos) + ")",
+            RedstoneBlocks.getPower(level, pos) == 15);
 
         level.setBlock(pos.south(), Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(pos.above(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
@@ -274,27 +299,134 @@ public final class PhaseSelfTest {
         assertTrue("signal DOWN is 0", level.getSignal(pos, Direction.DOWN) == 0);
 
         BlockPos slabPos = base.offset(2, 1, 0);
-        level.setBlock(slabPos, PhaseHelper.withPhase(
-            Blocks.STONE_SLAB.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.DOUBLE),
-            Phase.REDSTONE_15), Block.UPDATE_ALL);
+        level.setBlock(slabPos, Blocks.STONE_SLAB.defaultBlockState().setValue(SlabBlock.TYPE, SlabType.DOUBLE),
+            Block.UPDATE_ALL);
+        PhaseExtras.set(level, slabPos, PhaseExtra.redstone(15));
         level.setBlock(slabPos.south().below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(slabPos.south(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
         assertTrue("covered face does not output", level.getSignal(slabPos, Direction.NORTH) == 0);
+
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+        PhaseExtras.set(level, slabPos, PhaseExtra.EMPTY);
     }
 
     private static void checkInstantUpdate(ServerLevel level, BlockPos base) {
         BlockPos pos = base.offset(4, 1, 0);
-        level.setBlock(pos, PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.REDSTONE_0),
-            Block.UPDATE_ALL);
+        level.setBlock(pos, Blocks.OAK_STAIRS.defaultBlockState(), Block.UPDATE_ALL);
+        PhaseExtras.set(level, pos, PhaseExtra.redstone(0));
         BlockPos source = pos.south();
         level.setBlock(source, Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
         assertTrue("power updates immediately on neighbour change (got "
-                + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
-            RedstoneBlocks.getPower(level.getBlockState(pos)) == 15);
+                + RedstoneBlocks.getPower(level, pos) + ")",
+            RedstoneBlocks.getPower(level, pos) == 15);
         level.setBlock(source, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         assertTrue("power drops immediately when source removed (got "
-                + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
-            RedstoneBlocks.getPower(level.getBlockState(pos)) == 0);
+                + RedstoneBlocks.getPower(level, pos) + ")",
+            RedstoneBlocks.getPower(level, pos) == 0);
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+    }
+
+    // ------------------------------------------------------------------
+    // 方案 C 旁路表与元件放置
+    // ------------------------------------------------------------------
+
+    /** 旁路表本身（不依赖关卡）：put/get/remove/chunkCount/entries/clear。 */
+    private static void checkExtraStorage() {
+        PhaseStorage storage = new PhaseStorage();
+        BlockPos a = new BlockPos(0, 64, 0);
+        BlockPos b = new BlockPos(20, 64, 5);
+        assertTrue("storage: put returns EMPTY for a fresh cell",
+            storage.put(a, PhaseExtra.redstone(7)) == PhaseExtra.EMPTY);
+        assertTrue("storage: get reads the cell back",
+            storage.get(a) == PhaseExtra.redstone(7));
+        assertTrue("storage: writes mark the table dirty", storage.isDirty());
+        storage.markClean();
+        assertTrue("storage: markClean clears the dirty flag", !storage.isDirty());
+        assertTrue("storage: one cell in one chunk",
+            storage.cellCount() == 1 && storage.chunkCount() == 1);
+        storage.put(b, PhaseExtra.redstone(3));
+        assertTrue("storage: chunkCount groups cells by chunk",
+            storage.chunkCount() == 2 && storage.cellCount() == 2);
+        assertTrue("storage: remove returns the previous entry",
+            storage.remove(a) == PhaseExtra.redstone(7)
+                && storage.get(a) == PhaseExtra.EMPTY);
+        assertTrue("storage: empty chunks are dropped after removal",
+            storage.chunkCount() == 1);
+        boolean[] listed = {false};
+        storage.entries().forEach((packed, extra) -> {
+            if (packed == b.asLong() && extra == PhaseExtra.redstone(3)) {
+                listed[0] = true;
+            }
+        });
+        assertTrue("storage: entries lists every live cell", listed[0]);
+        storage.clear();
+        assertTrue("storage: clear empties the whole table",
+            storage.cellCount() == 0 && storage.chunkCount() == 0);
+    }
+
+    /** 关卡级读写入口：{@code PhaseExtras.set} → {@code get} 原样读回，EMPTY 即删除。 */
+    private static void checkRedstoneTableReadback(ServerLevel level, BlockPos pos) {
+        level.setBlock(pos, Blocks.OAK_STAIRS.defaultBlockState(), Block.UPDATE_ALL);
+        PhaseExtras.set(level, pos, PhaseExtra.redstone(9));
+        assertTrue("level table: set/get round-trip",
+            PhaseExtras.get(level, pos) == PhaseExtra.redstone(9));
+        assertTrue("level table: packed-position lookup agrees",
+            PhaseExtras.get(level, pos.asLong()) == PhaseExtra.redstone(9));
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+        assertTrue("level table: EMPTY removes the entry",
+            PhaseExtras.get(level, pos) == PhaseExtra.EMPTY);
+        level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+    }
+
+    /** 红石条目重算：{@code updatePower} 从邻居电源算出 15，撤源回落 0。 */
+    private static void checkRedstoneUpdatePower(ServerLevel level, BlockPos pos) {
+        level.setBlock(pos.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(pos, Blocks.OAK_STAIRS.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(pos.east(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        PhaseExtras.set(level, pos, PhaseExtra.redstone(0));
+        boolean changed = RedstoneBlocks.updatePower(level, pos, level.getBlockState(pos));
+        assertTrue("updatePower computes 15 from a neighbouring source",
+            changed && RedstoneBlocks.getPower(level, pos) == 15);
+        assertTrue("updatePower does not write once settled",
+            !RedstoneBlocks.updatePower(level, pos, level.getBlockState(pos)));
+        level.setBlock(pos.east(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        assertTrue("power drops back to 0 when the source is removed",
+            RedstoneBlocks.getPower(level, pos) == 0);
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+        level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(pos.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+    }
+
+    /** 元件放置前提：全整格宿主没有空腔 → 拒绝；半砖有空腔 → 接受并写入元件条目。 */
+    private static void checkElementPlacement(ServerLevel level, BlockPos base) {
+        BlockPos fullPos = base.offset(40, 1, 6);
+        level.setBlock(fullPos, Blocks.OAK_LEAVES.defaultBlockState(), Block.UPDATE_ALL);
+        BlockState fullHost = level.getBlockState(fullPos);
+        assertTrue("element placement: a full-cube host has no cavity",
+            !ElementBlocks.hasCavity(level, fullPos, fullHost)
+                && !ElementBlocks.place(level, fullPos, fullHost, PhaseExtra.Kind.REPEATER,
+                    Direction.NORTH));
+        assertTrue("element placement: the rejected full-cube host stays clean",
+            PhaseExtras.get(level, fullPos) == PhaseExtra.EMPTY);
+        level.setBlock(fullPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+        BlockPos slabPos = base.offset(40, 1, 8);
+        level.setBlock(slabPos, Blocks.STONE_SLAB.defaultBlockState(), Block.UPDATE_ALL);
+        BlockState slab = level.getBlockState(slabPos);
+        assertTrue("element placement: a half slab has a cavity",
+            ElementBlocks.hasCavity(level, slabPos, slab));
+        assertTrue("element placement: repeater writes the element entry",
+            ElementBlocks.place(level, slabPos, slab, PhaseExtra.Kind.REPEATER, Direction.EAST)
+                && ElementBlocks.hasElement(level, slabPos)
+                && PhaseExtra.kind(PhaseExtras.get(level, slabPos)) == PhaseExtra.Kind.REPEATER
+                && PhaseExtra.facing(PhaseExtras.get(level, slabPos)) == Direction.EAST);
+        assertTrue("element placement: an occupied cell no longer offers a cavity",
+            !ElementBlocks.hasCavity(level, slabPos, slab));
+        assertTrue("element item mapping round-trips",
+            ElementBlocks.kindOfItem(ElementBlocks.itemFor(PhaseExtra.Kind.OBSERVER))
+                == PhaseExtra.Kind.OBSERVER);
+        PhaseExtras.set(level, slabPos, PhaseExtra.EMPTY);
+        level.setBlock(slabPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
     }
 
     // ------------------------------------------------------------------
@@ -323,18 +455,19 @@ public final class PhaseSelfTest {
         liquidphase$placeBlockInto(level, Blocks.REDSTONE_WIRE, stairs, Direction.UP);
         BlockState phased = level.getBlockState(stairs);
         assertTrue("dust on host: redstone phase written",
-            RedstoneBlocks.isRedstonePhase(phased));
+            RedstoneBlocks.hasRedstone(level, stairs));
         assertTrue("dust on host: initial power is 0 like a standalone wire (got "
-                + RedstoneBlocks.getPower(phased) + ")",
-            RedstoneBlocks.getPower(phased) == 0);
+                + RedstoneBlocks.getPower(level, stairs) + ")",
+            RedstoneBlocks.getPower(level, stairs) == 0);
         level.setBlock(stairs.east(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
         assertTrue("dust on host: recalculated to 15 when a source arrives (got "
-                + RedstoneBlocks.getPower(level.getBlockState(stairs)) + ")",
-            RedstoneBlocks.getPower(level.getBlockState(stairs)) == 15);
+                + RedstoneBlocks.getPower(level, stairs) + ")",
+            RedstoneBlocks.getPower(level, stairs) == 15);
         level.setBlock(stairs.east(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         assertTrue("dust on host: power drops to 0 when the source leaves (got "
-                + RedstoneBlocks.getPower(level.getBlockState(stairs)) + ")",
-            RedstoneBlocks.getPower(level.getBlockState(stairs)) == 0);
+                + RedstoneBlocks.getPower(level, stairs) + ")",
+            RedstoneBlocks.getPower(level, stairs) == 0);
+        PhaseExtras.set(level, stairs, PhaseExtra.EMPTY);
         level.setBlock(stairs, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(stairs.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
 
@@ -345,8 +478,9 @@ public final class PhaseSelfTest {
         level.setBlock(stairs2, Blocks.OAK_STAIRS.defaultBlockState(), Block.UPDATE_ALL);
         liquidphase$placeBlockInto(level, Blocks.REDSTONE_WIRE, stairs2, Direction.UP);
         assertTrue("dust on host next to a source: power settles to 15 immediately (got "
-                + RedstoneBlocks.getPower(level.getBlockState(stairs2)) + ")",
-            RedstoneBlocks.getPower(level.getBlockState(stairs2)) == 15);
+                + RedstoneBlocks.getPower(level, stairs2) + ")",
+            RedstoneBlocks.getPower(level, stairs2) == 15);
+        PhaseExtras.set(level, stairs2, PhaseExtra.EMPTY);
         level.setBlock(stairs2, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(stairs2.east(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(stairs2.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
@@ -360,9 +494,10 @@ public final class PhaseSelfTest {
         liquidphase$placeBlockInto(level, Blocks.OAK_STAIRS, wireTile.below(), Direction.UP);
         BlockState hostInWire = level.getBlockState(wireTile);
         assertTrue("host into unpowered wire: redstone phase stays at power 0 (got "
-                + RedstoneBlocks.getPower(hostInWire) + ")",
-            hostInWire.is(Blocks.OAK_STAIRS) && RedstoneBlocks.isRedstonePhase(hostInWire)
-                && RedstoneBlocks.getPower(hostInWire) == 0);
+                + RedstoneBlocks.getPower(level, wireTile) + ")",
+            hostInWire.is(Blocks.OAK_STAIRS) && RedstoneBlocks.hasRedstone(level, wireTile)
+                && RedstoneBlocks.getPower(level, wireTile) == 0);
+        PhaseExtras.set(level, wireTile, PhaseExtra.EMPTY);
         level.setBlock(wireTile, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(wireTile.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
 
@@ -379,9 +514,10 @@ public final class PhaseSelfTest {
         liquidphase$placeBlockInto(level, Blocks.OAK_STAIRS, coveredWire.below(), Direction.UP);
         BlockState coveredHost = level.getBlockState(coveredWire);
         assertTrue("host into powered wire with the source on a covered face: assembly "
-                        + "recalculates to 0 (got " + RedstoneBlocks.getPower(coveredHost) + ")",
-            coveredHost.is(Blocks.OAK_STAIRS) && RedstoneBlocks.isRedstonePhase(coveredHost)
-                && RedstoneBlocks.getPower(coveredHost) == 0);
+                        + "recalculates to 0 (got " + RedstoneBlocks.getPower(level, coveredWire) + ")",
+            coveredHost.is(Blocks.OAK_STAIRS) && RedstoneBlocks.hasRedstone(level, coveredWire)
+                && RedstoneBlocks.getPower(level, coveredWire) == 0);
+        PhaseExtras.set(level, coveredWire, PhaseExtra.EMPTY);
         level.setBlock(coveredWire, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(coveredWire.north(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(coveredWire.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
@@ -407,12 +543,14 @@ public final class PhaseSelfTest {
         BlockState after = level.getBlockState(wirePos);
         assertTrue("scene(1): placement pipeline accepted the wire tile (returned " + placed + ")", placed != null);
         assertTrue("scene(1): wire tile became the host (got " + after.getBlock() + ")", after.is(Blocks.OAK_STAIRS));
-        assertTrue("scene(1): host carries the redstone phase (got " + PhaseHelper.getPhase(after) + ")",
-            RedstoneBlocks.isRedstonePhase(after));
+        assertTrue("scene(1): host carries the redstone phase (got "
+                + PhaseExtra.describe(PhaseExtras.get(level, wirePos)) + ")",
+            RedstoneBlocks.hasRedstone(level, wirePos));
         assertTrue("scene(1): host carried the wire power (wire=" + wirePower + ", got "
-                + RedstoneBlocks.getPower(after) + ")",
-            RedstoneBlocks.getPower(after) == wirePower);
+                + RedstoneBlocks.getPower(level, wirePos) + ")",
+            RedstoneBlocks.getPower(level, wirePos) == wirePower);
 
+        PhaseExtras.set(level, wirePos, PhaseExtra.EMPTY);
         level.setBlock(wirePos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(wirePos.west(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
 
@@ -455,7 +593,7 @@ public final class PhaseSelfTest {
         assertTrue("player scene(1): host lands in the wire tile", liquidphase$playerGesture(level, player,
             base.offset(7, 1, 0).below(), Direction.UP, base.offset(7, 1, 0), Blocks.OAK_STAIRS));
         assertTrue("player scene(1): keeps 15 power",
-            RedstoneBlocks.getPower(level.getBlockState(base.offset(7, 1, 0))) == 15);
+            RedstoneBlocks.getPower(level, base.offset(7, 1, 0)) == 15);
         liquidphase$clearGesture(level, base.offset(7, 1, 0), base.offset(7, 1, 0).below());
 
         // (2) 点线旁方块朝线的侧面
@@ -464,7 +602,7 @@ public final class PhaseSelfTest {
         assertTrue("player scene(2): host lands in the wire tile", liquidphase$playerGesture(level, player,
             sideGround, Direction.WEST, sideWire, Blocks.OAK_STAIRS));
         assertTrue("player scene(2): keeps 15 power",
-            RedstoneBlocks.getPower(level.getBlockState(sideWire)) == 15);
+            RedstoneBlocks.getPower(level, sideWire) == 15);
         liquidphase$clearGesture(level, sideWire, sideGround);
 
         // (3) 点线上方方块底面
@@ -575,13 +713,15 @@ public final class PhaseSelfTest {
         BlockState hostAfter = level.getBlockState(hostWire);
         assertTrue("falling host: landed in the wire tile (got " + hostAfter.getBlock() + ")",
             hostAfter.is(Blocks.POINTED_DRIPSTONE));
-        assertTrue("falling host: carried the redstone phase (got " + PhaseHelper.getPhase(hostAfter) + ")",
-            RedstoneBlocks.isRedstonePhase(hostAfter));
+        assertTrue("falling host: carried the redstone phase (got "
+                + PhaseExtra.describe(PhaseExtras.get(level, hostWire)) + ")",
+            RedstoneBlocks.hasRedstone(level, hostWire));
         assertTrue("falling host: power followed the wire (wire=" + hostPower + ", got "
-                + RedstoneBlocks.getPower(hostAfter) + ")",
-            RedstoneBlocks.getPower(hostAfter) == hostPower);
+                + RedstoneBlocks.getPower(level, hostWire) + ")",
+            RedstoneBlocks.getPower(level, hostWire) == hostPower);
 
         hostEntity.discard();
+        PhaseExtras.set(level, hostWire, PhaseExtra.EMPTY);
         level.setBlock(hostWire, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(hostWire.above(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(hostWire.west(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
@@ -618,11 +758,12 @@ public final class PhaseSelfTest {
 
         BlockState plainAfter = level.getBlockState(plainWire);
         assertTrue("falling host into unpowered wire: redstone phase at power 0 (got "
-                + RedstoneBlocks.getPower(plainAfter) + ")",
-            plainAfter.is(Blocks.POINTED_DRIPSTONE) && RedstoneBlocks.isRedstonePhase(plainAfter)
-                && RedstoneBlocks.getPower(plainAfter) == 0);
+                + RedstoneBlocks.getPower(level, plainWire) + ")",
+            plainAfter.is(Blocks.POINTED_DRIPSTONE) && RedstoneBlocks.hasRedstone(level, plainWire)
+                && RedstoneBlocks.getPower(level, plainWire) == 0);
 
         host2.discard();
+        PhaseExtras.set(level, plainWire, PhaseExtra.EMPTY);
         level.setBlock(plainWire, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(plainWire.above(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(plainWire.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
@@ -667,15 +808,17 @@ public final class PhaseSelfTest {
             net.minecraft.world.InteractionHand.MAIN_HAND, hit);
 
         BlockState after = level.getBlockState(wirePos);
-        boolean ok = after.is(block) && RedstoneBlocks.isRedstonePhase(after);
+        boolean ok = after.is(block) && RedstoneBlocks.hasRedstone(level, wirePos);
         if (!ok) {
             LiquidPhase.LOGGER.warn("[selftest] gesture failed at {}: click={} face={} -> {} / {}",
-                wirePos, clickPos, face, after.getBlock(), PhaseHelper.getPhase(after));
+                wirePos, clickPos, face, after.getBlock(),
+                PhaseExtra.describe(PhaseExtras.get(level, wirePos)));
         }
         return ok;
     }
 
     private static void liquidphase$clearGesture(ServerLevel level, BlockPos wirePos, BlockPos clickPos) {
+        PhaseExtras.set(level, wirePos, PhaseExtra.EMPTY);
         level.setBlock(wirePos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(wirePos.west(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         if (!clickPos.equals(wirePos) && !clickPos.equals(wirePos.below())) {
@@ -712,14 +855,15 @@ public final class PhaseSelfTest {
 
     private static void checkRedstoneRenderParts() {
         // 全量：**每一个**被我们改写过的 blockstate 都必须同时满足
-        //   (a) 16 个功率档位各有一条外壳 part（0 档熄灭、15 档满亮互不相同）；
-        //   (b) 不是全格宿主时，宿主 part 不带 phase 条件（否则红石相下宿主消失）。
+        //   (a) 带一条无条件的 `liquidphase:block/dynamic` part（方案 C：红石/元件几何
+        //       由带坐标的动态模型按旁路表发射，不再按 filling 取值一档一档写 part）；
+        //   (b) 宿主 part 不带 phase 条件（否则红石相下宿主消失）。
         // 只抽查 oak_stairs/oak_leaves/glass_pane 曾经放过了整批漏登记的方块（0.1.12 的根因）。
         String raw = liquidphase$resource("/phase-blocks.ids");
         assertTrue("shipped phase-block list is present", raw != null);
-        java.util.List<String> noShell = new java.util.ArrayList<>();
+        java.util.List<String> noDynamic = new java.util.ArrayList<>();
         java.util.List<String> badHost = new java.util.ArrayList<>();
-        java.util.List<String> fullCubeBroken = new java.util.ArrayList<>();
+        java.util.List<String> staticShell = new java.util.ArrayList<>();
         java.util.List<String> fullCubeOverlayReferenced = new java.util.ArrayList<>();
         int scanned = 0;
         if (raw != null) {
@@ -730,22 +874,22 @@ public final class PhaseSelfTest {
                 }
                 String json = liquidphase$blockState(id.startsWith("minecraft:") ? id : "minecraft:" + id);
                 if (json == null) {
-                    noShell.add(id + " (no blockstate)");
+                    noDynamic.add(id + " (no blockstate)");
                     continue;
                 }
                 scanned++;
-                if (!liquidphase$hasShellForEveryPower(json)) {
-                    noShell.add(id);
+                if (!liquidphase$hasUnconditionalDynamicPart(json)) {
+                    noDynamic.add(id);
                 }
                 // 0.1.18 起**所有**宿主（含整格/混合）的宿主 part 都不带相条件：
                 // 相只作为内缩叠加层，宿主始终可见（与含熔岩一致）。
                 if (!hostPartsCarryNoPhaseCondition(json)) {
                     badHost.add(id);
                 }
-                // 每个宿主的宿主 part 都必须在红石相下保留 —— 一旦屏蔽，含红石相就整块
-                // 隐形（0.1.8 的实机 bug），或变成"只剩外壳、宿主消失"。
-                if (!json.contains("redstone_15")) {
-                    fullCubeBroken.add(id);
+                // 方案 C：红石外壳不再作为静态 part 写进 blockstate，改由动态模型按坐标发射。
+                // 静态 part 还在的话，无相时也会画外壳（动态模型再画一遍）。
+                if (json.contains("liquidphase:block/redstone_phase_")) {
+                    staticShell.add(id);
                 }
                 // 0.1.18 起不再使用整格相材质（与宿主模型共面会 z-fighting）。
                 if (json.contains("liquidphase:block/phase_obsidian_full")
@@ -755,19 +899,43 @@ public final class PhaseSelfTest {
             }
         }
         assertTrue("scanned more than just a handful of blockstates (" + scanned + " scanned)", scanned > 10);
-        assertTrue("every phased blockstate has one shell part per power level (broken: " + noShell + ")",
-            noShell.isEmpty());
+        assertTrue("every phased blockstate has one unconditional dynamic part (broken: " + noDynamic + ")",
+            noDynamic.isEmpty());
+        assertTrue("no blockstate carries a static redstone shell part any more (broken: " + staticShell + ")",
+            staticShell.isEmpty());
         assertTrue("no host part carries a phase condition — every host stays visible (broken: " + badHost + ")",
             badHost.isEmpty());
-        assertTrue("every host part still renders under redstone phases "
-                + "(broken: " + fullCubeBroken + ")", fullCubeBroken.isEmpty());
 
-        // 整格宿主（树叶/铜格栅/红树根）单独确认：宿主 part 在红石相下仍然渲染。
+        // 16 档外壳模型/贴图仍是动态模型的子资源：缺一个，对应功率档位就画不出外壳。
+        // 模型按功率着色（0 档暗、15 档亮），贴图各自一份。
+        java.util.List<String> missingShell = new java.util.ArrayList<>();
+        for (int power = 0; power < 16; power++) {
+            String modelPath = "/assets/liquidphase/models/block/redstone_phase_" + power + ".json";
+            String texturePath = "/assets/liquidphase/textures/block/redstone_phase_" + power + ".png";
+            if (!liquidphase$exists(modelPath)) {
+                missingShell.add("model:" + power);
+            }
+            if (!liquidphase$exists(texturePath)) {
+                missingShell.add("texture:" + power);
+            }
+        }
+        assertTrue("all 16 redstone shell models and textures are shipped (missing: " + missingShell + ")",
+            missingShell.isEmpty());
+        String dimShell = liquidphase$resource("/assets/liquidphase/models/block/redstone_phase_0.json");
+        String brightShell = liquidphase$resource("/assets/liquidphase/models/block/redstone_phase_15.json");
+        assertTrue("redstone shell has one model per power level",
+            dimShell != null && brightShell != null && !dimShell.equals(brightShell));
+        assertTrue("redstone shell power models use distinct textures",
+            dimShell != null && brightShell != null
+                && dimShell.contains("redstone_phase_0") && brightShell.contains("redstone_phase_15"));
+
+        // 整格宿主（树叶/铜格栅/红树根）单独确认：宿主 part 常驻、动态模型无条件追加。
         String leaves = liquidphase$resource("/assets/minecraft/blockstates/oak_leaves.json");
         assertTrue("leaves blockstate resource is present", leaves != null);
         if (leaves != null) {
-            assertTrue("leaves host part still renders under redstone phase",
-                leaves.contains("redstone_15") && leaves.contains("minecraft:block/oak_leaves"));
+            assertTrue("leaves host part still renders next to the dynamic part",
+                liquidphase$hasUnconditionalDynamicPart(leaves)
+                    && leaves.contains("minecraft:block/oak_leaves"));
         }
 
         // Transparent hosts previously got no shell at all (only the 41 redstone hosts did),
@@ -775,8 +943,9 @@ public final class PhaseSelfTest {
         String pane = liquidphase$resource("/assets/minecraft/blockstates/glass_pane.json");
         assertTrue("glass pane blockstate resource is present", pane != null);
         if (pane != null) {
-            assertTrue("transparent host (glass pane) gets a redstone shell too",
-                pane.contains("liquidphase:block/redstone_phase_") && pane.contains("redstone_15"));
+            assertTrue("transparent host (glass pane) gets the dynamic geometry too",
+                liquidphase$hasUnconditionalDynamicPart(pane)
+                    && !pane.contains("liquidphase:block/redstone_phase_"));
         }
 
         // ---- regression for the 0.1.11 bugs ----
@@ -814,14 +983,6 @@ public final class PhaseSelfTest {
                     !modelJson.contains("\"cullface\""));
             }
         }
-        // 外壳按功率分成 16 份：0 档（熄灭）与 15 档（满功率）必须是不同贴图。
-        String dimShell = liquidphase$resource("/assets/liquidphase/models/block/redstone_phase_0.json");
-        String brightShell = liquidphase$resource("/assets/liquidphase/models/block/redstone_phase_15.json");
-        assertTrue("redstone shell has one model per power level",
-            dimShell != null && brightShell != null && !dimShell.equals(brightShell));
-        assertTrue("redstone shell power models use distinct textures",
-            dimShell != null && brightShell != null
-                && dimShell.contains("redstone_phase_0") && brightShell.contains("redstone_phase_15"));
         // 0.1.18 起所有宿主的相都用内缩覆盖层（含整格宿主），因此 _full 系列模型
         // 不再被任何 blockstate 引用；仍留在资源里只为兼容旧存档/旧包引用。
         // 这里改为断言"产物里不出现 phase_*_full"——一旦回退到整格替换，
@@ -829,7 +990,7 @@ public final class PhaseSelfTest {
         assertTrue("no generated blockstate uses the full-cube phase material any more",
             fullCubeOverlayReferenced.isEmpty());
 
-        // (a2) 宿主 part 不能再带"覆盖全部 24 个相"的恒真条件：原版
+        // (a2) 宿主 part 不能再带"覆盖全部 8 个相"的恒真条件：原版
         // KeyValueCondition.instantiate 会为它打 `Condition ... is always true` 警告，
         // 1.21.10+ 每个方块状态各一条，加载日志被刷屏。
         String stairs = liquidphase$resource("/assets/minecraft/blockstates/oak_stairs.json");
@@ -874,23 +1035,25 @@ public final class PhaseSelfTest {
         Block invisibleHost = Blocks.BARRIER;
         String hostName = "barrier";
         //?}
-        BlockState phasedHost = PhaseHelper.withPhase(invisibleHost.defaultBlockState(), Phase.REDSTONE_15);
-        assertTrue(hostName + " is invisible without a phase",
-            invisibleHost.defaultBlockState().getRenderShape() != net.minecraft.world.level.block.RenderShape.MODEL);
-        assertTrue("phased " + hostName + " renders its model (otherwise the phase would be invisible)",
+        BlockState phasedHost = PhaseHelper.withPhase(invisibleHost.defaultBlockState(), Phase.ICE);
+        // 方案 C：状态里看不出有没有红石/元件，所以**所有**宿主状态一律按 MODEL 渲染
+        // （否则 barrier/告示牌这类隐形宿主上的红石外壳永远不被请求）。这些宿主自己的
+        // blockstate 模型只有 particle 贴图、没有 elements，不会凭空多出几何。
+        assertTrue(hostName + " is a phase host", PhaseHelper.hasPhaseProperty(invisibleHost.defaultBlockState()));
+        assertTrue(hostName + " always renders its model under scheme C (element presence lives in the side table)",
+            invisibleHost.defaultBlockState().getRenderShape() == net.minecraft.world.level.block.RenderShape.MODEL);
+        assertTrue("phased " + hostName + " renders its model",
             phasedHost.getRenderShape() == net.minecraft.world.level.block.RenderShape.MODEL);
         assertTrue("phased solid-state " + hostName + " also renders",
-            PhaseHelper.withPhase(invisibleHost.defaultBlockState(), Phase.ICE).getRenderShape()
+            PhaseHelper.withPhase(invisibleHost.defaultBlockState(), Phase.OBSIDIAN).getRenderShape()
                 == net.minecraft.world.level.block.RenderShape.MODEL);
-        // 反向：不带相的状态必须保持原值（否则宿主会凭空显出方块模型）。
-        assertTrue("unphased states keep their vanilla render shape",
-            invisibleHost.defaultBlockState().getRenderShape()
+        // 反向：非宿主方块的隐形语义不受影响（本 mod 只改拿到了 filling 属性的方块）。
+        assertTrue("non-host invisible blocks keep their vanilla render shape",
+            Blocks.STRUCTURE_VOID.defaultBlockState().getRenderShape()
                 != net.minecraft.world.level.block.RenderShape.MODEL);
 
-        // 原生不是 MODEL 的宿主，含相后必须能请求到方块模型，否则相完全不可见。
-        // 不写死候选清单（那样只会覆盖当时想到的几个）：遍历**全部** phase 方块，
-        // 凡是原生 RenderShape 不是 MODEL 的，逐个断言"带相 → MODEL、不带相 → 原值"。
-        liquidphase$assertNonModelHostsRenderPhases();
+        // 全量扫描：每个宿主的默认态都必须能请求到方块模型。
+        liquidphase$assertAllHostsRenderModels();
     }
 
     /**
@@ -901,7 +1064,7 @@ public final class PhaseSelfTest {
      * `conduit`、`barrier`、`light` 等等在每个版本里清单都不一样，写死必然漏
      * （写死版本只覆盖了 6 个方块，而实际原生非 MODEL 的 phase 宿主远多于此）。
      */
-    private static void liquidphase$assertNonModelHostsRenderPhases() {
+    private static void liquidphase$assertAllHostsRenderModels() {
         int checked = 0;
         java.util.List<String> broken = new java.util.ArrayList<>();
         for (Block block : net.minecraft.core.registries.BuiltInRegistries.BLOCK) {
@@ -909,27 +1072,22 @@ public final class PhaseSelfTest {
                 continue;
             }
             BlockState plain = block.defaultBlockState();
-            if (!PhaseHelper.hasPhaseProperty(plain)
-                || plain.getRenderShape() == net.minecraft.world.level.block.RenderShape.MODEL) {
+            if (!PhaseHelper.hasPhaseProperty(plain)) {
                 continue;
             }
             checked++;
             String name = String.valueOf(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block));
-            boolean phasedRedstone = PhaseHelper.withPhase(plain, Phase.REDSTONE_15).getRenderShape()
-                == net.minecraft.world.level.block.RenderShape.MODEL;
-            boolean phasedIce = PhaseHelper.withPhase(plain, Phase.ICE).getRenderShape()
-                == net.minecraft.world.level.block.RenderShape.MODEL;
-            boolean vanillaKept = plain.getRenderShape()
-                != net.minecraft.world.level.block.RenderShape.MODEL;
-            if (!phasedRedstone || !phasedIce || !vanillaKept) {
+            if (plain.getRenderShape() != net.minecraft.world.level.block.RenderShape.MODEL
+                || PhaseHelper.withPhase(plain, Phase.ICE).getRenderShape()
+                    != net.minecraft.world.level.block.RenderShape.MODEL) {
                 broken.add(name);
             }
         }
-        assertTrue("every host whose vanilla RenderShape is not MODEL renders its phase "
+        assertTrue("every host whose vanilla RenderShape is not MODEL renders its model "
                 + "(" + checked + " checked, broken: " + broken + ")",
             broken.isEmpty());
-        // 这条能确保扫描真的命中了东西（barrier/light 全版本都是 INVISIBLE）。
-        assertTrue("the non-MODEL RenderShape scan actually inspected some hosts (" + checked + " checked)",
+        // 这条能确保扫描真的命中了东西（410+ 个宿主）。
+        assertTrue("the render-shape scan actually inspected some hosts (" + checked + " checked)",
             checked > 0);
     }
 
@@ -945,28 +1103,85 @@ public final class PhaseSelfTest {
     }
 
     /**
-     * {@return 是否每个功率档位都有自己的一条外壳 part}
+     * {@return 该 blockstate 是否带一条**无条件**的 {@code liquidphase:block/dynamic} part}
      * <p>
-     * 外壳按功率分成 16 份（0 档熄灭、15 档满功率）。只留一条 part 指向同一个模型时，
-     * 所有功率的外观会完全一样——0 档看起来就像通电了。
+     * 方案 C：红石外壳/元件几何由动态模型按坐标查旁路表发射。blockstate 里只追加一条
+     * 不带 {@code when} 的 part，所有材料相与无相状态都会触发它；动态模型自己决定画不画。
+     * 这里用 JSON 解析而不是字符串匹配：要确认 part 真的没有条件（带条件时只有部分状态会画）。
      */
-    private static boolean liquidphase$hasShellForEveryPower(String json) {
-        for (int power = 0; power < 16; power++) {
-            if (!json.contains("\"filling\":\"redstone_" + power + "\"")) {
-                return false;
-            }
-            if (!json.contains("liquidphase:block/redstone_phase_" + power + "\"")) {
-                return false;
-            }
+    private static boolean liquidphase$hasUnconditionalDynamicPart(String json) {
+        return liquidphase$hasUnconditionalPart(json, "multipart");
+    }
+
+    /** {@return 资源包片段是否带一条无条件的 dynamic part（片段顶层键是 {@code parts}} */
+    private static boolean liquidphase$fragmentHasDynamicPart(String json) {
+        return liquidphase$hasUnconditionalPart(json, "parts");
+    }
+
+    private static boolean liquidphase$hasUnconditionalPart(String json, String arrayName) {
+        if (json == null) {
+            return false;
         }
-        return true;
+        try {
+            com.google.gson.JsonElement root = com.google.gson.JsonParser.parseString(json);
+            if (!root.isJsonObject()) {
+                return false;
+            }
+            com.google.gson.JsonElement parts = root.getAsJsonObject().get(arrayName);
+            if (parts == null || !parts.isJsonArray()) {
+                return false;
+            }
+            for (com.google.gson.JsonElement element : parts.getAsJsonArray()) {
+                if (!element.isJsonObject()) {
+                    continue;
+                }
+                JsonObject part = element.getAsJsonObject();
+                if (part.has("when")) {
+                    continue;
+                }
+                com.google.gson.JsonElement apply = part.get("apply");
+                if (apply != null && liquidphase$applyUsesDynamic(apply)) {
+                    return true;
+                }
+            }
+        } catch (RuntimeException e) {
+            return false;
+        }
+        return false;
+    }
+
+    /** {@return apply 对象/数组里是否引用 {@code liquidphase:block/dynamic}} */
+    private static boolean liquidphase$applyUsesDynamic(com.google.gson.JsonElement apply) {
+        if (apply.isJsonArray()) {
+            for (com.google.gson.JsonElement element : apply.getAsJsonArray()) {
+                if (element.isJsonObject() && liquidphase$applyUsesDynamic(element)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (!apply.isJsonObject()) {
+            return false;
+        }
+        com.google.gson.JsonElement model = apply.getAsJsonObject().get("model");
+        return model != null && model.isJsonPrimitive()
+            && "liquidphase:block/dynamic".equals(model.getAsString());
+    }
+
+    /** {@return 随包资源是否存在（模型/贴图等二进制资源只判存在，不读内容）} */
+    private static boolean liquidphase$exists(String path) {
+        try (java.io.InputStream stream = LiquidPhase.class.getResourceAsStream(path)) {
+            return stream != null;
+        } catch (java.io.IOException e) {
+            return false;
+        }
     }
 
     /**
      * {@return 宿主 part 是否完全不带 phase 条件}
      * <p>
      * 普通宿主的覆盖层与外壳都是叠加层，宿主照常渲染，所以不需要 phase 条件。
-     * 一旦给宿主 part 补上"全部 24 个相"的条件，原版 {@code KeyValueCondition}
+     * 一旦给宿主 part 补上"全部 8 个相"的条件，原版 {@code KeyValueCondition}
      * 会判定它恒真并打 {@code Condition ... is always true} 警告（每个状态一条）。
      */
     private static boolean hostPartsCarryNoPhaseCondition(String json) {
@@ -1078,7 +1293,8 @@ public final class PhaseSelfTest {
         assertTrue("every phase host combines host collision with the solid phase cube (broken: " + broken + ")",
             broken.isEmpty());
         // 反向：红石相/熔岩相不加碰撞，组合碰撞 = 宿主形状（三参、缓存两参都查）。
-        for (Phase phase : new Phase[]{Phase.REDSTONE_15, Phase.LAVA}) {
+        // 方案 C 起红石相不在状态里，这里用 NONE（无相）与 LAVA 代表"非固相"。
+        for (Phase phase : new Phase[]{Phase.NONE, Phase.LAVA}) {
             BlockState fencePhased = PhaseHelper.withPhase(Blocks.OAK_FENCE.defaultBlockState(), phase);
             BlockState fenceVanilla = Blocks.OAK_FENCE.defaultBlockState();
             assertTrue("non-solid phase keeps the host collision shape (3-arg, " + phase + ")",
@@ -1444,7 +1660,8 @@ public final class PhaseSelfTest {
         level.setBlock(targetA, Blocks.OAK_FENCE.defaultBlockState(), Block.UPDATE_ALL);
         liquidphase$placeBlockInto(level, Blocks.REDSTONE_WIRE, stonePos, Direction.EAST);
         assertTrue("indirect dust lands into fence as redstone phase",
-            RedstoneBlocks.isRedstonePhase(level.getBlockState(targetA)));
+            RedstoneBlocks.hasRedstone(level, targetA));
+        PhaseExtras.set(level, targetA, PhaseExtra.EMPTY);
         level.setBlock(targetA, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         // (2) 冰落进树叶格 → 冰相
         level.setBlock(targetA, Blocks.OAK_LEAVES.defaultBlockState(), Block.UPDATE_ALL);
@@ -1492,10 +1709,11 @@ public final class PhaseSelfTest {
         level.setBlock(pos, Blocks.REDSTONE_WIRE.defaultBlockState(), Block.UPDATE_ALL);
         assertTrue("universal: wire setBlock into fence becomes redstone phase",
             level.getBlockState(pos).is(Blocks.OAK_FENCE)
-                && RedstoneBlocks.isRedstonePhase(level.getBlockState(pos)));
+                && RedstoneBlocks.hasRedstone(level, pos));
         assertTrue("universal: rewritten redstone phase recalculates from neighbours (got "
-                + RedstoneBlocks.getPower(level.getBlockState(pos)) + ")",
-            RedstoneBlocks.getPower(level.getBlockState(pos)) == 0);
+                + RedstoneBlocks.getPower(level, pos) + ")",
+            RedstoneBlocks.getPower(level, pos) == 0);
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
         // (4) 水写进栅栏格 → 不在材料口径（走容器路径），原版覆盖
         level.setBlock(pos, Blocks.OAK_FENCE.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(pos, net.minecraft.world.level.material.Fluids.WATER.defaultFluidState().createLegacyBlock(),
@@ -1545,6 +1763,7 @@ public final class PhaseSelfTest {
         Block hostBlock = Blocks.OAK_STAIRS;
 
         // 现有填充相 → 预期接受（空/含水/熔岩可替换；冰/黑曜石/红石不可替换）。
+        // 红石相不占状态：这一行用"空宿主状态 + 旁路表红石条目"表示，由 setCurrent 统一摆放。
         Object[][] currents = {
             {"empty", hostBlock.defaultBlockState(), true},
             {"waterlogged", hostBlock.defaultBlockState()
@@ -1552,7 +1771,7 @@ public final class PhaseSelfTest {
             {"lava", PhaseHelper.withPhase(hostBlock.defaultBlockState(), Phase.LAVA), true},
             {"ice", PhaseHelper.withPhase(hostBlock.defaultBlockState(), Phase.ICE), false},
             {"obsidian", PhaseHelper.withPhase(hostBlock.defaultBlockState(), Phase.OBSIDIAN), false},
-            {"redstone", PhaseHelper.withPhase(hostBlock.defaultBlockState(), Phase.REDSTONE_15), false},
+            {"redstone", hostBlock.defaultBlockState(), false},
         };
         Block[] materials = {Blocks.ICE, Blocks.OBSIDIAN, Blocks.REDSTONE_WIRE};
 
@@ -1562,42 +1781,70 @@ public final class PhaseSelfTest {
             boolean expected = (Boolean) current[2];
 
             for (Block material : materials) {
-                Phase incoming = material == Blocks.REDSTONE_WIRE ? Phase.REDSTONE_15
-                    : org.liquidphase.phase.PhaseAbsorption.phaseOfItem(material);
+                boolean redstoneMaterial = material == Blocks.REDSTONE_WIRE;
+                Phase incoming = redstoneMaterial
+                    ? null : org.liquidphase.phase.PhaseAbsorption.phaseOfItem(material);
                 String label = currentName + "->" + material;
 
-                // A 判定源
-                boolean a = PhaseHelper.canAcceptPhase(currentState, level, pos, incoming);
+                // 摆放"现有填充相"（红石用例同时写旁路表）。
+                liquidphase$setCurrent(level, pos, currentState, currentName);
+
+                // A 判定源：材料相走 canAcceptPhase；红石粉走 canAcceptExtra
+                // （它写旁路表，不写 filling 取值）。
+                boolean a = redstoneMaterial
+                    ? PhaseHelper.canAcceptExtra(level, pos, currentState)
+                    : PhaseHelper.canAcceptPhase(currentState, level, pos, incoming);
                 assertTrue("gate A matches the replaceability rule for " + label, a == expected);
 
-                // B 接受层：canBeReplaced 与 A 一致
+                // B 接受层：材料相的 canBeReplaced 与 A 一致；红石粉不走"可替换"路径
+                // （它由 BlockItemMixin 的落点吸收写表），所以永远不放行上下文替换。
+                // 现有条目是红石时跳过 B：红石条目不占状态，放置上下文的目标格会退到
+                // 命中面之外的邻格，"B 与 A 对同一格"这个前提不成立；真实路径由 D 覆盖。
                 BlockPlaceContext ctx = liquidphase$context(level, material, pos, Direction.DOWN);
                 boolean b = currentState.canBeReplaced(ctx);
-                assertTrue("gate B (canBeReplaced) agrees with A for " + label, b == a);
+                if (redstoneMaterial) {
+                    assertTrue("gate B: dust never makes the host replaceable for " + label, !b);
+                } else if (!currentName.equals("redstone")) {
+                    assertTrue("gate B (canBeReplaced) agrees with A for " + label, b == a);
+                }
 
                 // C 改写层：Level.setBlock(材料) 与 A 一致，接受时终态一致
-                level.setBlock(pos, currentState, Block.UPDATE_ALL);
+                liquidphase$setCurrent(level, pos, currentState, currentName);
                 level.setBlock(pos, material.defaultBlockState(), Block.UPDATE_ALL);
                 BlockState afterC = level.getBlockState(pos);
-                boolean c = afterC.getBlock() == hostBlock && phaseMatches(afterC, incoming);
+                boolean c;
+                if (redstoneMaterial) {
+                    c = afterC.getBlock() == hostBlock && RedstoneBlocks.hasRedstone(level, pos);
+                } else {
+                    c = afterC.getBlock() == hostBlock && phaseMatches(afterC, incoming);
+                }
                 assertTrue("gate C (setBlock rewrite) agrees with A for " + label, c == a);
                 if (a) {
                     assertTrue("gate C final state carries the incoming phase for " + label,
-                        (incoming == Phase.REDSTONE_15 ? RedstoneBlocks.isRedstonePhase(afterC)
-                            : PhaseHelper.getPhase(afterC) == incoming)
-                            && !afterC.getValue(BlockStateProperties.WATERLOGGED));
+                        redstoneMaterial
+                            ? RedstoneBlocks.hasRedstone(level, pos)
+                            : PhaseHelper.getPhase(afterC) == incoming
+                                && !afterC.getValue(BlockStateProperties.WATERLOGGED));
                 }
 
                 // D 交互层：BlockItem.place 落点吸收与 A 一致
-                level.setBlock(pos, currentState, Block.UPDATE_ALL);
+                liquidphase$setCurrent(level, pos, currentState, currentName);
+                int extraBefore = PhaseExtras.get(level, pos);
                 BlockState placedD = liquidphase$placeBlockInto(level, material, pos, Direction.DOWN);
-                boolean d = placedD != null && placedD.getBlock() == hostBlock
-                    && phaseMatches(placedD, incoming);
+                boolean d;
+                if (redstoneMaterial) {
+                    // 红石粉成功 = 宿主还在且旁路条目真的被这次放置改写（当前已是红石时不算）。
+                    d = level.getBlockState(pos).getBlock() == hostBlock
+                        && PhaseExtras.get(level, pos) != extraBefore;
+                } else {
+                    d = placedD != null && placedD.getBlock() == hostBlock
+                        && phaseMatches(placedD, incoming);
+                }
                 assertTrue("gate D (BlockItem.place) agrees with A for " + label, d == a);
             }
 
             // E 容器路径（熔岩作为写入材料）：placeLiquid(LAVA) 与 A 一致
-            level.setBlock(pos, currentState, Block.UPDATE_ALL);
+            liquidphase$setCurrent(level, pos, currentState, currentName);
             boolean aLava = PhaseHelper.canAcceptPhase(currentState, level, pos, Phase.LAVA);
             clearFluidTicks(level, pos);
             boolean e = ((net.minecraft.world.level.block.LiquidBlockContainer) hostBlock)
@@ -1610,7 +1857,7 @@ public final class PhaseSelfTest {
             clearFluidTicks(level, pos);
 
             // 水作为写入材料：互斥不变——只有空宿主接受水，任何含相宿主拒绝（0.1.17 决策）。
-            level.setBlock(pos, currentState, Block.UPDATE_ALL);
+            liquidphase$setCurrent(level, pos, currentState, currentName);
             boolean waterAccepted = ((net.minecraft.world.level.block.LiquidBlockContainer) hostBlock)
                 .placeLiquid(level, pos, level.getBlockState(pos), Fluids.WATER.getSource(false));
             assertTrue("water stays on the container path and only enters empty hosts for "
@@ -1620,6 +1867,7 @@ public final class PhaseSelfTest {
                 assertTrue("water waterlogs the empty host", level.getBlockState(pos)
                     .getValue(BlockStateProperties.WATERLOGGED));
             }
+            PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
             level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         }
         level.setBlock(pos.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
@@ -1654,11 +1902,23 @@ public final class PhaseSelfTest {
             broken.isEmpty() && scanned >= 300);
     }
 
-    /** {@return 状态的填充相是否等于给定材料对应的相（红石相按类型判）} */
+    /**
+     * 摆出对账矩阵里的"现有填充相"。
+     * <p>
+     * 红石相不占状态：用例名是 {@code redstone} 时写空宿主状态 + 旁路条目；
+     * 其它用例直接写状态。每次先清旁路表，避免上一轮的红石条目污染当前用例。
+     */
+    private static void liquidphase$setCurrent(ServerLevel level, BlockPos pos, BlockState state, String name) {
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+        level.setBlock(pos, state, Block.UPDATE_ALL);
+        if ("redstone".equals(name)) {
+            PhaseExtras.set(level, pos, PhaseExtra.redstone(15));
+        }
+    }
+
+    /** {@return 状态的填充相是否等于给定材料对应的相} */
     private static boolean phaseMatches(BlockState state, Phase incoming) {
-        return incoming == Phase.REDSTONE_15
-            ? RedstoneBlocks.isRedstonePhase(state)
-            : PhaseHelper.getPhase(state) == incoming;
+        return PhaseHelper.getPhase(state) == incoming;
     }
 
     /**
@@ -1671,7 +1931,8 @@ public final class PhaseSelfTest {
      * 不在服务端自检范围（README 记录手测项）。
      */
     private static void checkPackMergeFragments(ServerLevel level, BlockPos base) {
-        // (1) 全量：每个相容宿主都有片段，且片段带红石外壳（与烘焙 blockstate 同判据）。
+        // (1) 全量：每个相容宿主都有片段，且片段带无条件的 dynamic part（与烘焙 blockstate 同判据）。
+        // 方案 C 不再往片段里写 16 条红石外壳 part：外壳由动态模型按坐标发射。
         java.util.List<String> missing = new java.util.ArrayList<>();
         int fragments = 0;
         for (Block block : net.minecraft.core.registries.BuiltInRegistries.BLOCK) {
@@ -1686,11 +1947,12 @@ public final class PhaseSelfTest {
             String fragment = liquidphase$resource("/assets/liquidphase/phase_parts/"
                 + id.substring("minecraft:".length()) + ".json");
             fragments++;
-            if (fragment == null || !fragment.contains("liquidphase:block/redstone_phase_")) {
+            if (!liquidphase$fragmentHasDynamicPart(fragment)
+                || fragment.contains("liquidphase:block/redstone_phase_")) {
                 missing.add(id);
             }
         }
-        assertTrue("every phase host ships a pack-merge fragment with the redstone shell ("
+        assertTrue("every phase host ships a pack-merge fragment with the dynamic part ("
                 + fragments + " checked, missing: " + missing + ")",
             missing.isEmpty() && fragments >= 300);
 
@@ -1723,11 +1985,11 @@ public final class PhaseSelfTest {
             slabJson.contains("\"type\":\"double\"") && !slabJson.contains("\"type\":\"double\",\"filling\""));
         assertTrue("merged slab keeps the bottom/top variants ungated",
             slabJson.contains("\"type\":\"bottom\"") && !slabJson.contains("\"type\":\"bottom\",\"filling\""));
-        assertTrue("merged slab appends the inset overlays and the redstone shell",
+        assertTrue("merged slab appends the inset overlays and the dynamic part",
             slabJson.contains("liquidphase:block/phase_ice")
                 && !slabJson.contains("phase_ice_full")
-                && slabJson.contains("liquidphase:block/redstone_phase_0")
-                && slabJson.contains("liquidphase:block/redstone_phase_15"));
+                && liquidphase$hasUnconditionalDynamicPart(slabJson)
+                && !slabJson.contains("liquidphase:block/redstone_phase_"));
 
         // (4) 合并核心 × 仿第三方包：内缩宿主（楼梯）无 gate，宿主 part 原样。
         JsonObject stairsWinner = com.google.gson.JsonParser.parseString(
@@ -1744,9 +2006,10 @@ public final class PhaseSelfTest {
             !stairsJson.contains("\"filling\":\"none|lava|"));
         assertTrue("inset host keeps its variant keys after variants→multipart conversion",
             stairsJson.contains("\"facing\":\"east\"") && stairsJson.contains("\"half\":\"bottom\""));
-        assertTrue("inset overlays and shell are appended",
+        assertTrue("inset overlays and dynamic part are appended",
             stairsJson.contains("liquidphase:block/phase_obsidian")
-                && stairsJson.contains("liquidphase:block/redstone_phase_8"));
+                && liquidphase$hasUnconditionalDynamicPart(stairsJson)
+                && !stairsJson.contains("liquidphase:block/redstone_phase_"));
 
         // (4b) 合并核心 × 整格宿主（树叶）：宿主 part 一律保持渲染，相用内缩覆盖层。
         // 原始树叶是无条件单一变体，第三方包常拆成 per-distance 变体；
@@ -1766,9 +2029,12 @@ public final class PhaseSelfTest {
                 && leavesJson.contains("\"distance\":\"3\",\"persistent\":\"true\"")
                 && !leavesJson.contains("\"persistent\":\"false\",\"filling\"")
                 && !leavesJson.contains("\"persistent\":\"true\",\"filling\""));
-        assertTrue("full-cube host uses the inset phase material (no z-fighting with its 0..16 model)",
+        assertTrue("full-cube host uses the inset phase material and the dynamic part "
+                + "(no z-fighting with its 0..16 model)",
             leavesJson.contains("liquidphase:block/phase_ice")
-                && !leavesJson.contains("phase_ice_full"));
+                && !leavesJson.contains("phase_ice_full")
+                && liquidphase$hasUnconditionalDynamicPart(leavesJson)
+                && !leavesJson.contains("liquidphase:block/redstone_phase_"));
 
         // (5) 代理包装：幂等 + 透传（用 ResourceManager.Empty 做最小可调用的 RM）。
         // 合并开关强制打开，避免本机配置文件影响自检结论（内存态，不落盘）。

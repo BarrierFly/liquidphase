@@ -27,7 +27,7 @@ public final class LiquidPhase implements ModInitializer {
 
         if (config.phaseEnabled) {
             injectPhaseProperty();
-            LOGGER.info("[Liquid Phase] redstone phase uses filling=redstone_0..15 (no extra blocks registered)");
+            LOGGER.info("[Liquid Phase] scheme C: filling carries 8 material categories; redstone power and element parameters live in the sparse side table");
         } else {
             LOGGER.info("[Liquid Phase] 双端功能已关闭（phase 属性未注入；旧存档中的相会被丢弃）");
         }
@@ -36,6 +36,10 @@ public final class LiquidPhase implements ModInitializer {
         // 相能力握手：把服务端配置广播给客户端；连原版服务器的客户端永远收不到，
         // 客户端侧功能会自动退回原版行为（见 PhaseHandshake / PhaseSyncState）。
         org.liquidphase.sync.PhaseHandshake.registerServer();
+        if (config.phaseEnabled) {
+            org.liquidphase.sync.PhaseExtraSync.registerServer();
+            org.liquidphase.phase.PhasePersistence.register();
+        }
         liquidphase$registerSelfTest();
         LOGGER.info("[Liquid Phase] initialized");
     }

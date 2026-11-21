@@ -6,15 +6,20 @@ import java.util.List;
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
 import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
+import net.fabricmc.fabric.api.renderer.v1.Renderer;
+import net.fabricmc.fabric.api.renderer.v1.mesh.MutableMesh;
+import net.fabricmc.fabric.api.renderer.v1.model.FabricBlockStateModel;
+import net.fabricmc.fabric.api.renderer.v1.model.SpriteFinder;
+import net.fabricmc.fabric.api.renderer.v1.sprite.FabricSpriteAtlasTexture;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.worldselection.WorldCreationUiState;
 import net.minecraft.client.renderer.ItemBlockRenderTypes;
 import net.minecraft.client.renderer.block.BlockModelShaper;
-import net.minecraft.client.renderer.block.model.BakedQuad;
 import net.minecraft.client.renderer.block.model.BlockStateModel;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -24,8 +29,10 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import org.liquidphase.LiquidPhase;
-import org.liquidphase.phase.Phase;
+import org.liquidphase.phase.PhaseExtra;
+import org.liquidphase.phase.PhaseExtras;
 import org.liquidphase.phase.PhaseHelper;
+import org.liquidphase.redstone.RedstoneBlocks;
 
 /**
  * 客户端渲染回归：含红石相的**栅栏**必须真的画得出来。
@@ -37,8 +44,9 @@ import org.liquidphase.phase.PhaseHelper;
  * 断言（任一条失败即让 run 失败并逐条打印 FAIL 行）：
  * <ol>
  *   <li>客户端烘焙模型里**既有宿主 quad、也有** {@code redstone_phase_*} 外壳 quad
- *       （外壳没丢，宿主也没被外壳顶掉）</li>
- *   <li>含相状态的区块图层不是 {@code SOLID}（外壳是透明底贴图，SOLID 会丢弃透明像素）</li>
+ *       （外壳没丢，宿主也没被外壳顶掉）；方案 C 下外壳由动态模型在带坐标的
+ *       {@code emitQuads} 里按旁路表发射，所以这里走 FRAPI 的发射结果而不是静态 part</li>
+ *   <li>宿主状态的区块图层不是 {@code SOLID}（外壳是透明底贴图，SOLID 会丢弃透明像素）</li>
  *   <li>外壳 quad 顶点不越出本格（方块空间 0..1，允许 0.01px 外扩）</li>
  * </ol>
  * 同时落三张截图到运行目录的 {@code screenshots/}：斜视、俯视、0 档对照。
@@ -47,9 +55,9 @@ import org.liquidphase.phase.PhaseHelper;
  * 运行目录 {@code versions/<版本>/run-clientgametest/} 与常规 {@code run/} 刻意分开：
  * 新目录里没有 {@code resourcepacks/}，等于"无资源包"的干净客户端。
  * <p>
- * 只在 1.21.11 接线：{@code BakedQuad.position} / {@code BlockStateModel.collectParts} /
- * {@code ChunkSectionLayer} 是这一版起的 API（1.21.10 的 quad 顶点还打包在 {@code int[]} 里）。
- * 其它版本的渲染覆盖由服务端自检与 {@code tools/verify_jars.py} 承担。
+ * 只在 1.21.11 接线：{@code FabricBlockStateModel.emitQuads} / {@code SpriteFinder} /
+ * {@code ChunkSectionLayer} 是这一版起的 API（1.21.10 的动态模型还没有带坐标的
+ * {@code emitQuads}）。其它版本的渲染覆盖由服务端自检与 {@code tools/verify_jars.py} 承担。
  */
 public final class FenceRedstoneRenderTest implements FabricClientGameTest {
 
@@ -79,15 +87,25 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
             sp.getServer().runOnServer(server -> {
                 buildScene(server, bright, true);
                 buildScene(server, dark, false);
+                buildElementScene(server, bright);
             });
             context.waitTicks(12);
 
             for (String line : sp.getServer().computeOnServer(server -> readBackPhases(server, bright))) {
                 LiquidPhase.LOGGER.info("[gametest] {}", line);
             }
+            for (String line : sp.getServer().computeOnServer(server -> readBackElements(server, bright))) {
+                LiquidPhase.LOGGER.info("[gametest] {}", line);
+            }
 
             List<String> failures = new ArrayList<>();
             for (String line : context.computeOnClient(client -> inspect(client, bright))) {
+                LiquidPhase.LOGGER.info("[gametest] {}", line);
+                if (line.contains("FAIL")) {
+                    failures.add(line);
+                }
+            }
+            for (String line : context.computeOnClient(client -> inspectElements(client, bright))) {
                 LiquidPhase.LOGGER.info("[gametest] {}", line);
                 if (line.contains("FAIL")) {
                     failures.add(line);
@@ -110,7 +128,7 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
     /**
      * 场景：地板 + 一列含相栅栏 + 紧邻的一列红石线。
      *
-     * @param wire true 时栅栏相先写 {@code redstone_0}，再由真实红石线算出功率（走完整生成链路）；
+     * @param wire true 时栅栏先写红石相（旁路表，0 档），再由真实红石线算出功率（走完整生成链路）；
      *             false 时不放线，栅栏停在 0 档（外壳为暗红，用作对比截图）
      */
     private static void buildScene(MinecraftServer server, BlockPos origin, boolean wire) {
@@ -124,8 +142,10 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
             }
         }
         for (int i = 0; i < FENCE_COUNT; i++) {
-            level.setBlockAndUpdate(origin.offset(0, 0, 2 + i),
-                    PhaseHelper.withPhase(Blocks.OAK_FENCE.defaultBlockState(), Phase.REDSTONE_0));
+            BlockPos pos = origin.offset(0, 0, 2 + i);
+            level.setBlockAndUpdate(pos, Blocks.OAK_FENCE.defaultBlockState());
+            // 方案 C：红石相写旁路表（服务端权威），不动方块状态。
+            RedstoneBlocks.setRedstonePhase(level, pos, 0);
         }
         // 对照组：同一列后面放两段无相栅栏
         for (int i = 0; i < 2; i++) {
@@ -145,9 +165,11 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
         ServerLevel level = server.getLevel(Level.OVERWORLD);
         List<String> out = new ArrayList<>();
         for (int i = 0; i < FENCE_COUNT + 2; i++) {
-            BlockState state = level.getBlockState(origin.offset(0, 0, 2 + i));
-            out.add("z=%d block=%s filling=%s".formatted(
-                    2 + i, BuiltInRegistries.BLOCK.getKey(state.getBlock()), PhaseHelper.getPhase(state)));
+            BlockPos pos = origin.offset(0, 0, 2 + i);
+            BlockState state = level.getBlockState(pos);
+            out.add("z=%d block=%s filling=%s extra=%s".formatted(
+                    2 + i, BuiltInRegistries.BLOCK.getKey(state.getBlock()), PhaseHelper.getPhase(state),
+                    PhaseExtra.describe(PhaseExtras.get(level, pos))));
         }
         return out;
     }
@@ -155,66 +177,187 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
     private static List<String> inspect(Minecraft mc, BlockPos origin) {
         List<String> out = new ArrayList<>();
         BlockModelShaper shaper = mc.getBlockRenderer().getBlockModelShaper();
+        TextureAtlas atlas = (TextureAtlas) mc.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS);
+        SpriteFinder spriteFinder = atlas instanceof FabricSpriteAtlasTexture fabricAtlas
+            ? fabricAtlas.spriteFinder() : null;
+        MutableMesh mesh;
+        try {
+            mesh = Renderer.get().mutableMesh();
+        } catch (RuntimeException e) {
+            mesh = null;
+        }
         for (int i = 0; i < FENCE_COUNT + 2; i++) {
             BlockPos pos = origin.offset(0, 0, 2 + i);
             BlockState state = mc.level.getBlockState(pos);
-            Phase phase = PhaseHelper.getPhase(state);
-
-            int hostQuads = 0;
-            int shellQuads = 0;
-            double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE, minZ = Double.MAX_VALUE;
-            double maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE, maxZ = -Double.MAX_VALUE;
+            int extra = PhaseExtras.get(mc.level, pos);
+            boolean redstone = PhaseExtra.isRedstone(extra);
 
             BlockStateModel model = shaper.getBlockModel(state);
             if (model == null) {
-                out.add("z=%d FAIL null baked model".formatted(2 + i));
+                out.add("z=%d FAIL null baked model".formatted(20 + i));
                 continue;
             }
-            RandomSource random = RandomSource.create();
-            for (var part : model.collectParts(random)) {
-                List<BakedQuad> quads = new ArrayList<>(part.getQuads(null));
-                for (Direction direction : Direction.values()) {
-                    quads.addAll(part.getQuads(direction));
-                }
-                for (BakedQuad quad : quads) {
-                    if (!quad.sprite().toString().contains("redstone_phase_")) {
-                        hostQuads++;
-                        continue;
-                    }
-                    shellQuads++;
-                    for (int v = 0; v < 4; v++) {
-                        var p = quad.position(v);
-                        minX = Math.min(minX, p.x());
-                        minY = Math.min(minY, p.y());
-                        minZ = Math.min(minZ, p.z());
-                        maxX = Math.max(maxX, p.x());
-                        maxY = Math.max(maxY, p.y());
-                        maxZ = Math.max(maxZ, p.z());
-                    }
-                }
+            if (spriteFinder == null || mesh == null) {
+                out.add("z=%d FAIL dynamic model output unavailable (spriteFinder=%s, renderer=%s)"
+                        .formatted(2 + i, spriteFinder != null, mesh != null));
+                continue;
             }
+
+            int[] hostQuads = {0};
+            int[] shellQuads = {0};
+            double[] bounds = {
+                Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE,
+                -Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE,
+            };
+            mesh.clear();
+            RandomSource random = RandomSource.create();
+            // 1.21.11 的动态模型在带坐标的 emitQuads 里按旁路表发射红石外壳/元件几何，
+            // 不能用 collectParts（那一层拿不到坐标，只会返回宿主模型）。
+            ((FabricBlockStateModel) model).emitQuads(mesh.emitter(), mc.level, pos, state, random,
+                direction -> false);
+            mesh.forEachMutable(quad -> {
+                TextureAtlasSprite sprite = spriteFinder.find(quad);
+                if (sprite == null || !sprite.contents().name().toString().contains("redstone_phase_")) {
+                    hostQuads[0]++;
+                    return;
+                }
+                shellQuads[0]++;
+                for (int v = 0; v < 4; v++) {
+                    bounds[0] = Math.min(bounds[0], quad.x(v));
+                    bounds[1] = Math.min(bounds[1], quad.y(v));
+                    bounds[2] = Math.min(bounds[2], quad.z(v));
+                    bounds[3] = Math.max(bounds[3], quad.x(v));
+                    bounds[4] = Math.max(bounds[4], quad.y(v));
+                    bounds[5] = Math.max(bounds[5], quad.z(v));
+                }
+            });
 
             ChunkSectionLayer layer = ItemBlockRenderTypes.getChunkRenderType(state);
-            out.add("z=%d phase=%s hostQuads=%d shellQuads=%d layer=%s".formatted(
-                    2 + i, phase, hostQuads, shellQuads, layer));
+            out.add("z=%d extra=%s hostQuads=%d shellQuads=%d layer=%s".formatted(
+                    2 + i, PhaseExtra.describe(extra), hostQuads[0], shellQuads[0], layer));
 
-            if (!phase.isRedstone()) {
+            if (!redstone) {
                 continue;   // 无相对照组只打印，不做外壳断言
             }
-            if (hostQuads == 0) {
-                out.add("z=%d FAIL host model disappeared under redstone phase".formatted(2 + i));
+            if (hostQuads[0] == 0) {
+                out.add("z=%d FAIL host model disappeared under redstone phase".formatted(20 + i));
             }
-            if (shellQuads == 0) {
-                out.add("z=%d FAIL no redstone_phase_* quad (shell invisible)".formatted(2 + i));
+            if (shellQuads[0] == 0) {
+                out.add("z=%d FAIL no redstone_phase_* quad (shell invisible)".formatted(20 + i));
             }
             if (layer == ChunkSectionLayer.SOLID) {
-                out.add("z=%d FAIL redstone phase still on SOLID layer (transparent shell pixels dropped)"
-                        .formatted(2 + i));
+                out.add("z=%d FAIL phase host still on SOLID layer (transparent shell pixels dropped)"
+                        .formatted(20 + i));
             }
-            if (shellQuads > 0 && (minX < -SHELL_SLACK || minY < -SHELL_SLACK || minZ < -SHELL_SLACK
-                    || maxX > 1 + SHELL_SLACK || maxY > 1 + SHELL_SLACK || maxZ > 1 + SHELL_SLACK)) {
+            if (shellQuads[0] > 0 && (bounds[0] < -SHELL_SLACK || bounds[1] < -SHELL_SLACK
+                    || bounds[2] < -SHELL_SLACK || bounds[3] > 1 + SHELL_SLACK
+                    || bounds[4] > 1 + SHELL_SLACK || bounds[5] > 1 + SHELL_SLACK)) {
                 out.add("z=%d FAIL shell quads escape the block: x=[%.4f,%.4f] y=[%.4f,%.4f] z=[%.4f,%.4f]"
-                        .formatted(2 + i, minX, maxX, minY, maxY, minZ, maxZ));
+                        .formatted(2 + i, bounds[0], bounds[3], bounds[1], bounds[4], bounds[2], bounds[5]));
+            }
+        }
+        return out;
+    }
+
+    /** 元件场景：三个下半砖，各放一个侦测器/中继器/比较器元件（方案 C）。 */
+    private static void buildElementScene(MinecraftServer server, BlockPos origin) {
+        ServerLevel level = server.getLevel(Level.OVERWORLD);
+        if (level == null) {
+            return;
+        }
+        org.liquidphase.phase.PhaseExtra.Kind[] kinds = {
+            org.liquidphase.phase.PhaseExtra.Kind.REPEATER,
+            org.liquidphase.phase.PhaseExtra.Kind.OBSERVER,
+            org.liquidphase.phase.PhaseExtra.Kind.COMPARATOR,
+        };
+        net.minecraft.core.Direction[] facings = {
+            net.minecraft.core.Direction.NORTH,
+            net.minecraft.core.Direction.EAST,
+            net.minecraft.core.Direction.WEST,
+        };
+        for (int i = 0; i < kinds.length; i++) {
+            BlockPos pos = origin.offset(4, 0, 20 + i);
+            BlockState slab = Blocks.SMOOTH_STONE_SLAB.defaultBlockState();
+            level.setBlockAndUpdate(pos, slab);
+            org.liquidphase.element.ElementBlocks.place(level, pos, slab, kinds[i], facings[i]);
+        }
+        // 中继器输入：facing 侧放红石块，2 tick 后 powered。
+        BlockPos repeaterPos = origin.offset(4, 0, 20);
+        level.setBlockAndUpdate(repeaterPos.relative(net.minecraft.core.Direction.NORTH),
+            Blocks.REDSTONE_BLOCK.defaultBlockState());
+        level.updateNeighborsAt(repeaterPos, Blocks.SMOOTH_STONE_SLAB);
+    }
+
+    private static List<String> readBackElements(MinecraftServer server, BlockPos origin) {
+        ServerLevel level = server.getLevel(Level.OVERWORLD);
+        List<String> out = new ArrayList<>();
+        if (level == null) {
+            return out;
+        }
+        for (int i = 0; i < 3; i++) {
+            BlockPos pos = origin.offset(4, 0, 20 + i);
+            int extra = PhaseExtras.get(level, pos);
+            out.add("element z=%d block=%s extra=%s".formatted(
+                20 + i, BuiltInRegistries.BLOCK.getKey(level.getBlockState(pos).getBlock()),
+                PhaseExtra.describe(extra)));
+            if (!PhaseExtra.isElement(extra)) {
+                out.add("element z=%d FAIL no element entry".formatted(20 + i));
+            }
+            if (i == 0 && !PhaseExtra.powered(extra)) {
+                out.add("element z=%d FAIL repeater did not turn on (input redstone block)".formatted(20 + i));
+            }
+        }
+        return out;
+    }
+
+    private static List<String> inspectElements(Minecraft mc, BlockPos origin) {
+        List<String> out = new ArrayList<>();
+        BlockModelShaper shaper = mc.getBlockRenderer().getBlockModelShaper();
+        TextureAtlas atlas = (TextureAtlas) mc.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS);
+        SpriteFinder spriteFinder = atlas instanceof FabricSpriteAtlasTexture fabricAtlas
+            ? fabricAtlas.spriteFinder() : null;
+        MutableMesh mesh = Renderer.get().mutableMesh();
+        for (int i = 0; i < 3; i++) {
+            BlockPos pos = origin.offset(4, 0, 20 + i);
+            BlockState state = mc.level.getBlockState(pos);
+            BlockStateModel model = shaper.getBlockModel(state);
+            int[] hostQuads = {0};
+            int[] elementQuads = {0};
+            double[] minY = {Double.MAX_VALUE};
+            double[] maxY = {-Double.MAX_VALUE};
+            mesh.clear();
+            ((FabricBlockStateModel) model).emitQuads(mesh.emitter(), mc.level, pos, state,
+                RandomSource.create(), direction -> false);
+            String[] expected = {"repeater", "observer_", "comparator"};
+            final int index = i;
+            mesh.forEachMutable(quad -> {
+                TextureAtlasSprite sprite = spriteFinder.find(quad);
+                String name = sprite == null ? "" : sprite.contents().name().toString();
+                boolean elementSprite = name.contains(expected[index])
+                    || ((index == 0 || index == 2) && name.contains("redstone_torch"));
+                if (!elementSprite) {
+                    hostQuads[0]++;
+                    return;
+                }
+                elementQuads[0]++;
+                for (int v = 0; v < 4; v++) {
+                    minY[0] = Math.min(minY[0], quad.y(v));
+                    maxY[0] = Math.max(maxY[0], quad.y(v));
+                }
+            });
+            int clientExtra = PhaseExtras.get(mc.level, pos);
+            out.add("element z=%d pos=%s clientExtra=%s hostQuads=%d elementQuads=%d y=[%.4f,%.4f]".formatted(
+                20 + i, pos, PhaseExtra.describe(clientExtra), hostQuads[0], elementQuads[0], minY[0], maxY[0]));
+            if (elementQuads[0] == 0) {
+                out.add("element z=%d FAIL no element_* quad emitted".formatted(20 + i));
+            }
+            if (minY[0] < 0.5 - SHELL_SLACK) {
+                out.add("element z=%d FAIL element geometry sank into the slab (minY=%.4f)"
+                    .formatted(20 + i, minY[0]));
+            }
+            if (maxY[0] > 1.0 + SHELL_SLACK) {
+                out.add("element z=%d FAIL element geometry escapes the block (maxY=%.4f)"
+                    .formatted(20 + i, maxY[0]));
             }
         }
         return out;

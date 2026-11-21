@@ -3,7 +3,7 @@ package org.liquidphase.mixin.client;
 //? if !(26.3) {
 
 import net.minecraft.world.level.block.state.BlockState;
-import org.liquidphase.phase.PhaseRenderSupport;
+import org.liquidphase.phase.PhaseHelper;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -40,7 +40,7 @@ public abstract class PhaseRenderLayerMixin {
     /*@Inject(method = "getChunkRenderType", at = @At("RETURN"), cancellable = true)
     private static void liquidphase$phasedLayer(BlockState state,
                                                 CallbackInfoReturnable<net.minecraft.client.renderer.RenderType> cir) {
-        if (!PhaseRenderSupport.hasPhase(state)) {
+        if (!state.hasProperty(PhaseHelper.FILLING)) {
             return;
         }
         if (cir.getReturnValue() == net.minecraft.client.renderer.RenderType.solid()) {
@@ -51,7 +51,7 @@ public abstract class PhaseRenderLayerMixin {
     @Inject(method = "getChunkRenderType", at = @At("RETURN"), cancellable = true)
     private static void liquidphase$phasedLayer(BlockState state,
                                                 CallbackInfoReturnable<net.minecraft.client.renderer.chunk.ChunkSectionLayer> cir) {
-        if (!PhaseRenderSupport.hasPhase(state)) {
+        if (!state.hasProperty(PhaseHelper.FILLING)) {
             return;
         }
         if (cir.getReturnValue() == net.minecraft.client.renderer.chunk.ChunkSectionLayer.SOLID) {
@@ -66,7 +66,7 @@ public abstract class PhaseRenderLayerMixin {
     /*@Inject(method = "getMovingBlockRenderType", at = @At("RETURN"), cancellable = true)
     private static void liquidphase$phasedMovingLayer(BlockState state,
                                                       CallbackInfoReturnable<net.minecraft.client.renderer.RenderType> cir) {
-        if (!PhaseRenderSupport.hasPhase(state)) {
+        if (!state.hasProperty(PhaseHelper.FILLING)) {
             return;
         }
         // 树叶在"树叶不裁切"图形设置下原版就给 solid()；带相时必须 alpha 测试，
@@ -79,7 +79,7 @@ public abstract class PhaseRenderLayerMixin {
     @Inject(method = "getMovingBlockRenderType", at = @At("RETURN"), cancellable = true)
     private static void liquidphase$phasedMovingLayer(BlockState state,
                                                       CallbackInfoReturnable<net.minecraft.client.renderer.rendertype.RenderType> cir) {
-        if (!PhaseRenderSupport.hasPhase(state)) {
+        if (!state.hasProperty(PhaseHelper.FILLING)) {
             return;
         }
         if (cir.getReturnValue() == net.minecraft.client.renderer.rendertype.RenderTypes.solidMovingBlock()) {

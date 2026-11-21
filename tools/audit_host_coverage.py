@@ -35,6 +35,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gen_phase_blocks as gpb
+
 VERSIONS = ["1.19.4", "1.20.1", "1.21.1", "1.21.10", "1.21.11", "26.3"]
 
 # 0.1.13 起由专门 mixin 接管的"覆写遮蔽"条目（(宿主类, 方法) → 接管 mixin）。
@@ -346,8 +349,13 @@ def audit(guardian, version, commit, mixin_src, placement_src, ids, shell):
     targets = mixin_targets(mixin_src, version)
     ptargets = mixin_targets(placement_src, version)
 
+    # 0.2.0：传送门三件套不实现 SimpleWaterloggedBlock，由独立 mixin 注入 PhaseCapable
+    # （它们没有 WATERLOGGED，只走基接口的熔岩分支）。审计集合里显式补上。
+    portal_hosts = {"nether_portal", "end_portal", "end_gateway"}
+
     runtime = {bid for bid, classes in reg.items()
                if any(set(ancestors(c, types)) & targets for c in classes if c in types)}
+    runtime |= portal_hosts
 
     cache = {}
     shadow, covered, collision, placement = {}, {}, {}, {}
@@ -374,9 +382,9 @@ def audit(guardian, version, commit, mixin_src, placement_src, ids, shell):
             placement.setdefault(owner, []).append(bid)
 
     return {
-        "A": set(hosts), "B": runtime, "C": set(ids), "S": set(shell),
-        "a_b": sorted(set(hosts) - runtime),
-        "b_a": sorted(runtime - set(hosts)),
+        "A": set(hosts) | portal_hosts, "B": runtime, "C": set(ids), "S": set(shell),
+        "a_b": sorted((set(hosts) | portal_hosts) - runtime),
+        "b_a": sorted(runtime - (set(hosts) | portal_hosts)),
         "b_c": sorted(runtime - set(ids)),
         "c_b": sorted(set(ids) - runtime),
         "c_s": sorted(set(ids) - set(shell)),

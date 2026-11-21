@@ -63,13 +63,27 @@ public abstract class FillingPlacementMixin {
         BlockState converted = liquidphase$convert(level, pos, newState);
         if (converted != null) {
             cir.setReturnValue(level.setBlock(pos, converted, flags));
+            return;
+        }
+        // 红石线写进已有的相容宿主格：该格原本没有线（重新放置口径），初始功率 0；
+        // 落地后由 onPlace 立即按邻居重算。方块状态不变，只写旁路表。
+        if (newState.is(Blocks.REDSTONE_WIRE)) {
+            BlockState current = level.getBlockState(pos);
+            if (current.getBlock() instanceof PhaseCapable && PhaseHelper.canAcceptExtra(level, pos, current)) {
+                org.liquidphase.redstone.RedstoneBlocks.setRedstonePhase(level, pos, current);
+                level.updateNeighborsAt(pos, current.getBlock());
+                cir.setReturnValue(true);
+            }
         }
     }
     //?}
 
     /** {@return 改写后的"宿主 + 填充相"状态；非填充相材料或目标不是可接受宿主时返回 null} */
     private static BlockState liquidphase$convert(Level level, BlockPos pos, BlockState newState) {
-        Phase filling = liquidphase$fillingOf(newState);
+        if (newState.is(Blocks.REDSTONE_WIRE)) {
+            return null; // 红石相不占状态，在调用点直接写旁路表。
+        }
+        Phase filling = PhaseAbsorption.phaseOfBlock(newState);
         if (filling == null) {
             return null;
         }
@@ -79,17 +93,5 @@ public abstract class FillingPlacementMixin {
             return null;
         }
         return PhaseHelper.withPhase(current, filling);
-    }
-
-    /** {@return 向某状态写入的填充相；非填充相材料返回 null} */
-    private static Phase liquidphase$fillingOf(BlockState state) {
-        // 红石线**写入宿主格**是"重新放置红石粉"（该格原本没有线）：初始功率 0，
-        // 与单独放置一致；落地后由 onPlace 立即按邻居重算出真实功率，来料状态自带的
-        // POWER 只反映写入者的意图，不作为初始状态。
-        // 对比：宿主**落进线格**（吸收已存在的线）初始功率沿用原线，不走本口径。
-        if (state.is(Blocks.REDSTONE_WIRE)) {
-            return Phase.REDSTONE_0;
-        }
-        return PhaseAbsorption.phaseOfBlock(state);
     }
 }

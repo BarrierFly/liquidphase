@@ -8,8 +8,9 @@
   的立方体叠加层（0.1.18 起，整格替换已退役）。内缩覆盖层**不带 cullface**：它的面不在方块边界上，
   原版 cullface 会拿"邻居是否盖住整面"去判断，对台阶/楼梯这类部分覆盖的邻居会错误剔掉
   不该剔的面（0.1.9 的实机 bug）。
-- 红石相外壳：16 条 ``when{filling: redstone_N}`` 的 part，各自指向按功率着色的外壳模型
-  （``gen_redstone_assets.py`` 生成）。外壳是**叠加层**，宿主照常渲染。
+- 动态几何：追加**一条无条件 part** ``liquidphase:block/dynamic``（方案 C）。红石外壳
+  （``gen_redstone_assets.py`` 生成的 16 份 ``redstone_phase_N`` 模型）与元件相由该模型
+  在渲染期按坐标查旁路表后发射，不再写 ``when{filling: redstone_N}`` 条件。
 
 熔岩相不覆盖——由原版流体渲染直接绘制。
 
@@ -48,12 +49,7 @@ OVERLAYS = [
     ("frosted_3", "liquidphase:block/phase_frosted_3"),
 ]
 
-REDSTONE_POWERS = range(16)
-
-
-def redstone_model(power):
-    """按功率着色的外壳模型（由 tools/gen_redstone_assets.py 生成）。"""
-    return "liquidphase:block/redstone_phase_%d" % power
+DYNAMIC_MODEL = "liquidphase:block/dynamic"
 
 
 # ---------------------------------------------------------------------------
@@ -261,22 +257,17 @@ def convert(state_json, geometry):
     # 0.1.18 起**所有宿主都不再门控**：宿主 part 一律保持渲染，相只作为内缩叠加层，
     # 因此片段不再产出 gates；键位保留为空列表（Java 侧对旧片段/旧包的 gate
     # 匹配继续兼容）。
+    # 方案 C（0.2.0）起：不再有 16 条 `when{filling: redstone_N}` 的 part。
+    # 红石外壳与元件相由**按坐标发射**的动态模型提供，这里只追加一条**无条件** part：
+    #   - ≤1.21.1：`liquidphase:block/dynamic` 被自定义 UnbakedModel 接管，emitBlockQuads 里发几何；
+    #   - 1.21.10+：该 part 是空模型，几何由包在 BlockStateModel 外层的动态模型发射。
     fragment_parts = [{"when": when, "apply": {"model": model}} for value, model, when in overlays]
+    fragment_parts.append({"apply": {"model": DYNAMIC_MODEL}})
 
     for value, model, when in overlays:
         parts.append({"when": when, "apply": {"model": model}})
+    parts.append({"apply": {"model": DYNAMIC_MODEL}})
 
-    # 红石外壳对**全部**宿主生成（不只 41 个楼梯/台阶/墙/栅栏）。
-    # 任何相容宿主都能被写入 phase=redstone_*；只给一部分生成时，其余宿主
-    # （玻璃板、铁栏杆、梯子、锁链、树叶……这些"透明方块"最明显）含相了却看不到红石。
-    # 16 条 part 各自指向按功率着色的模型（0 档暗、15 档亮，对齐原版红石线）。
-    for power in REDSTONE_POWERS:
-        shell_part = {
-            "when": {"filling": "redstone_%d" % power},
-            "apply": {"model": redstone_model(power)},
-        }
-        parts.append(shell_part)
-        fragment_parts.append({"when": dict(shell_part["when"]), "apply": dict(shell_part["apply"])})
     fragment = {"parts": fragment_parts, "gates": []}
     return {"multipart": parts}, mode, fragment
 
@@ -288,7 +279,6 @@ def convert(state_json, geometry):
 # ---------------------------------------------------------------------------
 FILLING_VALUES = frozenset(
     ["none", "lava", "obsidian", "ice", "frosted_0", "frosted_1", "frosted_2", "frosted_3"]
-    + ["redstone_%d" % i for i in REDSTONE_POWERS]
 )
 
 

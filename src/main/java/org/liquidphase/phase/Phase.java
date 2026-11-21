@@ -4,18 +4,19 @@ import net.minecraft.util.Mth;
 import net.minecraft.util.StringRepresentable;
 
 /**
- * 相（phase）枚举：一格内"另一相"的取值。
+ * 相（phase）类别枚举（方案 C，0.2.0 起）。
  * <p>
- * 语义（规划 §2.3）：原版 {@code waterlogged} 布尔保留不动，水相 = 原版含水；
- * 本属性表达第二相，与 {@code waterlogged=true} 互斥。相之间存在转化链：
- * {@code lava}→（遇水凝固）→{@code obsidian}；{@code ice}/{@code frosted_*}→（融化）→水相。
- * 霜冰的渐进裂纹（原版 FrostedIce 的 AGE 0–3）用 frosted_0–3 取值表达，
- * 避免再乘一个 AGE 属性。
+ * 只保留**必须无坐标回答**的类别：流体态（{@code getFluidState()}）、发光
+ * （{@code getLightEmission()}）、随机刻资格（{@code isRandomlyTicking()}）都拿不到
+ * {@code BlockPos}，所以熔岩/冰/霜冰必须留在状态里；固相碰撞（整格）与破坏保留同理。
  * <p>
- * 红石相（§3.4）用 {@code redstone_0}…{@code redstone_15} **16 个取值编码功率**：
- * 方块本身仍是原来的宿主方块（楼梯/台阶/墙/栅栏……），只是多了一个 phase 值，
- * 不像早先的"组合方块"那样另注册一堆新方块。代价是状态数 ×3（24 个取值）。
- * 26.4 的脆冰（BrittleIce）预留枚举空间，届时追加新取值等价于追加新状态。
+ * 红石相与元件相（中继器/比较器/侦测器）**不占状态值**：它们的参数
+ * （功率/朝向/延迟/模式/供电/锁存）整条存在旁路表 {@link PhaseExtra} 里，
+ * 见 {@code docs/plan-c-elements.md}。这使 {@code filling} 的取值域固定为 8 个，
+ * 2030 年代的元件扩展不再乘状态数。
+ * <p>
+ * 霜冰的渐进裂纹（原版 FrostedIce 的 AGE 0–3）保留为 4 个取值：它是**材质档位**，
+ * 走静态 blockstate 覆盖层，不需要旁路表查询。
  */
 public enum Phase implements StringRepresentable {
     NONE("none"),
@@ -25,33 +26,13 @@ public enum Phase implements StringRepresentable {
     FROSTED_0("frosted_0"),
     FROSTED_1("frosted_1"),
     FROSTED_2("frosted_2"),
-    FROSTED_3("frosted_3"),
-    REDSTONE_0("redstone_0"),
-    REDSTONE_1("redstone_1"),
-    REDSTONE_2("redstone_2"),
-    REDSTONE_3("redstone_3"),
-    REDSTONE_4("redstone_4"),
-    REDSTONE_5("redstone_5"),
-    REDSTONE_6("redstone_6"),
-    REDSTONE_7("redstone_7"),
-    REDSTONE_8("redstone_8"),
-    REDSTONE_9("redstone_9"),
-    REDSTONE_10("redstone_10"),
-    REDSTONE_11("redstone_11"),
-    REDSTONE_12("redstone_12"),
-    REDSTONE_13("redstone_13"),
-    REDSTONE_14("redstone_14"),
-    REDSTONE_15("redstone_15");
+    FROSTED_3("frosted_3");
 
     /** 除 NONE 外的全部取值——注入时按此顺序为每个既有状态追加新状态。 */
     public static final Phase[] FILLED = {
         LAVA, OBSIDIAN, ICE, FROSTED_0, FROSTED_1, FROSTED_2, FROSTED_3,
-        REDSTONE_0, REDSTONE_1, REDSTONE_2, REDSTONE_3, REDSTONE_4, REDSTONE_5,
-        REDSTONE_6, REDSTONE_7, REDSTONE_8, REDSTONE_9, REDSTONE_10, REDSTONE_11,
-        REDSTONE_12, REDSTONE_13, REDSTONE_14, REDSTONE_15,
     };
     public static final int FROSTED_MAX_AGE = 3;
-    public static final int REDSTONE_MAX_POWER = 15;
 
     private final String name;
 
@@ -68,7 +49,7 @@ public enum Phase implements StringRepresentable {
         return this == ICE;
     }
 
-    /** 霜冰的 4 个裂纹阶段（显式区间，不能再用 ordinal 比较——红石取值排在后面）。 */
+    /** 霜冰的 4 个裂纹阶段（显式区间）。 */
     public boolean isFrosted() {
         return ordinal() >= FROSTED_0.ordinal() && ordinal() <= FROSTED_3.ordinal();
     }
@@ -78,14 +59,9 @@ public enum Phase implements StringRepresentable {
         return this.isIce() || this.isFrosted();
     }
 
-    /** 固体相：冰/霜冰/黑曜石（熔岩是流体；红石相不是固相）。 */
+    /** 固体相：冰/霜冰/黑曜石（熔岩是流体）。 */
     public boolean isSolid() {
         return this == OBSIDIAN || this.isFrozen();
-    }
-
-    /** 红石相：功率编码在 phase 取值里。 */
-    public boolean isRedstone() {
-        return ordinal() >= REDSTONE_0.ordinal();
     }
 
     /**
@@ -94,20 +70,10 @@ public enum Phase implements StringRepresentable {
      * 吸收门控（{@code PhaseHelper.canAcceptPhase}）只看这一条：现有填充相可替换 →
      * 任何填充材料（冰/霜冰/黑曜石/熔岩/红石粉，及未来加入的相材料）都可写入；
      * 不可替换 → 按不可放置处理。空格与含水态（水即"现有填充相"）在门控里单独算可替换，
-     * 不走本方法。未来加入可替换相（如脆冰的流体前身）时，只需在这里追加 {@code true}。
+     * 不走本方法。
      */
     public boolean isReplaceableFilling() {
         return this == LAVA;
-    }
-
-    /** {@return 红石相功率 0–15；非红石相返回 0} */
-    public int redstonePower() {
-        return isRedstone() ? ordinal() - REDSTONE_0.ordinal() : 0;
-    }
-
-    /** {@return 指定功率的红石相取值（自动夹到 0–15）} */
-    public static Phase redstone(int power) {
-        return values()[REDSTONE_0.ordinal() + Mth.clamp(power, 0, REDSTONE_MAX_POWER)];
     }
 
     public int frostedAge() {

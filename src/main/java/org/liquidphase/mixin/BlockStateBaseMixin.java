@@ -61,9 +61,11 @@ public abstract class BlockStateBaseMixin {
     private void liquidphase$getDestroyProgress(Player player, net.minecraft.world.level.BlockGetter level, BlockPos pos,
                                                 CallbackInfoReturnable<Float> cir) {
         BlockState self = (BlockState) (Object) this;
-        if (PhaseHelper.isSolidPhase(self) && level instanceof net.minecraft.world.level.Level actualLevel
+        int extra = org.liquidphase.phase.PhaseExtras.get(level, pos);
+        boolean redstone = org.liquidphase.phase.PhaseExtra.isRedstone(extra);
+        if ((PhaseHelper.isSolidPhase(self) || redstone) && level instanceof net.minecraft.world.level.Level actualLevel
             && PhaseTargeting.isPhaseTarget(player, actualLevel, pos)) {
-            cir.setReturnValue(PhaseTargeting.pseudoState(self).getDestroyProgress(player, level, pos));
+            cir.setReturnValue(PhaseTargeting.pseudoState(self, extra).getDestroyProgress(player, level, pos));
         }
     }
 
@@ -79,8 +81,8 @@ public abstract class BlockStateBaseMixin {
             return;
         }
         boolean ticks;
-        if (phase == Phase.LAVA || phase == Phase.OBSIDIAN || phase.isRedstone()) {
-            // 熔岩相复刻火蔓延（决策点 D6）；黑曜石相/红石相不需要随机刻。
+        if (phase == Phase.LAVA || phase == Phase.OBSIDIAN) {
+            // 熔岩相复刻火蔓延（决策点 D6）；黑曜石相不需要随机刻。
             ticks = phase == Phase.LAVA;
         } else if (phase == Phase.ICE) {
             ticks = true;
@@ -120,8 +122,11 @@ public abstract class BlockStateBaseMixin {
         if (PhaseHelper.getPhase(self).isFrosted()) {
             PhaseHelper.frostedScheduledTick(level, pos, self, random);
         }
-        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {
+        int extra = org.liquidphase.phase.PhaseExtras.get(level, pos);
+        if (org.liquidphase.phase.PhaseExtra.isRedstone(extra)) {
             org.liquidphase.redstone.RedstoneBlocks.tick(level, pos, self);
+        } else if (org.liquidphase.phase.PhaseExtra.isElement(extra)) {
+            org.liquidphase.element.ElementBlocks.tick(level, pos, self, extra);
         }
     }
 
@@ -130,12 +135,12 @@ public abstract class BlockStateBaseMixin {
         BlockState self = (BlockState) (Object) this;
         PhaseHelper.scheduleFrostTickIfNeeded(level, pos, self);
         // 红石相落地（无论哪条组装路径、无论初始功率写的是 0 还是原线功率）一律立即
-        // 按邻居重算——镜像原版红石线 onPlace → updatePowerStrength：以初始状态组合
-        // 之后本来就该重算，否则状态就错了（初始功率只决定写入瞬间的取值，真实功率
-        // 由邻居结算出来）。终止性：updatePower 只在功率真的变了才 setBlock，
-        // setBlock 触发的下一次 onPlace 发现功率已一致即停；仅服务端执行。
-        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {
+        // 按邻居重算——镜像原版红石线 onPlace → updatePowerStrength。
+        int extra = org.liquidphase.phase.PhaseExtras.get(level, pos);
+        if (org.liquidphase.phase.PhaseExtra.isRedstone(extra)) {
             org.liquidphase.redstone.RedstoneBlocks.neighborChanged(level, pos, self);
+        } else if (org.liquidphase.phase.PhaseExtra.isElement(extra) && level instanceof ServerLevel serverLevel) {
+            org.liquidphase.element.ElementBlocks.refreshLock(serverLevel, pos, self, extra);
         }
     }
 
@@ -148,35 +153,46 @@ public abstract class BlockStateBaseMixin {
     /*@Inject(method = "onRemove", at = @At("HEAD"))
     private void liquidphase$onRemove(Level level, BlockPos pos, BlockState newState, boolean movedByPiston, CallbackInfo ci) {
         BlockState self = (BlockState) (Object) this;
-        if (!movedByPiston && newState.isAir() && level.getBlockState(pos).isAir()) {
-            if (PhaseHelper.isSolidPhase(self)) {
-                level.setBlock(pos, PhaseHelper.materializedPhase(self), Block.UPDATE_ALL);
-            } else if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {
-                org.liquidphase.redstone.RedstoneBlocks.materializeWire(level, pos, self);
-            }
-        }
+        liquidphase$removed(level, pos, self, movedByPiston);
     }
      *///?} else {
     @Inject(method = "affectNeighborsAfterRemoval", at = @At("HEAD"))
     private void liquidphase$affectNeighborsAfterRemoval(ServerLevel level, BlockPos pos, boolean movedByPiston, CallbackInfo ci) {
         BlockState self = (BlockState) (Object) this;
-        if (!movedByPiston && level.getBlockState(pos).isAir()) {
-            if (PhaseHelper.isSolidPhase(self)) {
-                level.setBlock(pos, PhaseHelper.materializedPhase(self), Block.UPDATE_ALL);
-            } else if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {
-                org.liquidphase.redstone.RedstoneBlocks.materializeWire(level, pos, self);
-            }
-        }
+        liquidphase$removed(level, pos, self, movedByPiston);
     }
     //?}
 
-    // 26.3：红石线连接判定经 BSB.shouldRedstoneWireConnectTo（§3.4）
+    /**
+     * 方块被移除：相实体化（固体相留方块 / 红石相留红石线），并清掉旁路条目。
+     * <p>
+     * 旁路表条目在 {@code LevelChunkMixin} 里**不会**因为换成空气而提前清掉
+     * （否则这里读不到红石功率），所以本方法是红石/元件条目的正常清理点。
+     */
+    private void liquidphase$removed(Level level, BlockPos pos, BlockState self, boolean movedByPiston) {
+        int extra = org.liquidphase.phase.PhaseExtras.get(level, pos);
+        boolean hasExtra = !org.liquidphase.phase.PhaseExtra.isEmpty(extra);
+        if (!movedByPiston && level.getBlockState(pos).isAir()) {
+            if (PhaseHelper.isSolidPhase(self)) {
+                level.setBlock(pos, PhaseHelper.materializedPhase(self), Block.UPDATE_ALL);
+            } else if (org.liquidphase.phase.PhaseExtra.isRedstone(extra)) {
+                org.liquidphase.redstone.RedstoneBlocks.materializeWire(level, pos,
+                    org.liquidphase.phase.PhaseExtra.power(extra));
+            }
+        }
+        if (hasExtra) {
+            // 元件/红石条目不随方块移动，活塞推动时直接丢弃（README 已知限制）。
+            org.liquidphase.phase.PhaseExtras.set(level, pos, org.liquidphase.phase.PhaseExtra.EMPTY);
+        }
+    }
+
+    // 26.3：红石线连接判定经 BSB.shouldRedstoneWireConnectTo
     //? if 26.3 {
     /*@Inject(method = "shouldRedstoneWireConnectTo", at = @At("HEAD"), cancellable = true)
     private void liquidphase$shouldRedstoneWireConnectTo(net.minecraft.world.level.BlockGetter level, BlockPos pos,
                                                          net.minecraft.core.Direction direction, CallbackInfoReturnable<Boolean> cir) {
         BlockState self = (BlockState) (Object) this;
-        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {
+        if (org.liquidphase.phase.PhaseExtra.isRedstone(org.liquidphase.phase.PhaseExtras.get(level, pos))) {
             cir.setReturnValue(direction == null || org.liquidphase.redstone.RedstoneBlocks.exposed(self, direction.getOpposite()));
         }
     }
@@ -204,7 +220,7 @@ public abstract class BlockStateBaseMixin {
     }
     //?}
 
-    /** 邻居变化的三件事（相凝固/霜冰相邻/红石相重算/炼药锅）——签名差异只在上面的注入。 */
+    /** 邻居变化：相凝固/霜冰相邻/红石相重算/元件重算/炼药锅——签名差异只在上面的注入。 */
     private void liquidphase$onNeighbor(Level level, BlockPos pos, Block neighborBlock) {
         BlockState self = (BlockState) (Object) this;
         if (level instanceof ServerLevel serverLevel) {
@@ -216,8 +232,11 @@ public abstract class BlockStateBaseMixin {
                 PhaseHelper.scheduleLavaFlowTick(serverLevel, pos, self);
             }
             PhaseHelper.frostedNeighborChanged(level, pos, self, neighborBlock);
-            if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {
+            int extra = org.liquidphase.phase.PhaseExtras.get(level, pos);
+            if (org.liquidphase.phase.PhaseExtra.isRedstone(extra)) {
                 org.liquidphase.redstone.RedstoneBlocks.neighborChanged(serverLevel, pos, self);
+            } else if (org.liquidphase.phase.PhaseExtra.isElement(extra)) {
+                org.liquidphase.element.ElementBlocks.neighborChanged(serverLevel, pos, self, extra);
             }
             org.liquidphase.cauldron.CauldronBehaviors.handleNeighborChanged(serverLevel, pos, self);
         }

@@ -22,6 +22,10 @@
     "ItemMixin",
     "MultifaceShapeMixin",
     "PhaseCapableMixin",
+    "PortalPhaseCapableMixin",
+    "LevelStorageMixin",
+    "LevelChunkExtraMixin",
+    "ElementShapeUpdateMixin",
     "PhaseRenderShapeMixin",
     "PlacementMixin",
     "RedstoneWireReplaceMixin",
@@ -42,3 +46,4 @@
     "defaultRequire": 1
   }
 }
+
