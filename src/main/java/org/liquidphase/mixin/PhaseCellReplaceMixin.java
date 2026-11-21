@@ -16,8 +16,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * 让"相材料所在格"在「要放进去的是相容宿主方块」时算作可替换（0.2.3 起从线格推广到
- * 全部相材料格：红石线 / 冰 / 霜冰 / 黑曜石；熔岩源与水源本来就是原版可替换格）。
- * 落位后的相写入由 {@code BlockItemMixin} 的 placeBlock 捕获统一完成。
+ * 全部相材料格：红石线 / 冰 / 霜冰 / 黑曜石 / 真实元件方块（中继器/比较器/侦测器）；
+ * 熔岩源与水源本来就是原版可替换格）。落位后的相写入由 {@code BlockItemMixin} 的
+ * placeBlock 捕获统一完成。
  * <p>
  * <b>为什么必须在这一层</b>：{@code BlockState.canBeReplaced(BlockPlaceContext)} 是唯一
  * 的状态级分发点——它 {@code invokevirtual getBlock().canBeReplaced(state, context)}。
@@ -54,7 +55,9 @@ public abstract class PhaseCellReplaceMixin {
         BlockState self = (BlockState) (Object) this;
         boolean wire = self.is(Blocks.REDSTONE_WIRE);
         boolean material = !wire && PhaseAbsorption.phaseOfCell(self) != null;
-        if (!wire && !material) {
+        // 真实元件方块（中继器/比较器/侦测器）也是相材料格（0.2.3）。
+        boolean element = !wire && !material && org.liquidphase.element.ElementBlocks.isElementBlock(self);
+        if (!wire && !material && !element) {
             return;
         }
         // Client-side prediction must wait for the server handshake: on a vanilla server the

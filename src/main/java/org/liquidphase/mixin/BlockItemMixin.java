@@ -55,6 +55,10 @@ public abstract class BlockItemMixin {
     /** 放置前捕获的相材料格对应的填充相（null = 落点格不是相材料本体格）。 */
     private static final ThreadLocal<Phase> LIQUIDPHASE$CELL_PHASE = new ThreadLocal<>();
 
+    /** 放置前捕获的真实元件方块对应条目（EMPTY = 落点格不是元件方块）。 */
+    private static final ThreadLocal<Integer> LIQUIDPHASE$CELL_ELEMENT =
+        ThreadLocal.withInitial(() -> PhaseExtra.EMPTY);
+
     /**
      * 落点格是"相材料所在格"（红石线 / 冰 / 霜冰 / 黑曜石 / 熔岩源）时，把要吸收的相记下来；
      * 真正写入在 {@link #liquidphase$afterPlaceBlock} 的 RETURN 注入里（那时宿主方块已经换好）。
@@ -68,6 +72,7 @@ public abstract class BlockItemMixin {
     private BlockState liquidphase$captureCellPhase(BlockState state, BlockPlaceContext context) {
         LIQUIDPHASE$WIRE_POWER.set(-1);
         LIQUIDPHASE$CELL_PHASE.remove();
+        LIQUIDPHASE$CELL_ELEMENT.set(PhaseExtra.EMPTY);
         if (state == null || context == null || !PhaseHelper.hasPhaseProperty(state)) {
             return state;
         }
@@ -78,10 +83,15 @@ public abstract class BlockItemMixin {
                 ? target.getValue(BlockStateProperties.POWER) : 0);
             return state;
         }
-        // 相材料格（冰/霜冰/黑曜石/熔岩源；替代原 PlacementMixin 的 getStateForPlacement 改写）。
+        // 相材料格（冰/霜冰/黑曜石/熔岩源/真实元件方块；替代原 PlacementMixin 的改写）。
         Phase material = PhaseAbsorption.phaseOfCell(target);
         if (material != null) {
             LIQUIDPHASE$CELL_PHASE.set(material);
+            return state;
+        }
+        int element = ElementBlocks.extraOfBlock(target);
+        if (!PhaseExtra.isEmpty(element)) {
+            LIQUIDPHASE$CELL_ELEMENT.set(element);
         }
         return state;
     }
@@ -89,10 +99,12 @@ public abstract class BlockItemMixin {
     @Inject(method = "placeBlock", at = @At("RETURN"))
     private void liquidphase$afterPlaceBlock(BlockPlaceContext context, BlockState state, CallbackInfoReturnable<Boolean> cir) {
         Phase cellPhase = LIQUIDPHASE$CELL_PHASE.get();
+        int cellElement = LIQUIDPHASE$CELL_ELEMENT.get();
         int power = LIQUIDPHASE$WIRE_POWER.get();
         LIQUIDPHASE$WIRE_POWER.set(-1);
         LIQUIDPHASE$CELL_PHASE.remove();
-        if (!cir.getReturnValue() || (cellPhase == null && power < 0)) {
+        LIQUIDPHASE$CELL_ELEMENT.set(PhaseExtra.EMPTY);
+        if (!cir.getReturnValue() || (cellPhase == null && power < 0 && PhaseExtra.isEmpty(cellElement))) {
             return;
         }
         Level level = context.getLevel();
@@ -103,8 +115,10 @@ public abstract class BlockItemMixin {
         }
         if (power >= 0) {
             RedstoneBlocks.setRedstonePhase(level, pos, power);
-        } else {
+        } else if (cellPhase != null) {
             PhaseHelper.fillWithPhase(level, pos, placed, cellPhase);
+        } else {
+            ElementBlocks.absorbBlock(level, pos, placed, cellElement);
         }
     }
 
@@ -137,17 +151,20 @@ public abstract class BlockItemMixin {
         }
     }
 
-    /** 潜行右键宿主：按手持物品放中继器/比较器/侦测器。 */
+    /**
+     * 右键宿主：按手持物品装配中继器/比较器/侦测器（0.2.3 起与红石粉等材料相同，
+     * **普通右键**即装配；潜行右键走原版"放在宿主上面一格"，保留需要真实元件方块的情况）。
+     */
     private boolean liquidphase$placeElement(Level level, BlockPlaceContext context) {
         Player player = context.getPlayer();
-        if (player == null || !player.isShiftKeyDown()) {
+        if (player == null || player.isShiftKeyDown()) {
             return false;
         }
         PhaseExtra.Kind kind = ElementBlocks.kindOfItem(context.getItemInHand());
         if (kind == PhaseExtra.Kind.NONE) {
             return false;
         }
-        // 目标必须取**命中方块**（潜行右键的宿主）。不能用 context.getClickedPos()：
+        // 目标必须取**命中方块**（右键的宿主）。不能用 context.getClickedPos()：
         // 原版 BlockPlaceContext 对不可替换方块（楼梯/下半砖等宿主都是）返回
         // hitPos + 点击面（=宿主旁边的空气格），拿它查宿主永远是 AIR，装配静默失效、
         // 落回原版把真元件方块放在宿主上面（0.2.1 真实点击回归抓到）。

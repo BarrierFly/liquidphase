@@ -10,9 +10,11 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import org.liquidphase.element.ElementBlocks;
 import org.liquidphase.phase.Phase;
 import org.liquidphase.phase.PhaseAbsorption;
 import org.liquidphase.phase.PhaseCapable;
+import org.liquidphase.phase.PhaseExtra;
 import org.liquidphase.phase.PhaseHelper;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -20,9 +22,8 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
 
 /**
- * 下落方块落位（{@code FallingBlockEntity.tick()}）落进"相材料格"的放行（0.2.3 起从线格
- * 推广到全部相材料格：红石线 / 冰 / 霜冰 / 黑曜石 / 熔岩源；熔岩源/水源原版可替换，
- * 冰/霜冰/黑曜石由 {@link PhaseCellReplaceMixin} 放行）。
+ * 下落方块落位（{@code FallingBlockEntity.tick()}）落进"相材料格"的放行与吸收（0.2.3 起从线格
+ * 推广到全部相材料格：红石线 / 冰 / 霜冰 / 黑曜石 / 熔岩源 / 真实元件方块）。
  * <p>
  * <b>这条路径为什么单独处理</b>：下落方块落位<b>完全不经过</b> {@code BlockItem.place}，
  * 而是自己算一次
@@ -38,10 +39,10 @@ import org.spongepowered.asm.mixin.injection.Redirect;
  * "要放的是相容宿主"。其它下落方块（沙子、砂砾、混凝土粉末……）保持
  * {@code ItemStack.EMPTY}，行为与原版完全一致，仍然会在红石线上弹成物品。
  * <p>
- * 落位写方块时一并写入吸收到的相：线格继承原线功率；相材料格走
- * {@code PhaseHelper.fillWithPhase}（带 canAcceptPhase 门控与熔岩流体刻排程）。
- * 下落方块不走 {@code BlockItemMixin.placeBlock}，那条捕获在这里不会触发，只能在
- * {@code setBlock} 这一处分流。
+ * 落位写方块时一并写入吸收到的相：线格继承原线功率；材料格走
+ * {@code PhaseHelper.fillWithPhase}；真实元件方块走 {@code ElementBlocks.absorbBlock}
+ * （继承朝向/延迟/模式/锁定/供电）。下落方块不走 {@code BlockItemMixin.placeBlock}，
+ * 那条捕获在这里不会触发，只能在 {@code setBlock} 这一处分流。
  * <p>
  * 两个注入都用 {@code require = 1}：原版 {@code tick()} 每个版本都调这两处，
  * 万一某个版本没命中就该构建/启动失败，而不是静默退回"看起来正常、其实没生效"。
@@ -52,10 +53,12 @@ public abstract class FallingBlockIntoWireMixin {
     @Shadow
     public abstract BlockState getBlockState();
 
-    /** {@return 落点格是否装着"会被宿主吸收的相材料"（线格与熔岩源都计入）} */
+    /** {@return 落点格是否装着"会被宿主吸收的相材料/元件方块"（线格计入）} */
     private static boolean liquidphase$isPhaseCell(Level level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
-        return state.is(Blocks.REDSTONE_WIRE) || PhaseAbsorption.phaseOfCell(state) != null;
+        return state.is(Blocks.REDSTONE_WIRE)
+            || PhaseAbsorption.phaseOfCell(state) != null
+            || ElementBlocks.isElementBlock(state);
     }
 
     /** 把落位判定用的空物品上下文换成"下落方块自己的物品"上下文。 */
@@ -87,25 +90,19 @@ public abstract class FallingBlockIntoWireMixin {
             ? new ItemStack(item) : ItemStack.EMPTY;
     }
 
-    /**
-     * 落位写方块后把原格的相写进宿主（下落方块不走 {@code BlockItem.placeBlock}）：
-     * 线格继承原线功率；相材料格吸收为填充相。
-     */
-    private boolean liquidphase$writeWithExtra(Level level, BlockPos pos, BlockState state, int flags) {
-        BlockState landing = level.getBlockState(pos);
+    /** 落位后按原格内容写相（线格功率 / 材料相 / 元件条目）。 */
+    private static void liquidphase$writeCellPhase(Level level, BlockPos pos, BlockState landing) {
         boolean wire = landing.is(Blocks.REDSTONE_WIRE);
         int power = wire ? landing.getValue(BlockStateProperties.POWER) : -1;
         Phase material = wire ? null : PhaseAbsorption.phaseOfCell(landing);
-        boolean written = level.setBlock(pos, state, flags);
-        if (written && state.getBlock() instanceof PhaseCapable
-            && org.liquidphase.sync.PhaseSyncState.canMutateWorld(level)) {
-            if (wire) {
-                org.liquidphase.redstone.RedstoneBlocks.setRedstonePhase(level, pos, power);
-            } else if (material != null) {
-                PhaseHelper.fillWithPhase(level, pos, level.getBlockState(pos), material);
-            }
+        int element = wire || material != null ? PhaseExtra.EMPTY : ElementBlocks.extraOfBlock(landing);
+        if (wire) {
+            org.liquidphase.redstone.RedstoneBlocks.setRedstonePhase(level, pos, power);
+        } else if (material != null) {
+            PhaseHelper.fillWithPhase(level, pos, level.getBlockState(pos), material);
+        } else if (!PhaseExtra.isEmpty(element)) {
+            ElementBlocks.absorbBlock(level, pos, level.getBlockState(pos), element);
         }
-        return written;
     }
 
     //? if 26.3 {
@@ -116,17 +113,10 @@ public abstract class FallingBlockIntoWireMixin {
         require = 1)
     private boolean liquidphase$writeWithPhase(Level level, BlockPos pos, BlockState state) {
         BlockState landing = level.getBlockState(pos);
-        boolean wire = landing.is(Blocks.REDSTONE_WIRE);
-        int power = wire ? landing.getValue(BlockStateProperties.POWER) : -1;
-        Phase material = wire ? null : PhaseAbsorption.phaseOfCell(landing);
         boolean written = level.setBlockAndUpdate(pos, state);
         if (written && state.getBlock() instanceof PhaseCapable
             && org.liquidphase.sync.PhaseSyncState.canMutateWorld(level)) {
-            if (wire) {
-                org.liquidphase.redstone.RedstoneBlocks.setRedstonePhase(level, pos, power);
-            } else if (material != null) {
-                PhaseHelper.fillWithPhase(level, pos, level.getBlockState(pos), material);
-            }
+            liquidphase$writeCellPhase(level, pos, landing);
         }
         return written;
     }
@@ -137,7 +127,13 @@ public abstract class FallingBlockIntoWireMixin {
             target = "Lnet/minecraft/world/level/Level;setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z"),
         require = 1)
     private boolean liquidphase$writeWithPhase(Level level, BlockPos pos, BlockState state, int flags) {
-        return liquidphase$writeWithExtra(level, pos, state, flags);
+        BlockState landing = level.getBlockState(pos);
+        boolean written = level.setBlock(pos, state, flags);
+        if (written && state.getBlock() instanceof PhaseCapable
+            && org.liquidphase.sync.PhaseSyncState.canMutateWorld(level)) {
+            liquidphase$writeCellPhase(level, pos, landing);
+        }
+        return written;
     }
     //?}
 }

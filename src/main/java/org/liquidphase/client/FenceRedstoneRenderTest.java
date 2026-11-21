@@ -298,7 +298,8 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
             Blocks.REDSTONE_BLOCK.defaultBlockState());
         level.updateNeighborsAt(repeaterPos, Blocks.SMOOTH_STONE_SLAB);
         // 侦测器观察面（EAST）邻居变化：updateShape → 2 tick 后 powered。
-        BlockPos observerPos = origin.offset(4, 0, 21);
+        // 坐标必须与上面元件场景一致（x+36）；旧值 x+4 差 32 格，邻居变化从未落到侦测器上。
+        BlockPos observerPos = origin.offset(36, 0, 21);
         level.setBlockAndUpdate(observerPos.relative(net.minecraft.core.Direction.EAST),
             Blocks.STONE.defaultBlockState());
     }

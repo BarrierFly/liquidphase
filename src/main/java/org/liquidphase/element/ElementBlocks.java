@@ -76,6 +76,60 @@ public final class ElementBlocks {
         };
     }
 
+    /**
+     * {@return 真实元件方块状态对应的旁路条目（kind + 朝向/延迟/模式/锁定/供电）；不是元件方块返回 EMPTY}
+     * <p>
+     * 0.2.3 的"相材料格"口径：中继器/比较器/侦测器方块本身也能被宿主吸收
+     * （宿主放进它所在的格、setBlock 写进宿主格、下落宿主落进去），参数完整继承该方块的状态。
+     * 朝向语义与装配一致：中继器/比较器 {@code FACING} = 输入面；侦测器 {@code FACING} = 观察面。
+     */
+    public static int extraOfBlock(BlockState state) {
+        net.minecraft.world.level.block.Block block = state.getBlock();
+        if (block instanceof net.minecraft.world.level.block.RepeaterBlock) {
+            return PhaseExtra.encode(PhaseExtra.Kind.REPEATER, 0,
+                state.getValue(net.minecraft.world.level.block.RepeaterBlock.FACING),
+                state.getValue(net.minecraft.world.level.block.RepeaterBlock.DELAY) - 1,
+                false,
+                state.getValue(net.minecraft.world.level.block.RepeaterBlock.LOCKED),
+                state.getValue(net.minecraft.world.level.block.RepeaterBlock.POWERED));
+        }
+        if (block instanceof net.minecraft.world.level.block.ComparatorBlock) {
+            return PhaseExtra.encode(PhaseExtra.Kind.COMPARATOR, 0,
+                state.getValue(net.minecraft.world.level.block.ComparatorBlock.FACING),
+                0,
+                state.getValue(net.minecraft.world.level.block.ComparatorBlock.MODE)
+                    == net.minecraft.world.level.block.state.properties.ComparatorMode.SUBTRACT,
+                false,
+                state.getValue(net.minecraft.world.level.block.ComparatorBlock.POWERED));
+        }
+        if (block instanceof net.minecraft.world.level.block.ObserverBlock) {
+            return PhaseExtra.encode(PhaseExtra.Kind.OBSERVER, 0,
+                state.getValue(net.minecraft.world.level.block.ObserverBlock.FACING),
+                0, false, false,
+                state.getValue(net.minecraft.world.level.block.ObserverBlock.POWERED));
+        }
+        return PhaseExtra.EMPTY;
+    }
+
+    /** {@return 该状态是否是真实元件方块（可被宿主吸收的相材料格）} */
+    public static boolean isElementBlock(BlockState state) {
+        return !PhaseExtra.isEmpty(extraOfBlock(state));
+    }
+
+    /** 吸收真实元件方块到宿主格：清材料相/含水，再写入继承来的条目。 */
+    public static boolean absorbBlock(Level level, BlockPos pos, BlockState host, int extra) {
+        if (PhaseExtra.isEmpty(extra)) {
+            return false;
+        }
+        BlockState stripped = PhaseHelper.withoutFillingAndWater(host);
+        if (stripped != host) {
+            level.setBlock(pos, stripped, net.minecraft.world.level.block.Block.UPDATE_ALL);
+        }
+        PhaseExtras.set(level, pos, extra);
+        level.updateNeighborsAt(pos, level.getBlockState(pos).getBlock());
+        return true;
+    }
+
     public static boolean hasElement(BlockGetter level, BlockPos pos) {
         return PhaseExtra.isElement(PhaseExtras.get(level, pos));
     }

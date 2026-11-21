@@ -42,7 +42,7 @@
 | 旁路表同步 | `sync/PhaseExtraSync.java`（`extra_request` / `extra_chunk` / `extra_update`）+ `sync/PhaseExtraClientSync.java`（区块加载/握手/Level 更换请求 + 标脏） |
 | 红石信号与放置 | `redstone/RedstoneBlocks.java`；`mixin/RedstoneSignalMixin.java`；红石线连接 `mixin/RedStoneWireBlockMixin`（≤1.21.11）/ `BlockStateBaseMixin.shouldRedstoneWireConnectTo`（26.3）；点粉/宿主进线格 `mixin/BlockItemMixin` + `mixin/RedstoneWireReplaceMixin`；下落方块 `mixin/FallingBlockIntoWireMixin` |
 | 活塞路径与弹出物品（0.2.3） | `phase/PistonPhaseOps.java`（破坏列表线程内标记 + 移动状态剥相）+ `mixin/PistonBaseBlockMixin.java`（`moveBlocks` 两处重定向）+ `phase/PhaseDrops.java`（"相 → 弹出物品"纯函数）；黑曜石相推不动在 `BlockStateBaseMixin.getPistonPushReaction` |
-| 元件相（中继器/比较器/侦测器） | `element/ElementBlocks.java`（放置/破坏/信号/计划刻/锁存）+ `element/ElementRenderSupport.java`（子模型 id / 旋转 / 逐列抬升）+ `mixin/ElementShapeUpdateMixin.java`（状态级 `updateShape`） |
+| 元件相（中继器/比较器/侦测器） | `element/ElementBlocks.java`（放置/破坏/信号/计划刻/锁存；`extraOfBlock` 让真实元件方块成为可吸收的相材料格）+ `element/ElementRenderSupport.java`（子模型 id / 旋转 / 逐列抬升）+ `mixin/ElementShapeUpdateMixin.java`（状态级 `updateShape`） |
 | 旁路表一致性 | `mixin/LevelChunkExtraMixin.java`（方块被换成另一个方块时清条目）；`BlockStateBaseMixin` 的 onRemove/放置路径（写 `filling != none` 时清条目） |
 | 动态渲染（两代 API） | `client/PhaseDynamicModelLegacy.java`（≤1.21.1，接管 `liquidphase:block/dynamic`）/ `client/PhaseDynamicModelModern.java`（1.21.10+，包装宿主 `BlockStateModel`） |
 | 资源包兼容合并（§3.7，0.1.17） | `client/PhasePackMerge.java`（ResourceManager 代理 + 栈顶合并）+ `client/PhasePackMergeCore.java`（纯 Gson 合并核心）+ `mixin/client/PhaseLoaderMixin.java`（≤1.21.1 挂 `ModelManager.loadBlockStates`，1.21.10+ 挂 `BlockStateModelLoader.loadBlockStates`）+ 片段 `assets/liquidphase/phase_parts/<id>.json`（生成器产出） |
@@ -437,7 +437,7 @@ python tools/audit_host_coverage.py "<guardian 仓库路径>" .
 - 红石粉点宿主 → 该格写入旁路表条目 `PhaseExtra.redstone(0)`（"单独放置"口径，
   `BlockItemMixin` 分支 a0），并把 `filling` 清回 `none`；0.1.21 及以前直接写 15。
 - 相容宿主方块落到红石线所在格 → 宿主写进该格、条目功率沿用原线。
-- 元件相的放置不是"把物品放进线格"，而是**潜行右键宿主上表面**：
+- 元件相的放置不是"把物品放进线格"，而是**普通右键宿主**（0.2.3；潜行保留原版放置）：
   `BlockItemMixin` 在 `place` 之前拦截，`ElementBlocks.hasCavity` 通过后写
   `PhaseExtra.element(...)`；普通右键保持原版"元件放在宿主上面一格"。
 
@@ -744,7 +744,8 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 | 红石相输出 | 指向相邻红石线时 -1；指向灯/活塞时满功率；被宿主覆盖的面不输出 |
 | 红石相信号延迟 | 开关/拆线后**同一 tick** 就更新（不走计划刻） |
 | 瞄准红石外壳挖掘 | 掉红石粉、原地留宿主；瞄准宿主露出部分则正常破坏并留下对应功率红石线 |
-| 潜行右键放元件 | 手持中继器/比较器/侦测器，潜行右键下半砖/下半楼梯上表面 → 元件贴在宿主表面；普通右键仍是原版放在宿主上面一格 |
+| 右键放元件 | 手持中继器/比较器/侦测器，**普通右键**宿主 → 元件贴在宿主表面；**潜行右键**仍是原版放在宿主上面一格 |
+| 元件方块作相材料格 | 宿主放进/写进/落进中继器·比较器·侦测器方块所在格 → 吸收成元件相，继承朝向/延迟/模式/锁定/供电 |
 | 元件放置前提 | 整格方块/上半砖拒绝；已有填充相或旁路条目的格子拒绝 |
 | 破坏元件 | 左键命中元件：清条目 + 掉落对应物品，宿主保留；破坏宿主时元件随宿主消失、不额外掉落 |
 | 元件信号 | 中继器/比较器 FACING = 输入面，输出 = `facing.getOpposite()`；侦测器 FACING = 观察面，观察面邻居变化 2 tick 后翻 powered、再 2 tick 复位；被宿主覆盖的面不输入不输出 |

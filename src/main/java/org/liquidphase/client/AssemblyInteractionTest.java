@@ -66,7 +66,7 @@ public final class AssemblyInteractionTest implements FabricClientGameTest {
             List<List<String>> reports = List.of(
                 testDustOnStairs(context, sp, stairsPos),
                 testStairsIntoWire(context, sp, wirePos, feet),
-                testSneakElements(context, sp, slabPos),
+                testPlainClickElements(context, sp, slabPos),
                 testVanillaFallbacks(context, sp, feet));
             for (List<String> report : reports) {
                 for (String line : report) {
@@ -83,7 +83,7 @@ public final class AssemblyInteractionTest implements FabricClientGameTest {
                 throw new AssertionError("basic assembly broken:\n  " + String.join("\n  ", failures));
             }
             LiquidPhase.LOGGER.info("[assembly] real-click assembly: dust->host, host->wire, "
-                + "sneak element x3, vanilla fallbacks all pass");
+                + "plain element x3, vanilla fallbacks all pass");
         }
     }
 
@@ -181,8 +181,8 @@ public final class AssemblyInteractionTest implements FabricClientGameTest {
         return out;
     }
 
-    /** 场景 3：潜行右键下半砖放中继器/比较器/侦测器 + 中继器真实输出。 */
-    private static List<String> testSneakElements(ClientGameTestContext context, TestSingleplayerContext sp,
+    /** 场景 3：普通右键（不潜行）下半砖装配中继器/比较器/侦测器 + 中继器真实输出。 */
+    private static List<String> testPlainClickElements(ClientGameTestContext context, TestSingleplayerContext sp,
             BlockPos slabPos) {
         List<String> out = new ArrayList<>();
         BlockPos[] cells = {slabPos, slabPos.offset(0, 0, -2), slabPos.offset(0, 0, -4)};
@@ -199,13 +199,13 @@ public final class AssemblyInteractionTest implements FabricClientGameTest {
         PhaseExtra.Kind[] kinds = {PhaseExtra.Kind.REPEATER, PhaseExtra.Kind.COMPARATOR, PhaseExtra.Kind.OBSERVER};
         for (int i = 0; i < kinds.length; i++) {
             BlockPos cell = cells[i];
-            setSneak(context, sp, true);
+            setSneak(context, sp, false);
             giveHeld(context, sp, switch (kinds[i]) {
                 case REPEATER -> new ItemStack(Items.REPEATER);
                 case COMPARATOR -> new ItemStack(Items.COMPARATOR);
                 default -> new ItemStack(Items.OBSERVER);
             });
-            InteractionResult result = click(context, sp, cell, Direction.UP, true);
+            InteractionResult result = click(context, sp, cell, Direction.UP, false);
             context.waitTicks(2);
             int index = i;
             sp.getServer().computeOnServer(server -> {
@@ -219,7 +219,6 @@ public final class AssemblyInteractionTest implements FabricClientGameTest {
                 }
                 return null;
             });
-            setSneak(context, sp, false);
         }
         // 中继器输出端到端：输入面（西）放红石块，输出面（东）放线，等延迟后线应 15。
         BlockPos repeaterCell = cells[0];
@@ -279,7 +278,7 @@ public final class AssemblyInteractionTest implements FabricClientGameTest {
             }
             return null;
         });
-        // (b) 不潜行右键**整格方块**放中继器 → 中继器方块放在其上面一格，无元件条目。
+        // (b) 右键**整格方块**放中继器（非宿主）→ 原版放在其上面一格，无元件条目。
         // （原版中继器要求下方 RIGID 支撑，下半砖顶面不合格，原版本来就不能放，
         // 所以基块必须用整格石头。）
         BlockPos slab2 = feet.offset(-2, 0, -3);

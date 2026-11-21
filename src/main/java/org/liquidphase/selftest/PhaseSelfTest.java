@@ -79,6 +79,7 @@ public final class PhaseSelfTest {
             checkElementPlacement(level, base.offset(40, 1, 6));
             checkEntryWriteClearsWater(level, base.offset(42, 1, 0));
             checkElementPlacementByPlayer(level, base);
+            checkElementBlockAbsorption(level, base);
             checkPistonPhaseBehavior(level, base);
             checkRedstonePhaseInitialState(level, base);
             checkPlaceIntoWire(level, base);
@@ -602,11 +603,11 @@ public final class PhaseSelfTest {
     // ------------------------------------------------------------------
 
     /**
-     * 元件装配的**真实玩家点击**路径（0.2.3）：普通半砖 / 含水半砖 / 含熔岩半砖都要能贴元件，
-     * 且写入时水/熔岩相被清掉（清含水、门控合一）。
+     * 元件装配的**真实玩家点击**路径（0.2.3）：普通右键（不潜行）半砖/含水半砖/含熔岩半砖
+     * 都要能贴元件，且写入时水/熔岩相被清掉；**潜行右键回归原版**（真元件方块放在上面一格）。
      * <p>
      * 与 {@link #checkElementPlacement} 的区别：那个直接调 {@code ElementBlocks.place}，
-     * 绕过了玩家交互层；这里走 {@code ServerPlayerGameMode.useItemOn}（潜行）——
+     * 绕过了玩家交互层；这里走 {@code ServerPlayerGameMode.useItemOn}——
      * 0.2.2 的"getClickedPos 指向空气格"就是靠这一层才暴露的。
      */
     private static void checkElementPlacementByPlayer(ServerLevel level, BlockPos base) {
@@ -624,18 +625,17 @@ public final class PhaseSelfTest {
             level.setBlock(pos, host, Block.UPDATE_ALL);
             PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
 
-            player.setShiftKeyDown(true);
+            player.setShiftKeyDown(false);
             player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
                 new ItemStack(net.minecraft.world.item.Items.REPEATER));
             Vec3 hitVec = new Vec3(pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5);
             BlockHitResult hit = new BlockHitResult(hitVec, Direction.UP, pos, false);
             net.minecraft.world.InteractionResult result = player.gameMode.useItemOn(player, level,
                 player.getMainHandItem(), net.minecraft.world.InteractionHand.MAIN_HAND, hit);
-            player.setShiftKeyDown(false);
 
             BlockState after = level.getBlockState(pos);
             int extra = PhaseExtras.get(level, pos);
-            assertTrue("player element on " + names[i] + " host: sneak-click writes a repeater entry (got "
+            assertTrue("player element on " + names[i] + " host: plain click writes a repeater entry (got "
                     + result + " / " + after.getBlock() + " / " + PhaseExtra.describe(extra) + ")",
                 after.getBlock() == Blocks.STONE_SLAB
                     && PhaseExtra.kind(extra) == PhaseExtra.Kind.REPEATER);
@@ -648,6 +648,79 @@ public final class PhaseSelfTest {
             level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
             level.setBlock(pos.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         }
+
+        // 潜行右键 = 原版：真中继器方块放在宿主上面一格，宿主不留条目。
+        BlockPos sneakPos = base.offset(50, 1, 8);
+        level.setBlock(sneakPos.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(sneakPos, Blocks.STONE_SLAB.defaultBlockState(), Block.UPDATE_ALL);
+        PhaseExtras.set(level, sneakPos, PhaseExtra.EMPTY);
+        level.setBlock(sneakPos.above(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        player.setShiftKeyDown(true);
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
+            new ItemStack(net.minecraft.world.item.Items.REPEATER));
+        Vec3 sneakHit = new Vec3(sneakPos.getX() + 0.5, sneakPos.getY() + 1.0, sneakPos.getZ() + 0.5);
+        player.gameMode.useItemOn(player, level, player.getMainHandItem(),
+            net.minecraft.world.InteractionHand.MAIN_HAND,
+            new BlockHitResult(sneakHit, Direction.UP, sneakPos, false));
+        player.setShiftKeyDown(false);
+        // 下半砖顶面在原版不是中继器的合法支撑（SlabBlock.isFaceSturdy(UP) 对 bottom 为 false），
+        // 所以"原版路径"在这里表现为放置失败——这恰好与装配（写条目 + 消耗物品）可区分。
+        assertTrue("player element: sneak-click does not assemble (vanilla path, no entry, item kept)",
+            PhaseExtras.get(level, sneakPos) == PhaseExtra.EMPTY
+                && level.getBlockState(sneakPos).is(Blocks.STONE_SLAB)
+                && level.getBlockState(sneakPos.above()).isAir()
+                && player.getMainHandItem().is(net.minecraft.world.item.Items.REPEATER));
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+        level.setBlock(sneakPos.above(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(sneakPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(sneakPos.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+    }
+
+    /**
+     * 真实元件方块作为"相材料格"的三条通用路径（0.2.3）：
+     * 宿主放进元件格、setBlock 写进宿主格、下落宿主落进元件格，都要吸收成元件相并继承参数。
+     */
+    private static void checkElementBlockAbsorption(ServerLevel level, BlockPos base) {
+        BlockState repeater = Blocks.REPEATER.defaultBlockState()
+            .setValue(net.minecraft.world.level.block.RepeaterBlock.FACING, Direction.EAST)
+            .setValue(net.minecraft.world.level.block.RepeaterBlock.DELAY, 3)
+            .setValue(net.minecraft.world.level.block.RepeaterBlock.LOCKED, true)
+            .setValue(net.minecraft.world.level.block.RepeaterBlock.POWERED, true);
+        BlockState comparator = Blocks.COMPARATOR.defaultBlockState()
+            .setValue(net.minecraft.world.level.block.ComparatorBlock.FACING, Direction.SOUTH)
+            .setValue(net.minecraft.world.level.block.ComparatorBlock.MODE,
+                net.minecraft.world.level.block.state.properties.ComparatorMode.SUBTRACT);
+
+        // 宿主放进元件所在格（BlockItem.place + 捕获）
+        BlockPos intoPos = base.offset(54, 1, 0);
+        level.setBlock(intoPos, repeater, Block.UPDATE_ALL);
+        BlockState placed = liquidphase$placeBlockInto(level, Blocks.OAK_STAIRS, intoPos, Direction.UP);
+        int extra = PhaseExtras.get(level, intoPos);
+        assertTrue("element cell: host placed into a repeater tile absorbs it (got "
+                + (placed == null ? "null" : placed.getBlock()) + " / " + PhaseExtra.describe(extra) + ")",
+            placed != null && placed.getBlock() == Blocks.OAK_STAIRS
+                && PhaseExtra.kind(extra) == PhaseExtra.Kind.REPEATER
+                && PhaseExtra.facing(extra) == Direction.EAST
+                && PhaseExtra.delay(extra) == 2
+                && PhaseExtra.locked(extra)
+                && PhaseExtra.powered(extra));
+        PhaseExtras.set(level, intoPos, PhaseExtra.EMPTY);
+        level.setBlock(intoPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+        // setBlock 把元件方块写进宿主格（改写层）
+        BlockPos rewritePos = base.offset(54, 1, 2);
+        level.setBlock(rewritePos, Blocks.OAK_STAIRS.defaultBlockState(), Block.UPDATE_ALL);
+        PhaseExtras.set(level, rewritePos, PhaseExtra.EMPTY);
+        level.setBlock(rewritePos, comparator, Block.UPDATE_ALL);
+        int rewriteExtra = PhaseExtras.get(level, rewritePos);
+        assertTrue("element cell: setBlock of a comparator into a host rewrites to an entry (got "
+                + PhaseExtra.describe(rewriteExtra) + ")",
+            level.getBlockState(rewritePos).getBlock() == Blocks.OAK_STAIRS
+                && PhaseExtra.kind(rewriteExtra) == PhaseExtra.Kind.COMPARATOR
+                && PhaseExtra.facing(rewriteExtra) == Direction.SOUTH
+                && PhaseExtra.subtractMode(rewriteExtra));
+        PhaseExtras.set(level, rewritePos, PhaseExtra.EMPTY);
+        level.setBlock(rewritePos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
     }
 
     private static void checkPistonPhaseBehavior(ServerLevel level, BlockPos base) {

@@ -59,6 +59,16 @@ public abstract class FillingPlacementMixin {
                 org.liquidphase.redstone.RedstoneBlocks.setRedstonePhase(level, pos, current);
                 level.updateNeighborsAt(pos, current.getBlock());
                 cir.setReturnValue(true);
+                return;
+            }
+        }
+        // 真实元件方块写进已有的相容宿主格（0.2.3 相材料格口径）：改写为元件条目。
+        int element = org.liquidphase.element.ElementBlocks.extraOfBlock(newState);
+        if (!org.liquidphase.phase.PhaseExtra.isEmpty(element)) {
+            BlockState current = level.getBlockState(pos);
+            if (current.getBlock() instanceof PhaseCapable && PhaseHelper.canAcceptExtra(level, pos, current)
+                && org.liquidphase.element.ElementBlocks.absorbBlock(level, pos, current, element)) {
+                cir.setReturnValue(true);
             }
         }
     }
@@ -83,6 +93,17 @@ public abstract class FillingPlacementMixin {
             if (current.getBlock() instanceof PhaseCapable && PhaseHelper.canAcceptExtra(level, pos, current)) {
                 org.liquidphase.redstone.RedstoneBlocks.setRedstonePhase(level, pos, current);
                 level.updateNeighborsAt(pos, current.getBlock());
+                cir.setReturnValue(true);
+                return;
+            }
+        }
+        // 真实元件方块（中继器/比较器/侦测器）写进已有的相容宿主格（0.2.3 相材料格口径）：
+        // 不覆盖宿主，改写为元件条目并继承该方块的全部参数。
+        int element = org.liquidphase.element.ElementBlocks.extraOfBlock(newState);
+        if (!org.liquidphase.phase.PhaseExtra.isEmpty(element)) {
+            BlockState current = level.getBlockState(pos);
+            if (current.getBlock() instanceof PhaseCapable && PhaseHelper.canAcceptExtra(level, pos, current)
+                && org.liquidphase.element.ElementBlocks.absorbBlock(level, pos, current, element)) {
                 cir.setReturnValue(true);
             }
         }

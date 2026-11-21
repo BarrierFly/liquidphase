@@ -13,7 +13,7 @@
 | 0.2.0 | 1.19.4 / 1.20.1 / 1.21.1 / 1.21.10 / 1.21.11 / 26.3 | 方案 C：`filling` 只保留 8 个材料类别，红石功率与元件参数进旁路表；**旧存档不兼容**（属性取值域变更） |
 | 0.2.1 | 同上 | 修复：红石相/元件相"有时显示有时不显示"——旁路表变化后客户端 section 未重画（`markDirty` 走了 `setBlockDirty` 的 `requiresRender` 门，同状态对象恒 false，静默 no-op） |
 | 0.2.2 | 同上 | 修复：**潜行右键宿主放中继器/比较器/侦测器从未生效**——装配取宿主用了 `getClickedPos()`，而原版对不可替换方块把它指向宿主旁的空气格（真实点击回归 `AssemblyInteractionTest` 抓到） |
-| 0.2.3 | 同上 | **清含水**：往含水宿主写红石/元件条目时水被清掉（一格只表达一个被含相）；**装配门控合一**：元件与红石相共用同一条可写入判定（熔岩相宿主可以贴元件），写条目清熔岩相；**吸收统一**：宿主放进任何相材料格（线/冰/霜冰/黑曜石/熔岩源）都走"可替换 + placeBlock 捕获"一条路径（删 `PlacementMixin` 与落点拦截）；**活塞**：黑曜石填充相一律推不动，相一律不随活塞移动——推动覆盖/破坏列表摧毁时弹出物品（固相掉对应物品、冰/霜冰无物品即消失、熔岩相按液体物品开关掉熔岩物品或消失、红石相掉红石粉、元件掉物品），粘性拉动/剩余清格时任意填充相实体化留在原位 |
+| 0.2.3 | 同上 | **元件装配改为普通右键**（潜行右键回归原版"放在宿主上面一格"）；**真实元件方块是相材料格**（宿主放进/写进/落进元件方块格 → 吸收成元件相并继承朝向/延迟/模式/锁定/供电）；**清含水**：往含水宿主写红石/元件条目时水被清掉（一格只表达一个被含相）；**装配门控合一**：元件与红石相共用同一条可写入判定（熔岩相宿主可以贴元件），写条目清熔岩相；**吸收统一**：宿主放进任何相材料格（线/冰/霜冰/黑曜石/熔岩源）都走"可替换 + placeBlock 捕获"一条路径（删 `PlacementMixin` 与落点拦截）；**活塞**：黑曜石填充相一律推不动，相一律不随活塞移动——推动覆盖/破坏列表摧毁时弹出物品（固相掉对应物品、冰/霜冰无物品即消失、熔岩相按液体物品开关掉熔岩物品或消失、红石相掉红石粉、元件掉物品），粘性拉动/剩余清格时任意填充相实体化留在原位 |
 
 ---
 
@@ -45,8 +45,11 @@
   墙悬挂告示牌、脚手架、`sculk_shrieker`、`big_dripleaf`。
 - **直接挖相**：准星指向相露出的部分时，挖掘速度与掉落按相材质计算（黑曜石需钻石镐；冰/霜冰不精准采集则化水，霜冰无物品）。
 - **所有宿主的相都是"内缩叠加层"**：宿主模型始终照常渲染，相材质是一层比方块小 0.25px 的立方体。
-- **红石相 / 元件相**：红石相在宿主表面显示一层按功率着色的红石外壳；**潜行右键**宿主上表面，
-  手持中继器 / 比较器 / 侦测器可把元件贴到宿主表面。两者都不占用 `filling` 取值，
+- **红石相 / 元件相**：红石相在宿主表面显示一层按功率着色的红石外壳；**普通右键**宿主
+  （不再需要潜行；潜行右键保留原版"放在宿主上面一格"），手持中继器 / 比较器 / 侦测器
+  可把元件贴到宿主表面。真实元件方块本身也是"相材料格"：把宿主放进元件所在格、
+  setBlock 把元件写进宿主格、下落宿主落进元件格，都会吸收成元件相并继承该方块的
+  朝向/延迟/模式/锁定/供电。两者都不占用 `filling` 取值，
   参数存在旁路表里（见下文"方案 C"）。写条目时宿主上的水/熔岩相被清掉（清含水，一格只表达
   一个被含相）；元件与红石粉共用同一条可写入判定（含熔岩相的宿主也可以贴元件；
   冰/霜冰/黑曜石相不可覆盖）。
@@ -100,8 +103,8 @@
 6. 拿红石粉点楼梯 → 楼梯变成**含红石线的楼梯**（红石外壳按功率着色）。
    也可以反过来：把楼梯/台阶等可含水方块**放进红石线所在的那一格**，那条线就被吸进宿主、
    变成含红石相的方块（功率沿原线）。
-7. **潜行右键**宿主上表面（下半砖、下半楼梯等顶面留有空腔的宿主），手持中继器/比较器/侦测器
-   → 元件贴到宿主表面。普通右键仍是原版"把元件放在宿主上面一格"。
+7. **普通右键**宿主（下半砖、下半楼梯等顶面留有空腔的宿主），手持中继器/比较器/侦测器
+   → 元件贴到宿主表面。**潜行右键**仍是原版"把元件放在宿主上面一格"（需要真实元件方块时用它）。
    左键元件先拆元件并掉落对应物品，宿主保留；元件只能放在顶面有空腔的宿主上
    （整格方块、上半砖放不下）。
 8. 拿空桶**左键**水锅/熔岩锅 → 整锅拆空、掉落"水"/"熔岩"物品；**锅本身保留**。
@@ -225,7 +228,7 @@ One block = solid phase (the block itself) + at most one contained phase.
 | 0.2.0 | 1.19.4 / 1.20.1 / 1.21.1 / 1.21.10 / 1.21.11 / 26.3 | Plan C: `filling` keeps only 8 material classes; redstone power and element parameters live in the side table; **old worlds are incompatible** (property value domain changed) |
 | 0.2.1 | same | Fix: redstone/element phase sometimes invisible — a table-only change never re-rendered its section (`markDirty` went through `setBlockDirty`'s `requiresRender` gate, which returns false for an identical state object) |
 | 0.2.2 | same | Fix: **sneak-placing repeaters/comparators/observers into hosts never fired** — assembly looked the host up via `getClickedPos()`, which vanilla points at the air cell next to a non-replaceable host (caught by the new real-click regression `AssemblyInteractionTest`) |
-| 0.2.3 | same | **Water clearing**: writing a redstone/element entry onto a waterlogged host removes the water (one contained phase per cell); **unified assembly gate**: elements share the same acceptability check as dust (lava-filled hosts accept elements), writing an entry clears a lava phase; **unified absorption**: placing a host into any phase-material cell (wire/ice/frosted ice/obsidian/lava source) goes through one replaceable-cell + placeBlock-capture path (`PlacementMixin` and the place-time intercept removed); **pistons**: obsidian-filled hosts are always unpushable, phases never travel with pistons — pushed-over/destroyed cells pop the phase as an item (obsidian drops obsidian, ice/frosted ice vanish, lava drops its liquid item with feature 3 on or vanishes, redstone pops dust, elements drop their item), sticky-pull/clearing materializes any filling in place |
+| 0.2.3 | same | **Element assembly is now a plain right-click** (sneak-click restores vanilla "place on top of the host"); **real element blocks are phase-material cells** (host placed into / setBlock'd into / falling into a repeater-comparator-observer cell absorbs it with facing/delay/mode/locked/powered); **water clearing**: writing a redstone/element entry onto a waterlogged host removes the water (one contained phase per cell); **unified assembly gate**: elements share the same acceptability check as dust (lava-filled hosts accept elements), writing an entry clears a lava phase; **unified absorption**: placing a host into any phase-material cell (wire/ice/frosted ice/obsidian/lava source) goes through one replaceable-cell + placeBlock-capture path (`PlacementMixin` and the place-time intercept removed); **pistons**: obsidian-filled hosts are always unpushable, phases never travel with pistons — pushed-over/destroyed cells pop the phase as an item (obsidian drops obsidian, ice/frosted ice vanish, lava drops its liquid item with feature 3 on or vanishes, redstone pops dust, elements drop their item), sticky-pull/clearing materializes any filling in place |
 
 ### Feature 1 — more logged blocks (required on both sides)
 
@@ -247,8 +250,11 @@ One block = solid phase (the block itself) + at most one contained phase.
   keep the part outside the block; lava adds no collision (it is a fluid) and the redstone phase adds none either.
 - **Mining the phase directly**: when the crosshair points at an exposed phase, mining speed and drops follow the phase material
   (obsidian needs a diamond pickaxe; ice melts to water without silk touch; frosted ice has no item).
-- **Redstone / elements**: the redstone phase draws a power-tinted redstone shell on the host surface; **sneak right-click**
-  the top face with a repeater / comparator / observer to attach the element to the host. Neither occupies a `filling`
+- **Redstone / elements**: the redstone phase draws a power-tinted redstone shell on the host surface; **plain right-click**
+  the host with a repeater / comparator / observer to attach the element to the host (sneak right-click keeps the vanilla
+  placement above the host). Real element blocks are phase-material cells too: placing a host into a repeater/comparator/
+  observer tile, a setBlock into the host cell, or a falling host landing there absorbs the element with its
+  facing/delay/mode/locked/powered. Neither occupies a `filling`
   value; their parameters live in the side table (see "Plan C"). Writing an entry clears the host's water/lava phase
   (water clearing, one contained phase per cell); elements share the same acceptability check as dust (lava-filled
   hosts accept elements; ice/frosted ice/obsidian phases cannot be overwritten).
