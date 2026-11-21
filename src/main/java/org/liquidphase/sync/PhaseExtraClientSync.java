@@ -171,11 +171,16 @@ public final class PhaseExtraClientSync {
         if (minecraft.level == null) {
             return;
         }
-        net.minecraft.world.level.block.state.BlockState state = minecraft.level.getBlockState(pos);
+        // 不能走 setBlockDirty(pos, state, state)：原版先问 ModelManager.requiresRender(old, new)，
+        // 而 requiresRender 对同一状态对象直接返回 false，调用就成了静默 no-op（1.19.4–26.3 全版本
+        // 都有这道门）。旁路表条目的写入/删除/改功率**不伴随方块状态变化**（这正是方案 C 的前提），
+        // 必须绕过这道门把 section 标脏。用 withNeighbors 是因为外壳几何外扩 0.01 会越出本 section。
         //? if 26.3 {
-        /*minecraft.levelExtractor.setBlockDirty(pos, state, state);
+        /*minecraft.levelExtractor.setSectionDirtyWithNeighbors(
+            pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4);
          *///?} else {
-        minecraft.levelRenderer.setBlockDirty(pos, state, state);
+        minecraft.levelRenderer.setSectionDirtyWithNeighbors(
+            pos.getX() >> 4, pos.getY() >> 4, pos.getZ() >> 4);
         //?}
     }
 }

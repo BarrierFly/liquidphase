@@ -11,6 +11,7 @@
 | 版本 | Minecraft | 说明 |
 | --- | --- | --- |
 | 0.2.0 | 1.19.4 / 1.20.1 / 1.21.1 / 1.21.10 / 1.21.11 / 26.3 | 方案 C：`filling` 只保留 8 个材料类别，红石功率与元件参数进旁路表；**旧存档不兼容**（属性取值域变更） |
+| 0.2.1 | 同上 | 修复：红石相/元件相"有时显示有时不显示"——旁路表变化后客户端 section 未重画（`markDirty` 走了 `setBlockDirty` 的 `requiresRender` 门，同状态对象恒 false，静默 no-op） |
 
 ---
 
@@ -115,7 +116,9 @@
   （NBT，30 s 自动保存 + 关服保存），客户端由网络包镜像。
 - **同步**：客户端在区块加载 / 握手 / 更换 `Level` 时发 `extra_request`，服务端回
   `extra_chunk`（合并语义）；服务端每次写表把 `extra_update` 发给该维度**全部**玩家，
-  避免"开始追踪前写入丢失"。
+  避免"开始追踪前写入丢失"。客户端应用数据后把所在 section（含邻居）标脏重画——
+  旁路表变化不伴随方块状态变化，必须绕过 `setBlockDirty` 的 `requiresRender` 门
+  （同状态对象直接返回 false），直接走 `setSectionDirtyWithNeighbors`。
 - **红石线连接**：`isSignalSource()` 没有坐标，不再对红石相返回 true；红石线改在
   `getConnectingSide`（26.3 是 `shouldRedstoneWireConnectTo`）按坐标判断"该格有红石条目且该面露出"。
 - **渲染**：每个宿主 blockstate 只追加一条**无条件** part `liquidphase:block/dynamic`。
@@ -215,6 +218,7 @@ One block = solid phase (the block itself) + at most one contained phase.
 | Version | Minecraft | Notes |
 | --- | --- | --- |
 | 0.2.0 | 1.19.4 / 1.20.1 / 1.21.1 / 1.21.10 / 1.21.11 / 26.3 | Plan C: `filling` keeps only 8 material classes; redstone power and element parameters live in the side table; **old worlds are incompatible** (property value domain changed) |
+| 0.2.1 | same | Fix: redstone/element phase sometimes invisible — a table-only change never re-rendered its section (`markDirty` went through `setBlockDirty`'s `requiresRender` gate, which returns false for an identical state object) |
 
 ### Feature 1 — more logged blocks (required on both sides)
 

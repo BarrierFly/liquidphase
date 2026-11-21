@@ -403,6 +403,16 @@ python tools/audit_host_coverage.py "<guardian 仓库路径>" .
   追踪、服务端追踪表尚未更新的窗口里；区块请求只发一次，丢了就永久丢失。
 - 客户端渲染期拿到的是 `RenderChunkRegion` 快照而不是 `Level`，`PhaseExtras`
   用 `storageResolver` 解析到当前 `ClientLevel`；应用完数据要标脏该 section。
+  ⚠️ 标脏**必须**走 `setSectionDirtyWithNeighbors`（0.2.1 修，0.2.0 的实机 bug）：
+  0.2.0 写的是 `setBlockDirty(pos, state, state)`，而原版该方法先问
+  `ModelManager.requiresRender(old, new)`，它对**同一状态对象**直接返回 `false`，
+  整个调用静默失效（1.19.4–26.3 全版本都有这道门）。旁路表条目的写入/删除/改功率
+  **不伴随方块状态变化**（这正是方案 C 的前提），于是红石外壳只在"恰逢同 section
+  其它状态变化（邻线功率、放挖方块）或区块重载/F3+A"时才出现——实机
+  "含红石相的红石相有时显示有时不显示"就是它。用 withNeighbors 是因为外壳几何
+  外扩 0.01 会越出本 section。回归：`FenceRedstoneRenderTest.runSectionRebuildRegression`
+  （只写旁路表，观察该 section 的 `SectionMesh` 引用是否被替换；`setBlockDirty`
+  同参调用是 no-op，这个断言抓得住）。
 - 客户端 `LevelChunkExtraMixin` 在客户端侧**不清表**：纯镜像，清理由服务端广播的
   `extra_update(0)` 驱动，否则区块数据重放顺序会把条目抹掉。
 
@@ -592,6 +602,13 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
   1. 三类元件的动态 quad 都存在；
   2. 元件顶点 y ∈ [0.5, 1.0]（抬到宿主顶面之上，不埋进方块）；
   3. 中继器能被紧邻的真实红石块点亮（`powered` 翻转）。
+  元件场景放在 **x+36**（与栅栏列隔开两个 section）：侦测器每 4 tick 脉冲会重画本
+  section 及邻居，靠得太近会让场景三的"mesh 是否被替换"观测失真。
+- 场景三（0.2.1，markDirty 回归）：对栅栏 z=2 **只写旁路表**（功率 15→7，不动状态、
+  不通知邻居），等表值到达客户端后断言该 section 的 `SectionMesh` 引用在超时前被整体
+  替换（=真的重画了），随后恢复 15。0.2.0 的 `markDirty` 是 `setBlockDirty(pos, state,
+  state)` 同参调用（见 §双端同步的警告），在本断言下必超时。注意观测窗内时间固定正午、
+  玩家静止，避免无关重画把断言洗成假阳性。
 - 每次会落三张截图到 `screenshots/`：斜视、近垂直俯视、0 档对比。
 
 > ⚠️ 只在 **1.21.11** 接线：`BakedQuad.position(int)` 是这一版才有的 API（1.21.10 的顶点还打包在

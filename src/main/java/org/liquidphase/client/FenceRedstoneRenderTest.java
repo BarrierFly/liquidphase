@@ -17,9 +17,12 @@ import net.minecraft.client.renderer.ItemBlockRenderTypes;
 import net.minecraft.client.renderer.block.BlockModelShaper;
 import net.minecraft.client.renderer.block.model.BlockStateModel;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
+import net.minecraft.client.renderer.chunk.SectionMesh;
+import net.minecraft.client.renderer.chunk.SectionRenderDispatcher;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -112,6 +115,12 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
                 if (line.contains("FAIL")) {
                     failures.add(line);
                 }
+            }
+
+            String rebuildFailure = runSectionRebuildRegression(context, sp, bright.offset(0, 0, 2));
+            if (rebuildFailure != null) {
+                LiquidPhase.LOGGER.info("[gametest] {}", rebuildFailure);
+                failures.add(rebuildFailure);
             }
 
             shot(context, sp, bright, -3.5, 1.0, 1.2, 0.5, 1.0, 4.5, "fence_redstone_oblique");
@@ -278,13 +287,13 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
             net.minecraft.core.Direction.WEST,
         };
         for (int i = 0; i < kinds.length; i++) {
-            BlockPos pos = origin.offset(4, 0, 20 + i);
+            BlockPos pos = origin.offset(36, 0, 20 + i);
             BlockState slab = Blocks.SMOOTH_STONE_SLAB.defaultBlockState();
             level.setBlockAndUpdate(pos, slab);
             org.liquidphase.element.ElementBlocks.place(level, pos, slab, kinds[i], facings[i]);
         }
         // 中继器输入：facing 侧放红石块，2 tick 后 powered。
-        BlockPos repeaterPos = origin.offset(4, 0, 20);
+        BlockPos repeaterPos = origin.offset(36, 0, 20);
         level.setBlockAndUpdate(repeaterPos.relative(net.minecraft.core.Direction.NORTH),
             Blocks.REDSTONE_BLOCK.defaultBlockState());
         level.updateNeighborsAt(repeaterPos, Blocks.SMOOTH_STONE_SLAB);
@@ -301,7 +310,7 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
             return out;
         }
         for (int i = 0; i < 3; i++) {
-            BlockPos pos = origin.offset(4, 0, 20 + i);
+            BlockPos pos = origin.offset(36, 0, 20 + i);
             int extra = PhaseExtras.get(level, pos);
             out.add("element z=%d block=%s extra=%s".formatted(
                 20 + i, BuiltInRegistries.BLOCK.getKey(level.getBlockState(pos).getBlock()),
@@ -327,7 +336,7 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
             ? fabricAtlas.spriteFinder() : null;
         MutableMesh mesh = Renderer.get().mutableMesh();
         for (int i = 0; i < 3; i++) {
-            BlockPos pos = origin.offset(4, 0, 20 + i);
+            BlockPos pos = origin.offset(36, 0, 20 + i);
             BlockState state = mc.level.getBlockState(pos);
             BlockStateModel model = shaper.getBlockModel(state);
             int[] hostQuads = {0};
@@ -370,6 +379,71 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
             }
         }
         return out;
+    }
+
+    /**
+     * markDirty 回归：**只写旁路表、不动方块状态**的功率变化必须真的触发该 section 重画。
+     * <p>
+     * 0.2.0 曾把标脏写成 {@code setBlockDirty(pos, state, state)}：原版
+     * {@code ModelManager.requiresRender(old, new)} 对同一状态对象直接返回 {@code false}，
+     * 调用静默失效（1.19.4–26.3 全版本都有这道门），表现为"红石相有时显示有时不显示"
+     * ——只有恰逢同 section 其它方块状态变化（邻线功率、放/挖方块）或区块重载时才重画。
+     * <p>
+     * 观测对象是该 section 已上传的 {@link SectionMesh} 引用：重画完成后引用必然被替换。
+     * 场景内没有其它重画源——元件场景放在 x+36（隔开两个 section，其侦测器脉冲的邻居
+     * 重画不会波及本格），观测窗内时间固定在正午、玩家静止、无方块更新。
+     *
+     * @return 失败描述；{@code null} = 通过（功率已恢复 15，不影响后续截图）
+     */
+    private static String runSectionRebuildRegression(ClientGameTestContext context, TestSingleplayerContext sp,
+            BlockPos pos) {
+        long node = SectionPos.asLong(pos);
+        SectionMesh meshBefore = context.computeOnClient(client -> {
+            SectionRenderDispatcher.RenderSection section = findSection(client, node);
+            return section == null ? null : section.getSectionMesh();
+        });
+        if (meshBefore == null) {
+            return "rebuild FAIL target section not visible (pos=" + pos + ")";
+        }
+        // 服务端只写旁路表：功率 15 → 7。不通知邻居、不改方块状态。
+        sp.getServer().runOnServer(server -> {
+            ServerLevel level = server.getLevel(Level.OVERWORLD);
+            if (level != null) {
+                int extra = PhaseExtras.get(level, pos);
+                if (PhaseExtra.isRedstone(extra)) {
+                    PhaseExtras.set(level, pos, PhaseExtra.withPower(extra, 7));
+                }
+            }
+        });
+        context.waitFor(client -> PhaseExtra.isRedstone(PhaseExtras.get(client.level, pos))
+            && PhaseExtra.power(PhaseExtras.get(client.level, pos)) == 7);
+        context.waitFor(client -> {
+            SectionRenderDispatcher.RenderSection section = findSection(client, node);
+            return section != null && section.getSectionMesh() != meshBefore;
+        }, 100);
+        // 恢复 15（同样只走旁路表），等重画稳定后再进入截图环节。
+        sp.getServer().runOnServer(server -> {
+            ServerLevel level = server.getLevel(Level.OVERWORLD);
+            if (level != null) {
+                int extra = PhaseExtras.get(level, pos);
+                if (PhaseExtra.isRedstone(extra)) {
+                    PhaseExtras.set(level, pos, PhaseExtra.withPower(extra, 15));
+                }
+            }
+        });
+        context.waitFor(client -> PhaseExtra.power(PhaseExtras.get(client.level, pos)) == 15);
+        context.waitTicks(4);
+        LiquidPhase.LOGGER.info("[gametest] table-only bypass write re-rendered its section (markDirty ok)");
+        return null;
+    }
+
+    private static SectionRenderDispatcher.RenderSection findSection(Minecraft client, long sectionNode) {
+        for (SectionRenderDispatcher.RenderSection section : client.levelRenderer.getVisibleSections()) {
+            if (section.getSectionNode() == sectionNode) {
+                return section;
+            }
+        }
+        return null;
     }
 
     /** 把玩家放到相对 feet 的偏移处，看向相对 feet 的目标点，然后截图。 */
