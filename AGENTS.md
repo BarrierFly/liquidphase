@@ -439,6 +439,19 @@ python tools/audit_host_coverage.py "<guardian 仓库路径>" .
 
 **关键：放置能力属于"方块放置流水线"，与玩家、手、`InteractionHand`、潜行都无关。**
 
+> ⚠️ **元件装配取宿主必须用命中方块，不能用 `context.getClickedPos()`**（0.2.2 修，0.2.0 起的实机 bug）。
+> 原版 `BlockPlaceContext` 对**不可替换**方块（楼梯/下半砖等宿主都是）把 `getClickedPos()`
+> 指到 `hitPos + 点击面`（=宿主旁边的空气格），只有可替换方块（红石线/熔岩源）才指向命中格。
+> 0.2.0 的 `BlockItemMixin.liquidphase$placeElement` 拿 `getClickedPos()` 查宿主 → 永远查到 AIR
+> → 装配静默失效，落回原版把**真元件方块**放在宿主上面。自检与渲染回归都是直接调
+> `ElementBlocks.place`，绕过了玩家交互层，所以从未暴露；0.2.2 的
+> `AssemblyInteractionTest` 用 `gameMode.useItemOn`（客户端预测 + 网络包 + 服务端执行，
+> 与真人点击同链）把基本组装钉住：红石粉→宿主、宿主→线格（功率继承）、潜行放三种元件、
+> 中继器真实输出 15 到线、以及两条原版行为反向断言（非宿主上放粉照常、不潜行放中继器照常
+> 放到整格上方）。
+> 其余 `getClickedPos()` 使用点核对过都安全：wire/熔岩源是可替换方块（clickedPos=命中格），
+> `captureWirePower`/`afterPlaceBlock` 用的是原版自身落点。
+
 根因只有一个：`BlockItem.place` 的第一步
 
 ```java
@@ -587,7 +600,8 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 ```
 
 - 代码：`src/main/java/org/liquidphase/client/FenceRedstoneRenderTest.java`（`fabric-client-gametest`
-  入口，由 `build.gradle.kts` 的 `extra_gametest_entrypoint` 只对 1.21.11 注入 `fabric.mod.json`）。
+  入口，由 `build.gradle.kts` 的 `extra_gametest_entrypoint` 只对 1.21.11 注入 `fabric.mod.json`；
+  0.2.2 起同一入口还挂了 `AssemblyInteractionTest`——真实玩家点击链路的组装回归，见 §3.3 的警告）。
 - run config：`build.gradle.kts` 的 `loom.runs.create("clientGameTest")`，运行目录
   **`versions/1.21.11/run-clientgametest/`**（刻意与 `run/` 分开：新目录里没有 `resourcepacks/`，
   等于"无资源包"的干净客户端）。日志与截图都在该目录下，已加进 `.gitignore`。

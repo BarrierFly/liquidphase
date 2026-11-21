@@ -58,14 +58,15 @@
   红石线连接判定改为在 `RedStoneWireBlock.getConnectingSide(...)`（带 Level/BlockPos）
   注入，只有"该格有红石条目且该面露出"才算连接。功率读取走
   `level.getBestNeighborSignal` → `getSignal`，天然正确。
-- 中继器/比较器/侦测器沿用原版算式，输入面 = `facing`，输出面 = `facing`（中继器/比较器）
-  或 `facing.getOpposite()`（侦测器）；被宿主遮住的面不输入也不输出。
+- 中继器/比较器/侦测器沿用原版算式，输入面 = `facing`，输出面 = `facing.getOpposite()`
+  （三类一致，与 `DiodeBlock`/`ObserverBlock` 的 FACING 语义一致）；被宿主遮住的面不输入也不输出。
 - 侦测器：观察 `facing` 邻居变化 → 计划刻 2 tick 翻转 `powered`。
 
 ## 3. 放置与破坏
 
 - 手持中继器/比较器/侦测器右键**宿主方块的上表面** → 写入对应元件条目
-  （朝向取玩家水平朝向 / 侦测器取 `getNearestLookingDirection().getOpposite()`）。
+  （朝向取玩家水平朝向 / 侦测器取 `getNearestLookingDirection()`，与原版
+  `ObserverBlock.getStateForPlacement` 的双 getOpposite 抵消结果一致）。
   放置前提：足迹内存在顶面高度 `h < 1` 的空腔列（文档 §2.2）。
 - 破坏：准星命中的是元件几何且宿主本身未被破坏 → 只清条目 + 掉落对应物品。
 - 破坏宿主时：元件条目随宿主一起消失（不额外掉落，与原版"元件是方块"不同，写进 README）。

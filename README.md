@@ -12,6 +12,7 @@
 | --- | --- | --- |
 | 0.2.0 | 1.19.4 / 1.20.1 / 1.21.1 / 1.21.10 / 1.21.11 / 26.3 | 方案 C：`filling` 只保留 8 个材料类别，红石功率与元件参数进旁路表；**旧存档不兼容**（属性取值域变更） |
 | 0.2.1 | 同上 | 修复：红石相/元件相"有时显示有时不显示"——旁路表变化后客户端 section 未重画（`markDirty` 走了 `setBlockDirty` 的 `requiresRender` 门，同状态对象恒 false，静默 no-op） |
+| 0.2.2 | 同上 | 修复：**潜行右键宿主放中继器/比较器/侦测器从未生效**——装配取宿主用了 `getClickedPos()`，而原版对不可替换方块把它指向宿主旁的空气格（真实点击回归 `AssemblyInteractionTest` 抓到） |
 
 ---
 
@@ -219,6 +220,7 @@ One block = solid phase (the block itself) + at most one contained phase.
 | --- | --- | --- |
 | 0.2.0 | 1.19.4 / 1.20.1 / 1.21.1 / 1.21.10 / 1.21.11 / 26.3 | Plan C: `filling` keeps only 8 material classes; redstone power and element parameters live in the side table; **old worlds are incompatible** (property value domain changed) |
 | 0.2.1 | same | Fix: redstone/element phase sometimes invisible — a table-only change never re-rendered its section (`markDirty` went through `setBlockDirty`'s `requiresRender` gate, which returns false for an identical state object) |
+| 0.2.2 | same | Fix: **sneak-placing repeaters/comparators/observers into hosts never fired** — assembly looked the host up via `getClickedPos()`, which vanilla points at the air cell next to a non-replaceable host (caught by the new real-click regression `AssemblyInteractionTest`) |
 
 ### Feature 1 — more logged blocks (required on both sides)
 

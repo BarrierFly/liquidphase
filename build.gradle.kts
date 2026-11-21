@@ -75,7 +75,8 @@ tasks.named<ProcessResources>("processResources") {
     // 客户端渲染回归（fabric-client-gametest）只在 1.21.11 有实现：
     // 它用到的 BakedQuad.position 是 1.21.11 才有的 API（1.21.10 顶点还打包在 int[] 里）。
     val gametestEntrypoint = if (mcVersion == "1.21.11") {
-        ",\"fabric-client-gametest\": [\"org.liquidphase.client.FenceRedstoneRenderTest\"]"
+        (",\"fabric-client-gametest\": [\"org.liquidphase.client.FenceRedstoneRenderTest\","
+            + " \"org.liquidphase.client.AssemblyInteractionTest\"]")
     } else {
         ""
     }

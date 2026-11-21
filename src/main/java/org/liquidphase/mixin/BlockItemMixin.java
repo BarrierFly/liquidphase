@@ -124,7 +124,11 @@ public abstract class BlockItemMixin {
         if (kind == PhaseExtra.Kind.NONE) {
             return false;
         }
-        BlockPos pos = context.getClickedPos();
+        // 目标必须取**命中方块**（潜行右键的宿主）。不能用 context.getClickedPos()：
+        // 原版 BlockPlaceContext 对不可替换方块（楼梯/下半砖等宿主都是）返回
+        // hitPos + 点击面（=宿主旁边的空气格），拿它查宿主永远是 AIR，装配静默失效、
+        // 落回原版把真元件方块放在宿主上面（0.2.1 真实点击回归抓到）。
+        BlockPos pos = ((UseOnContextInvoker) context).liquidphase$getHitResult().getBlockPos();
         BlockState target = level.getBlockState(pos);
         if (!(target.getBlock() instanceof PhaseCapable) || !ElementBlocks.hasCavity(level, pos, target)) {
             return false;
