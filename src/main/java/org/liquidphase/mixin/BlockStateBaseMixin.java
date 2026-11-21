@@ -129,9 +129,14 @@ public abstract class BlockStateBaseMixin {
     private void liquidphase$onPlace(Level level, BlockPos pos, BlockState oldState, boolean movedByPiston, CallbackInfo ci) {
         BlockState self = (BlockState) (Object) this;
         PhaseHelper.scheduleFrostTickIfNeeded(level, pos, self);
-        // 红石相不在 onPlace 做重算：新放置路径（点粉/改写层）在自己的写入点显式重算，
-        // 吸收路径（宿主落进线格）沿用原线功率、落地不重算（FillingPlacementMixin 的
-        // 吸收抑制窗口）。直接 setBlock 写入的状态（命令/存档/粘贴）原样保留。
+        // 红石相落地（无论哪条组装路径、无论初始功率写的是 0 还是原线功率）一律立即
+        // 按邻居重算——镜像原版红石线 onPlace → updatePowerStrength：以初始状态组合
+        // 之后本来就该重算，否则状态就错了（初始功率只决定写入瞬间的取值，真实功率
+        // 由邻居结算出来）。终止性：updatePower 只在功率真的变了才 setBlock，
+        // setBlock 触发的下一次 onPlace 发现功率已一致即停；仅服务端执行。
+        if (org.liquidphase.redstone.RedstoneBlocks.isRedstonePhase(self)) {
+            org.liquidphase.redstone.RedstoneBlocks.neighborChanged(level, pos, self);
+        }
     }
 
     // ------------------------------------------------------------------

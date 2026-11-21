@@ -40,34 +40,6 @@ public final class RedstoneBlocks {
     }
 
     // ------------------------------------------------------------------
-    // 吸收抑制窗口
-    // ------------------------------------------------------------------
-
-    /**
-     * 正在被"吸收"（宿主落进红石线格）的格子。吸收的那次 {@code setBlock} 里，
-     * 原版红石线移除钩子（{@code affectNeighborsAfterRemoval}）会无条件向四周一圈
-     * 发邻居更新，通知环经邻近方块折回本格；本格的重算入口在此窗口内直接跳过，
-     * 保证"吸收沿用原线功率、落地不重算"。窗口由 {@code FillingPlacementMixin}
-     * 在包住那次 setBlock 时开/关（级联在深度 0 同步排空，finally 关窗是可靠的）。
-     * 窗口结束后，邻居变化照常重算（§3.4 的即时结算语义不变）。
-     */
-    private static final ThreadLocal<java.util.Set<BlockPos>> ABSORPTION_SUPPRESSED =
-        ThreadLocal.withInitial(java.util.HashSet::new);
-
-    public static void beginAbsorptionSuppression(BlockPos pos) {
-        ABSORPTION_SUPPRESSED.get().add(pos.immutable());
-    }
-
-    public static void endAbsorptionSuppression(BlockPos pos) {
-        ABSORPTION_SUPPRESSED.get().remove(pos.immutable());
-    }
-
-    /** {@return 该格当前是否处于吸收抑制窗口内（{@code FillingPlacementMixin} 开窗）} */
-    public static boolean isAbsorptionSuppressed(BlockPos pos) {
-        return ABSORPTION_SUPPRESSED.get().contains(pos);
-    }
-
-    // ------------------------------------------------------------------
     // 查询
     // ------------------------------------------------------------------
 
@@ -149,11 +121,11 @@ public final class RedstoneBlocks {
      * <p>
      * 排计划刻会延迟两刻才反应；防递归靠"只有功率真的变了才写回"，
      * 与原版 {@code DefaultRedstoneWireEvaluator.updatePowerStrength} 同一手法。
-     * 吸收抑制窗口内（宿主刚落进线格、原版红石线移除通知环折回本格）跳过，
-     * 保证"吸收沿用原线功率"。
+     * 由 {@code BlockStateBaseMixin.liquidphase$onPlace} 在红石相落地时一并调用，
+     * 组合方块以初始状态落地后立即结算出真实功率。
      */
     public static void neighborChanged(Level level, BlockPos pos, BlockState state) {
-        if (level instanceof ServerLevel serverLevel && !isAbsorptionSuppressed(pos)) {
+        if (level instanceof ServerLevel serverLevel) {
             updatePower(serverLevel, pos, state);
         }
     }
@@ -202,13 +174,12 @@ public final class RedstoneBlocks {
      * 把该格换成含红石相的宿主（**新放置**路径：红石粉点相容宿主）。
      * <p>
      * 方块本身不变，只写 phase 值。初始功率一律为 0——与"单独放置一根红石粉"一致
-     * （原版 {@code getStateForPlacement} 给 POWER=0）；写入后立即按邻居重算出真实功率，
-     * 等价于原版红石线 onPlace 的 updatePowerStrength。
+     * （原版 {@code getStateForPlacement} 给 POWER=0）；落地后由
+     * {@code BlockStateBaseMixin.liquidphase$onPlace} 立即按邻居重算出真实功率。
      * <p>
      * 对比：**吸收**路径（把相容宿主放进红石线格）不走这里——那格的红石线本来就在，
-     * 不是重新放置，功率沿用原线且落地不重算（{@code FillingPlacementMixin} 的
-     * 吸收抑制窗口 + {@code BlockItemMixin.liquidphase$redstonePhase} /
-     * {@code FallingBlockIntoWireMixin} 的功率继承）。
+     * 不是重新放置，初始功率沿用原线（{@code BlockItemMixin.liquidphase$redstonePhase} /
+     * {@code FallingBlockIntoWireMixin}）；两条路径落地后都同样按邻居重算。
      */
     public static boolean setRedstonePhase(Level level, BlockPos pos, BlockState state) {
         if (!PhaseHelper.hasPhaseProperty(state)) {
@@ -218,15 +189,7 @@ public final class RedstoneBlocks {
         if (target == state) {
             return false;
         }
-        if (!level.setBlock(pos, target, Block.UPDATE_ALL)) {
-            return false;
-        }
-        if (level instanceof ServerLevel serverLevel) {
-            BlockState landed = serverLevel.getBlockState(pos);
-            if (isRedstonePhase(landed)) {
-                updatePower(serverLevel, pos, landed);
-            }
-        }
+        level.setBlock(pos, target, Block.UPDATE_ALL);
         return true;
     }
 

@@ -94,9 +94,10 @@
    （透明底 cutout，贴图是**短碎屑铺满整面**的疏松红石纹理，
    **亮度随功率变化**——0 档接近熄灭、15 档满亮，和原版红石线一致），
    形状/碰撞/掉落仍是楼梯自己的。
-   功率语义：拿红石粉点它 = 新放置一根红石粉，落地时是 0、立即按周围信号源结算
+   功率语义：拿红石粉点它 = 新放置一根红石粉，初始功率 0、落地立即按周围信号源结算
    （有电源就是 15，被宿主遮住的面不接收）；把相容方块放进红石线格 = 吸收那格已有的线，
-   功率沿用原线。按红石线规则衰减传递信号（对相邻红石线 -1，对灯/活塞等元件满功率），
+   初始功率沿用原线，落地同样按邻居结算（通常与原线一致）。
+   按红石线规则衰减传递信号（对相邻红石线 -1，对灯/活塞等元件满功率），
    被宿主遮住的面不输出；破坏它 → 留下对应功率的红石线。
    也可以反过来：把楼梯/台阶等可含水方块**放进红石线所在的那一格**，那条线就被吸进宿主、
    变成含红石相的方块（功率沿原线）。这一步走的是普通方块放置流程，和谁在放无关：
@@ -131,11 +132,12 @@
   红石粉也能替换水/熔岩），冰/霜冰/黑曜石/红石相不可替换、材料按不可放置处理。
   水的流体路径不变：水桶/水流仍只进无相宿主，水不能直接替换熔岩相
   （含熔岩相宿主遇水邻居走凝固成黑曜石相）。
-- **组装时的红石相初始功率按"是不是重新放置"区分**（0.1.22 起）：
-  **新放置**（红石粉点宿主、改写层把线状态写进宿主格）落地即"单独放置红石粉"的初始状态
-  ——功率 0，随后立即按邻居结算出真实功率（0.1.21 及以前点粉直接写 15，无人纠正）；
-  **吸收**（宿主放进/落进红石线格）那格的红石线本来就在、不是重新放置，
-  功率**沿用原线**，落地不重算。
+- **组装时的红石相初始状态按"是不是重新放置"区分，落地后一律立即重算**（0.1.22 起）：
+  **新放置**（红石粉点宿主、改写层把线状态写进宿主格）的初始状态是"单独放置红石粉"的
+  初始状态——功率 0；**吸收**（宿主放进/落进红石线格）那格的红石线本来就在、不是重新
+  放置，初始功率**沿用原线**。以初始状态落地后，组合方块像原版红石线一样立即按邻居
+  重算出真实功率（0.1.21 及以前点粉直接写 15 且无人纠正；吸收在多数情况下重算结果与
+  原线一致，电源位于宿主遮蔽面上等分歧行会结算为真实值）。
 - **告示牌/箱子/屏障/光源方块等原生"不渲染方块模型"的宿主也能显示相**：带相状态一律按
   方块模型渲染，宿主本体仍由各自的原版渲染路径绘制。
 - **状态数**：`filling` 共 24 个取值（其中 16 个 `redstone_*` 编码功率），
@@ -250,8 +252,9 @@ Composites render as **the vanilla host model with a full-cube redstone-dust she
 the shell uses a porous redstone-wire texture that fills each face, transparent pixels let the host show through (cutout),
 the crosshair outline covers the whole cube (collision stays with the host), and they have **no item form**; they are only created
 through redstone-dust/phase-block interactions (either dust on a host, or a host block item placed into the redstone-wire tile
-through the normal block placement pipeline). Power semantics differ by direction: placing dust starts the phase at power 0 and settles it
-against the neighbours immediately, while a host placed into a wire tile absorbs that wire's current power (absorption is not re-placement).
+through the normal block placement pipeline). Initial power differs by direction — placing dust starts at power 0, while a host
+placed into a wire tile carries the wire's current power as its initial state — and the assembled block then settles against its
+neighbours immediately, exactly like a freshly placed vanilla wire.
 Signals decay by 1 into neighbouring wires/composites
 but stay at full power for lamps, pistons and other components.
 Phased states never take part in vanilla same-block face culling, so two adjacent phased blocks do not lose the shared face.
