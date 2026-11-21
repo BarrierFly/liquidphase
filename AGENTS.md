@@ -33,7 +33,7 @@
 | 瞄准与直接挖相（含整格宿主/形状表宿主的命中判定） | `phase/PhaseTargeting.java` |
 | 状态级核心 mixin（流体态/光照/随机刻/破坏保留/邻居） | `mixin/BlockStateBaseMixin.java` |
 | 自带状态注入器（1.21.1+） | `state/PhaseStateRefresher.java` + `mixin/state/*` + `state/*Duck` |
-| 桶/放置/交互 mixin | `mixin/BucketItem*Mixin.java`、`mixin/PlacementMixin.java`、`mixin/BlockItemMixin.java`（含落点格吸收）；`mixin/FillingReplaceMixin`（接受层）+ `mixin/FillingPlacementMixin`（`Level.setBlock` 通用改写层）；遮蔽宿主的熔岩分支在 `mixin/SlabLiquidMixin.java` + `mixin/HostPlaceLiquidMixin.java`（0.1.13，audit §4.3）。原 `BucketUseMixin` 已删除（0.1.13，audit §4.7：桶交互完全走原版路径） |
+| 桶/放置/交互 mixin | `mixin/BucketItem*Mixin.java`、`mixin/BlockItemMixin.java`（0.2.3 起统一捕获：线格功率 + 相材料格/熔岩源相，落位后写相/写表）；`mixin/PhaseCellReplaceMixin.java`（0.2.3，相材料格对相容宿主物品可替换；取代 0.2.2 的 `RedstoneWireReplaceMixin`）+ `mixin/FillingReplaceMixin`（接受层）+ `mixin/FillingPlacementMixin`（`Level.setBlock` 通用改写层）；遮蔽宿主的熔岩分支在 `mixin/SlabLiquidMixin.java` + `mixin/HostPlaceLiquidMixin.java`（0.1.13，audit §4.3）。原 `BucketUseMixin`（0.1.13）、`PlacementMixin`（0.2.3：熔岩源 getStateForPlacement 改写并入统一捕获）已删除 |
 | 冻结接线 | `mixin/ServerLevelMixin.java`（`tickChunk` ≤1.20.1 / `tickPrecipitation` 1.21.1+） |
 | 炼药锅 | `cauldron/CauldronBehaviors.java`、`CauldronBehaviorRegistration.java`、`CauldronHopperTransfer.java`、`ConcreteMappings.java` |
 | 发射器/漏斗 | `interact/LiquidInteractions.java`、`mixin/HopperTransferMixin.java` |
@@ -41,6 +41,7 @@
 | 旁路表存储与持久化 | `phase/PhaseStorage.java`（每个 `Level` 一张 `chunkPos -> (BlockPos -> int)` 稀疏表，内层不可变）+ `phase/PhaseStorageHolder.java` + `mixin/LevelStorageMixin.java` + `phase/PhasePersistence.java`（`world/data/liquidphase_<dimension>.dat`，30 s 自动保存 + 关服保存） |
 | 旁路表同步 | `sync/PhaseExtraSync.java`（`extra_request` / `extra_chunk` / `extra_update`）+ `sync/PhaseExtraClientSync.java`（区块加载/握手/Level 更换请求 + 标脏） |
 | 红石信号与放置 | `redstone/RedstoneBlocks.java`；`mixin/RedstoneSignalMixin.java`；红石线连接 `mixin/RedStoneWireBlockMixin`（≤1.21.11）/ `BlockStateBaseMixin.shouldRedstoneWireConnectTo`（26.3）；点粉/宿主进线格 `mixin/BlockItemMixin` + `mixin/RedstoneWireReplaceMixin`；下落方块 `mixin/FallingBlockIntoWireMixin` |
+| 活塞路径与弹出物品（0.2.3） | `phase/PistonPhaseOps.java`（破坏列表线程内标记 + 移动状态剥相）+ `mixin/PistonBaseBlockMixin.java`（`moveBlocks` 两处重定向）+ `phase/PhaseDrops.java`（"相 → 弹出物品"纯函数）；黑曜石相推不动在 `BlockStateBaseMixin.getPistonPushReaction` |
 | 元件相（中继器/比较器/侦测器） | `element/ElementBlocks.java`（放置/破坏/信号/计划刻/锁存）+ `element/ElementRenderSupport.java`（子模型 id / 旋转 / 逐列抬升）+ `mixin/ElementShapeUpdateMixin.java`（状态级 `updateShape`） |
 | 旁路表一致性 | `mixin/LevelChunkExtraMixin.java`（方块被换成另一个方块时清条目）；`BlockStateBaseMixin` 的 onRemove/放置路径（写 `filling != none` 时清条目） |
 | 动态渲染（两代 API） | `client/PhaseDynamicModelLegacy.java`（≤1.21.1，接管 `liquidphase:block/dynamic`）/ `client/PhaseDynamicModelModern.java`（1.21.10+，包装宿主 `BlockStateModel`） |
@@ -226,9 +227,12 @@ python tools/audit_host_coverage.py "<guardian 仓库路径>" .
 
 - 写 `filling != none` 一律走 `PhaseHelper.setPhase`，先清旁路条目；
 - 写旁路条目走 `canAcceptExtra`：条目必须为空，且 `filling == none` 或可替换（水/熔岩），
-  写入时把 `filling` 清回 `none`；
-- 方块被换成**另一个方块**时由 `mixin/LevelChunkExtraMixin` 清条目（活塞推动走这里，
-  所以条目不随动）；换成空气不在那里清，留给 onRemove 读取红石功率以留下红石线。
+  写入时把 `filling` 清回 `none`、**并清掉含水标志**（0.2.3 清含水：
+  `PhaseHelper.withoutFillingAndWater`；条目本来就是一个被含相，水不能同时留格内）。
+  元件装配（`ElementBlocks.hasCavity`/`place`）与红石粉共用同一条门控；
+- 方块被换成**另一个方块**时由 `mixin/LevelChunkExtraMixin` 清条目；换成空气或
+  **移塞方块（MOVING_PISTON）**时不在那里清，留给移除钩子读取条目
+  （留红石线 / 活塞弹出物品）。
 
 **状态数**：1.21.11 注入 **413** 个方块、总状态 **176,563**（传送门补 WATERLOGGED 后 +32）（方案 C 预算档）。
 
@@ -745,7 +749,7 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 | 破坏元件 | 左键命中元件：清条目 + 掉落对应物品，宿主保留；破坏宿主时元件随宿主消失、不额外掉落 |
 | 元件信号 | 中继器/比较器 FACING = 输入面，输出 = `facing.getOpposite()`；侦测器 FACING = 观察面，观察面邻居变化 2 tick 后翻 powered、再 2 tick 复位；被宿主覆盖的面不输入不输出 |
 | 中继器锁存 | 侧向红石信号锁定后停止翻转（逻辑锁定；锁形视觉未实现） |
-| 活塞推动含元件宿主 | 条目不随活塞移动（该格条目被清掉，元件丢弃） |
+| 活塞推动/拉回含相宿主（0.2.3） | 黑曜石填充相推不动（推动失败、方块原地不动、无掉落）；其余填充相不随方块移动：推动覆盖/破坏列表摧毁 → 弹出物品（黑曜石掉黑曜石、冰/霜冰无物品、熔岩相按液体物品开关掉熔岩物品或消失、红石相掉红石粉、元件掉对应物品），粘性拉动/剩余清格 → 相实体化留在原位（冰→冰块、熔岩→熔岩源、红石相→对应功率红石线、元件掉物品） |
 | 传送门宿主 | 下界门/末地门/末地折跃门可含材料相，且补注入 `WATERLOGGED` 后含水语义与其他宿主一致（水桶灌/取、流体态、带相拒水）；含冰/霜冰/黑曜石时整格碰撞堵住传送门（预期） |
 | 旁路表持久化 | 30 s 自动保存 + 关服保存；重启后红石功率/元件参数保持；`world/data/liquidphase_<dimension>.dat` 存在 |
 | 旁路表同步 | 进入世界/加载区块/切维度后客户端能看到红石/元件；服务端写表后同维度所有玩家收到更新（含尚未开始追踪的玩家） |
@@ -829,7 +833,8 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 6. **`filling` 与旁路表的一致性**：一格只表达一个相。
    - 写 `filling != none` 一律走 `PhaseHelper.setPhase`，**先清旁路条目**；
    - 写旁路条目走 `canAcceptExtra`：条目必须为空，且 `filling == none` 或可替换（水/熔岩），
-     写入时把 `filling` 清回 `none`；`canAcceptPhase` 反向也检查条目为空；
+     写入时把 `filling` 清回 `none`、并清掉含水（0.2.3 清含水，一格只表达一个被含相）；
+     `canAcceptPhase` 反向也检查条目为空；
    - 方块被换成**另一个方块**时由 `LevelChunkExtraMixin` 清条目；换成空气留给
      `onRemove` 读取红石功率以留下红石线；
    - 元件几何/信号/连接判定一律按坐标查表，不能只看 `BlockState`（状态里没有元件信息）。
@@ -884,4 +889,5 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    - **Sodium/光影**：渲染走 Fabric Rendering API（Indigo），未承诺 Sodium 兼容。
    - **`getRenderShape` 对全部相宿主状态强制 `MODEL`**：红石/元件存在性在状态里看不出来；
      隐形宿主（barrier/light/告示牌）的 blockstate 模型本身没有 `elements`，不会凭空多出几何。
-   - 红石相没有弱充能方块能力；破坏宿主时元件随宿主消失、不额外掉落。
+   - 红石相没有弱充能方块能力；**普通**破坏宿主时元件随宿主消失、不额外掉落
+     （活塞路径按 0.2.3 口径弹出）。

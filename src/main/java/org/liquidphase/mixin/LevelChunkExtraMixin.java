@@ -52,6 +52,11 @@ public abstract class LevelChunkExtraMixin {
         if (state.isAir()) {
             return;
         }
+        // 换成移塞方块（活塞推动）时同样不清：移除处理器要按"被覆盖"口径把红石相/元件
+        // 弹出为物品，先清表会让它读不到条目（0.2.3）。
+        if (state.is(net.minecraft.world.level.block.Blocks.MOVING_PISTON)) {
+            return;
+        }
         PhaseExtras.clearAt(self.getLevel(), pos);
     }
 }

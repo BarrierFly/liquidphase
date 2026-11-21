@@ -3,6 +3,7 @@ package org.liquidphase.mixin;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockBehaviour;
@@ -153,8 +154,35 @@ public abstract class BlockStateBaseMixin {
     }
 
     // ------------------------------------------------------------------
-    // 破坏保留（规划 §3.0.3）：旧状态被移除、新状态为空气、非活塞移动 → 相实体化。
-    // 熔岩相经由 getFluidState 的 createLegacyBlock 已天然留下熔岩源，这里只补固体相。
+    // 推不动（0.2.3）：黑曜石填充相一律 BLOCK——推动、粘性拉回、黏液链全部失败。
+    // ------------------------------------------------------------------
+
+    @Inject(method = "getPistonPushReaction", at = @At("HEAD"), cancellable = true)
+    private void liquidphase$pushReaction(CallbackInfoReturnable<net.minecraft.world.level.material.PushReaction> cir) {
+        BlockState self = (BlockState) (Object) this;
+        if (PhaseHelper.getPhase(self) == Phase.OBSIDIAN) {
+            // 黑曜石填充相一律推不动（0.2.3 用户口径）：推动、粘性拉回、黏液链全部失败。
+            // 其余相可被推动，但相不随方块移动（见 liquidphase$removed 的活塞路径分发）。
+            // 26.3 的 PushReaction 枚举改名（BLOCK → IMMOVEABLE，NORMAL → PUSH_PULL，
+            // DESTROY → POPPED，PUSH_ONLY → PUSH）。
+            //? if 26.3 {
+            /*cir.setReturnValue(net.minecraft.world.level.material.PushReaction.IMMOVEABLE);
+             *///?} else {
+            cir.setReturnValue(net.minecraft.world.level.material.PushReaction.BLOCK);
+            //?}
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 破坏保留（规划 §3.0.3）/活塞路径（0.2.3）：旧状态被移除时相的去向。
+    // 四条路径（movedByPiston 与原格内容共同区分）：
+    //   ① 普通破坏（!moved、原格空气、非破坏列表）→ 破坏保留：相实体化留原格
+    //      （元件随宿主消失不掉落，维持 0.2.2 现状）。
+    //   ② 活塞破坏列表摧毁（!moved + PistonPhaseOps 标记）→ 相弹出为物品。
+    //   ③ 推动覆盖（moved、原格 = 移塞方块）→ 相弹出为物品（相不随方块移动）。
+    //   ④ 拉动/剩余清理（moved、原格空气）→ 任意填充相实体化留在原位
+    //      （元件无法实体化，掉落对应物品）。
+    // 熔岩相经由 getFluidState 的 createLegacyBlock 在普通破坏时天然留下熔岩源，这里只补固体相。
     // ------------------------------------------------------------------
 
     //? if 1.19.4 || 1.20.1 || 1.21.1 {
@@ -172,27 +200,81 @@ public abstract class BlockStateBaseMixin {
     //?}
 
     /**
-     * 方块被移除：相实体化（固体相留方块 / 红石相留红石线），并清掉旁路条目。
+     * 方块被移除：按路径决定相的去向（见上），并清掉旁路条目。
      * <p>
      * 旁路表条目在 {@code LevelChunkMixin} 里**不会**因为换成空气而提前清掉
      * （否则这里读不到红石功率），所以本方法是红石/元件条目的正常清理点。
+     * <p>
+     * 弹出口径（0.2.3，用户拍板）：固相掉对应物品（冰/霜冰无物品即消失、黑曜石掉黑曜石）；
+     * 熔岩相在"液体物品"功能开启时掉熔岩物品、关闭时消失；红石相掉红石粉；元件掉对应物品。
+     * 实体化口径：材料相实体化为真实方块（熔岩相 = 熔岩源），红石相留对应功率红石线；
+     * 元件无法实体化，按弹出口径掉物品。
      */
     private void liquidphase$removed(Level level, BlockPos pos, BlockState self, boolean movedByPiston) {
         int extra = org.liquidphase.phase.PhaseExtras.get(level, pos);
-        boolean hasExtra = !org.liquidphase.phase.PhaseExtra.isEmpty(extra);
-        if (!movedByPiston && level.getBlockState(pos).isAir()) {
-            if (PhaseHelper.isSolidPhase(self)) {
-                level.setBlock(pos, PhaseHelper.materializedPhase(self), Block.UPDATE_ALL);
-            } else if (org.liquidphase.phase.PhaseExtra.isRedstone(extra)) {
-                org.liquidphase.redstone.RedstoneBlocks.materializeWire(level, pos,
-                    org.liquidphase.phase.PhaseExtra.power(extra));
-            }
+        boolean hasEntry = !org.liquidphase.phase.PhaseExtra.isEmpty(extra);
+        boolean hasMaterialPhase = PhaseHelper.getPhase(self) != Phase.NONE;
+        if (!hasEntry && !hasMaterialPhase) {
+            return;
         }
-        if (hasExtra) {
-            // 元件/红石条目不随方块移动，活塞推动时直接丢弃（README 已知限制）。
+        boolean cellAir = level.getBlockState(pos).isAir();
+        boolean popItems = false;
+        if (movedByPiston) {
+            // ③ 推动覆盖（原格被移塞方块占据）→ 弹出；④ 拉动/剩余清理（原格空气）→ 实体化。
+            popItems = !cellAir;
+        } else if (org.liquidphase.phase.PistonPhaseOps.inDestroyList()) {
+            // ② 活塞破坏列表摧毁 → 弹出。
+            popItems = true;
+        } else if (!cellAir) {
+            // 方块被另一个方块替换（非活塞、非破坏列表）：相随状态一起消失（现状语义）。
+            if (hasEntry) {
+                org.liquidphase.phase.PhaseExtras.set(level, pos, org.liquidphase.phase.PhaseExtra.EMPTY);
+            }
+            return;
+        } else {
+            // ① 普通破坏 → 破坏保留（实体化）。
+        }
+        if (popItems) {
+            liquidphase$popPhase(level, pos, self, extra);
+        } else {
+            liquidphase$materializePhase(level, pos, self, extra, movedByPiston);
+        }
+        if (hasEntry) {
             org.liquidphase.phase.PhaseExtras.set(level, pos, org.liquidphase.phase.PhaseExtra.EMPTY);
         }
     }
+
+    /** 弹出为物品（活塞"挤掉/摧毁"口径）：口径见 {@link org.liquidphase.phase.PhaseDrops}。 */
+    private void liquidphase$popPhase(Level level, BlockPos pos, BlockState self, int extra) {
+        ItemStack stack = org.liquidphase.phase.PhaseDrops.droppedItem(PhaseHelper.getPhase(self), extra);
+        if (!stack.isEmpty()) {
+            Block.popResource(level, pos, stack);
+        }
+    }
+
+    /** 实体化到原格（普通破坏保留 / 活塞"留在原位"口径）。 */
+    private void liquidphase$materializePhase(Level level, BlockPos pos, BlockState self, int extra, boolean movedByPiston) {
+        if (org.liquidphase.phase.PhaseExtra.isElement(extra)) {
+            // 元件无法实体化成方块：活塞"留在原位"路径掉落对应物品；
+            // 普通破坏维持现状（随宿主消失、不掉落，README 已知限制）。
+            if (movedByPiston) {
+                ItemStack stack = org.liquidphase.element.ElementBlocks.itemFor(org.liquidphase.phase.PhaseExtra.kind(extra));
+                if (!stack.isEmpty()) {
+                    Block.popResource(level, pos, stack);
+                }
+            }
+            return;
+        }
+        if (org.liquidphase.phase.PhaseExtra.isRedstone(extra)) {
+            org.liquidphase.redstone.RedstoneBlocks.materializeWire(level, pos,
+                org.liquidphase.phase.PhaseExtra.power(extra));
+            return;
+        }
+        if (level.getBlockState(pos).isAir()) {
+            level.setBlock(pos, PhaseHelper.materializedPhase(self), Block.UPDATE_ALL);
+        }
+    }
+
 
     // 26.3：红石线连接判定经 BSB.shouldRedstoneWireConnectTo
     //? if 26.3 {

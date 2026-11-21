@@ -378,7 +378,9 @@ def audit(guardian, version, commit, mixin_src, placement_src, ids, shell):
             collision.setdefault(owner, []).append(bid)
 
         owner, _ = nearest_override(cls, "getStateForPlacement", types, rels, cache)
-        if owner and owner not in ptargets:
+        # 0.2.3 起吸收改走 placeBlock 捕获（PhaseCellReplaceMixin + BlockItemMixin），
+        # 不再改写 getStateForPlacement：PlacementMixin 已删除，"放置吸收未覆盖"这一维度作废。
+        if placement_src.strip() and owner and owner not in ptargets:
             placement.setdefault(owner, []).append(bid)
 
     return {
@@ -389,6 +391,7 @@ def audit(guardian, version, commit, mixin_src, placement_src, ids, shell):
         "c_b": sorted(set(ids) - runtime),
         "c_s": sorted(set(ids) - set(shell)),
         "shadow": shadow, "covered": covered, "collision": collision, "placement": placement,
+        "placement_na": not placement_src.strip(),
     }
 
 
@@ -428,6 +431,8 @@ def print_detail(version, r):
     for cls, ids in sorted(r["placement"].items(), key=lambda kv: -len(kv[1])):
         print("   放置吸收未覆盖 %-28s %4d hosts e.g. %s"
               % (cls, len(ids), ", ".join(sorted(ids)[:4])))
+    if r.get("placement_na"):
+        print("   放置吸收：0.2.3 起不再改写 getStateForPlacement（统一走 placeBlock 捕获），本维度不适用")
 
 
 def main(argv):

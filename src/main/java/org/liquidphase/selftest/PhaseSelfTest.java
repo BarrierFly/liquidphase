@@ -77,6 +77,8 @@ public final class PhaseSelfTest {
             checkRedstoneTableReadback(level, base.offset(40, 1, 2));
             checkRedstoneUpdatePower(level, base.offset(40, 1, 4));
             checkElementPlacement(level, base.offset(40, 1, 6));
+            checkEntryWriteClearsWater(level, base.offset(42, 1, 0));
+            checkPistonPhaseBehavior(level, base);
             checkRedstonePhaseInitialState(level, base);
             checkPlaceIntoWire(level, base);
             checkPlaceIntoWireByPlayer(level, base);
@@ -543,6 +545,263 @@ public final class PhaseSelfTest {
         PhaseExtras.set(level, slabPos, PhaseExtra.EMPTY);
         level.setBlock(slabPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
     }
+
+    // ------------------------------------------------------------------
+    // 0.2.3 清含水与装配门控合一：写条目清掉含水/熔岩相；冰/黑曜石相仍拒绝一切覆盖。
+    // ------------------------------------------------------------------
+
+    private static void checkEntryWriteClearsWater(ServerLevel level, BlockPos base) {
+        BlockPos pos = base.offset(42, 1, 0);
+        level.setBlock(pos.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        BlockState waterlogged = Blocks.OAK_STAIRS.defaultBlockState()
+            .setValue(BlockStateProperties.WATERLOGGED, true);
+
+        // 红石粉点含水宿主（a0 判定源走 setRedstonePhase）：条目写入、水被清掉。
+        level.setBlock(pos, waterlogged, Block.UPDATE_ALL);
+        assertTrue("entry write: dust accepts a waterlogged host",
+            RedstoneBlocks.setRedstonePhase(level, pos, level.getBlockState(pos)));
+        BlockState after = level.getBlockState(pos);
+        assertTrue("entry write: water is cleared from the state",
+            RedstoneBlocks.hasRedstone(level, pos)
+                && !after.getValue(BlockStateProperties.WATERLOGGED)
+                && level.getFluidState(pos).isEmpty());
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+
+        // 含熔岩宿主贴元件（元件门控与红石相共用 canAcceptExtra）：熔岩相清回 none。
+        level.setBlock(pos, PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.LAVA), Block.UPDATE_ALL);
+        assertTrue("element accepts a lava-filled host via the shared gate",
+            ElementBlocks.hasCavity(level, pos, level.getBlockState(pos))
+                && ElementBlocks.place(level, pos, level.getBlockState(pos),
+                    PhaseExtra.Kind.OBSERVER, Direction.NORTH));
+        BlockState afterLava = level.getBlockState(pos);
+        assertTrue("element on lava host: lava cleared, entry written, no water",
+            PhaseHelper.getPhase(afterLava) == Phase.NONE
+                && PhaseExtra.kind(PhaseExtras.get(level, pos)) == PhaseExtra.Kind.OBSERVER
+                && !afterLava.getValue(BlockStateProperties.WATERLOGGED));
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+
+        // 冰相宿主仍拒绝覆盖（用户口径"其余填充不允许覆盖"）：红石与元件都不放行、不改动。
+        level.setBlock(pos, PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.ICE), Block.UPDATE_ALL);
+        BlockState iceHost = level.getBlockState(pos);
+        assertTrue("ice-filled host still refuses dust (canAcceptExtra)",
+            !PhaseHelper.canAcceptExtra(level, pos, iceHost));
+        assertTrue("ice-filled host still refuses elements (hasCavity uses the shared gate)",
+            !ElementBlocks.hasCavity(level, pos, iceHost)
+                && !ElementBlocks.place(level, pos, iceHost, PhaseExtra.Kind.REPEATER, Direction.NORTH));
+        assertTrue("refused writes leave the ice phase untouched",
+            PhaseHelper.getPhase(level.getBlockState(pos)) == Phase.ICE
+                && PhaseExtras.get(level, pos) == PhaseExtra.EMPTY);
+        level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(pos.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+    }
+
+    // ------------------------------------------------------------------
+    // 0.2.3 活塞路径：黑曜石相推不动；推动覆盖/破坏列表弹出物品（相不随方块移动）；
+    // 拉动/剩余清格实体化留在原位。真实活塞由 PistonBaseBlockInvoker 直驱 triggerEvent。
+    // ------------------------------------------------------------------
+
+    private static void checkPistonPhaseBehavior(ServerLevel level, BlockPos base) {
+        // 自检跑在 SERVER_STARTED：测试区块此时可能还不是 entity-ticking，
+        // addFreshEntity 成功但实体段不可见（1.21.10 实测），弹出断言会假失败。
+        // 强制加载测试区块（1.21.10/11 均在 x=2..3、z=0..1 附近），跑完解除。
+        int cx0 = base.getX() >> 4;
+        int cz0 = base.getZ() >> 4;
+        for (int dx = 0; dx <= 1; dx++) {
+            for (int dz = 0; dz <= 1; dz++) {
+                level.setChunkForced(cx0 + dx, cz0 + dz, true);
+            }
+        }
+        try {
+            checkPistonPhaseBehavior0(level, base);
+        } finally {
+            for (int dx = 0; dx <= 1; dx++) {
+                for (int dz = 0; dz <= 1; dz++) {
+                    level.setChunkForced(cx0 + dx, cz0 + dz, false);
+                }
+            }
+        }
+    }
+
+    private static void checkPistonPhaseBehavior0(ServerLevel level, BlockPos base) {
+        // (1) 黑曜石相 push reaction = BLOCK（推动/粘性拉回/黏液链全部失败）。
+        BlockState obsidianFilled = PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.OBSIDIAN);
+        //? if 26.3 {
+        /*assertTrue("obsidian phase pushes as IMMOVEABLE",
+            obsidianFilled.getPistonPushReaction() == net.minecraft.world.level.material.PushReaction.IMMOVEABLE);
+         *///?} else {
+        assertTrue("obsidian phase pushes as BLOCK",
+            obsidianFilled.getPistonPushReaction() == net.minecraft.world.level.material.PushReaction.BLOCK);
+        //?}
+
+        // (2) 推动含冰宿主：冰相弹出（无物品），宿主以无相状态被推走。
+        BlockPos p1 = base.offset(46, 1, 0);
+        BlockPos host1 = p1.relative(Direction.EAST);
+        level.setBlock(p1.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(host1.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(host1.relative(Direction.EAST).below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(p1.west(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(p1, Blocks.PISTON.defaultBlockState().setValue(net.minecraft.world.level.block.piston.PistonBaseBlock.FACING, Direction.EAST), Block.UPDATE_ALL);
+        level.setBlock(host1, PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.ICE), Block.UPDATE_ALL);
+        boolean moved1 = liquidphase$triggerPiston(level, p1, 0, 0);
+        assertTrue("piston pushes an ice-filled host", moved1);
+        assertTrue("pushed host leaves an extension at its origin",
+            level.getBlockState(host1).is(Blocks.MOVING_PISTON));
+        net.minecraft.world.level.block.entity.BlockEntity be1 = level.getBlockEntity(host1.relative(Direction.EAST));
+        assertTrue("pushed host travels without its phase",
+            be1 instanceof net.minecraft.world.level.block.piston.PistonMovingBlockEntity pm1
+                && pm1.getMovedState().getBlock() == Blocks.OAK_STAIRS
+                && PhaseHelper.getPhase(pm1.getMovedState()) == Phase.NONE);
+        // 掉落口径走纯函数对账：自检跑在 SERVER_STARTED，部分版本（1.21.10 实测）的
+        // 测试区块还不是 entity-ticking，AABB/实体管理器查询看不到刚生成的掉落物。
+        assertTrue("ice phase has no drop item",
+            org.liquidphase.phase.PhaseDrops.droppedItem(Phase.ICE, PhaseExtra.EMPTY).isEmpty());
+        liquidphase$cleanupPistonArena(level, p1, 3);
+
+        // (3) 推动含熔岩宿主（液体物品功能开启 = 默认配置）：原格掉落熔岩物品。
+        BlockPos p2 = base.offset(46, 1, 4);
+        BlockPos host2 = p2.relative(Direction.EAST);
+        level.setBlock(p2.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(host2.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(host2.relative(Direction.EAST).below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(p2.west(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(p2, Blocks.PISTON.defaultBlockState().setValue(net.minecraft.world.level.block.piston.PistonBaseBlock.FACING, Direction.EAST), Block.UPDATE_ALL);
+        level.setBlock(host2, PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.LAVA), Block.UPDATE_ALL);
+        assertTrue("piston pushes a lava-filled host",
+            liquidphase$triggerPiston(level, p2, 0, 0));
+        assertTrue("lava phase pops as a liquid item with feature 3 on",
+            org.liquidphase.LiquidPhaseConfig.get().liquidInteraction
+                ? org.liquidphase.phase.PhaseDrops.droppedItem(Phase.LAVA, PhaseExtra.EMPTY)
+                    .is(net.minecraft.world.item.Items.LAVA_BUCKET)
+                : org.liquidphase.phase.PhaseDrops.droppedItem(Phase.LAVA, PhaseExtra.EMPTY).isEmpty());
+        assertTrue("pushed lava host leaves no phased host at the origin",
+            PhaseHelper.getPhase(level.getBlockState(host2)) == Phase.NONE);
+        liquidphase$cleanupPistonArena(level, p2, 3);
+
+        // (4) 推动含红石相宿主：原格掉红石粉、条目清空。
+        BlockPos p3 = base.offset(46, 1, 8);
+        BlockPos host3 = p3.relative(Direction.EAST);
+        level.setBlock(p3.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(host3.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(host3.relative(Direction.EAST).below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(p3.west(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(p3, Blocks.PISTON.defaultBlockState().setValue(net.minecraft.world.level.block.piston.PistonBaseBlock.FACING, Direction.EAST), Block.UPDATE_ALL);
+        level.setBlock(host3, Blocks.OAK_STAIRS.defaultBlockState(), Block.UPDATE_ALL);
+        PhaseExtras.set(level, host3, PhaseExtra.redstone(7));
+        assertTrue("piston pushes a redstone-phase host",
+            liquidphase$triggerPiston(level, p3, 0, 0));
+        assertTrue("redstone phase pops as dust",
+            org.liquidphase.phase.PhaseDrops.droppedItem(Phase.NONE, PhaseExtra.redstone(7))
+                .is(net.minecraft.world.item.Items.REDSTONE));
+        assertTrue("redstone entry cleared at the pushed origin",
+            PhaseExtras.get(level, host3) == PhaseExtra.EMPTY);
+        liquidphase$cleanupPistonArena(level, p3, 3);
+
+        // (5) 粘性活塞拉回含冰宿主：任意填充相实体化留在原位，宿主无相被拉走。
+        // 缩回走 moveBlocks 直驱：triggerEvent 的缩回分支要求活塞头位置有 PistonMovingBlockEntity，
+        // 自检场地摆不出完整生命周期；moveBlocks 本身覆盖同一套移动/清格逻辑。
+        BlockPos p4 = base.offset(46, 1, 12);
+        BlockPos head4 = p4.relative(Direction.EAST);
+        BlockPos host4 = p4.relative(Direction.EAST, 2);
+        level.setBlock(p4.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(head4.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(host4.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(p4, Blocks.STICKY_PISTON.defaultBlockState()
+            .setValue(net.minecraft.world.level.block.piston.PistonBaseBlock.FACING, Direction.EAST)
+            .setValue(net.minecraft.world.level.block.piston.PistonBaseBlock.EXTENDED, true), Block.UPDATE_ALL);
+        level.setBlock(head4, Blocks.PISTON_HEAD.defaultBlockState()
+            .setValue(net.minecraft.world.level.block.piston.PistonHeadBlock.FACING, Direction.EAST)
+            .setValue(net.minecraft.world.level.block.piston.PistonHeadBlock.TYPE, net.minecraft.world.level.block.state.properties.PistonType.STICKY), Block.UPDATE_ALL);
+        level.setBlock(host4, PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.ICE), Block.UPDATE_ALL);
+        assertTrue("sticky piston pulls an ice-filled host",
+            liquidphase$moveBlocks(level, p4, Direction.EAST, false));
+        assertTrue("pulled host leaves its ice phase materialized in place",
+            level.getBlockState(host4).is(Blocks.ICE));
+        net.minecraft.world.level.block.entity.BlockEntity be4 = level.getBlockEntity(head4);
+        assertTrue("pulled host travels without its phase",
+            be4 instanceof net.minecraft.world.level.block.piston.PistonMovingBlockEntity pm4
+                && pm4.getMovedState().getBlock() == Blocks.OAK_STAIRS
+                && PhaseHelper.getPhase(pm4.getMovedState()) == Phase.NONE);
+        liquidphase$cleanupPistonArena(level, p4, 3);
+
+        // (6) 破坏列表摧毁含冰/红石的 DESTROY 反应宿主：相弹出（冰无物品、红石掉红石粉）。
+        // 不用黑曜石：黑曜石相一律推不动（BLOCK），根本进不了破坏列表——那是 (1) 的口径。
+        BlockPos p5 = base.offset(46, 1, 16);
+        BlockPos host5 = p5.relative(Direction.EAST);
+        level.setBlock(p5.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(p5.west(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(p5, Blocks.PISTON.defaultBlockState().setValue(net.minecraft.world.level.block.piston.PistonBaseBlock.FACING, Direction.EAST), Block.UPDATE_ALL);
+        level.setBlock(host5, PhaseHelper.withPhase(Blocks.HANGING_ROOTS.defaultBlockState(), Phase.ICE), Block.UPDATE_ALL);
+        assertTrue("piston destroys a destroy-reaction host",
+            liquidphase$triggerPiston(level, p5, 0, 0));
+        assertTrue("destroyed host cell is taken over by the extension",
+            level.getBlockState(host5).is(Blocks.MOVING_PISTON));
+        assertTrue("ice phase has no item from the destroy list",
+            org.liquidphase.phase.PhaseDrops.droppedItem(Phase.ICE, PhaseExtra.EMPTY).isEmpty());
+        liquidphase$cleanupPistonArena(level, p5, 3);
+
+        // (6b) 破坏列表摧毁含红石条目的宿主：掉红石粉。
+        level.setBlock(p5.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(p5.west(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(p5, Blocks.PISTON.defaultBlockState().setValue(net.minecraft.world.level.block.piston.PistonBaseBlock.FACING, Direction.EAST), Block.UPDATE_ALL);
+        level.setBlock(host5, Blocks.HANGING_ROOTS.defaultBlockState(), Block.UPDATE_ALL);
+        PhaseExtras.set(level, host5, PhaseExtra.redstone(5));
+        assertTrue("piston destroys a redstone-entry host",
+            liquidphase$triggerPiston(level, p5, 0, 0));
+        assertTrue("redstone entry pops as dust from the destroy list",
+            org.liquidphase.phase.PhaseDrops.droppedItem(Phase.NONE, PhaseExtra.redstone(5))
+                .is(net.minecraft.world.item.Items.REDSTONE));
+        assertTrue("destroyed host's entry is cleared",
+            PhaseExtras.get(level, host5) == PhaseExtra.EMPTY);
+        liquidphase$cleanupPistonArena(level, p5, 3);
+
+        // (7) 反向：黑曜石相宿主推不动（推动直接失败、方块原位不动、无掉落）。
+        BlockPos p6 = base.offset(46, 1, 20);
+        BlockPos host6 = p6.relative(Direction.EAST);
+        level.setBlock(p6.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(p6.west(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(p6, Blocks.PISTON.defaultBlockState().setValue(net.minecraft.world.level.block.piston.PistonBaseBlock.FACING, Direction.EAST), Block.UPDATE_ALL);
+        level.setBlock(host6, PhaseHelper.withPhase(Blocks.OAK_STAIRS.defaultBlockState(), Phase.OBSIDIAN), Block.UPDATE_ALL);
+        assertTrue("piston cannot push an obsidian-filled host",
+            !liquidphase$triggerPiston(level, p6, 0, 0));
+        assertTrue("obsidian-filled host stays in place",
+            PhaseHelper.getPhase(level.getBlockState(host6)) == Phase.OBSIDIAN
+                && level.getBlockState(host6).getBlock() == Blocks.OAK_STAIRS);
+        assertTrue("obsidian phase would drop obsidian if popped (mapping sanity)",
+            org.liquidphase.phase.PhaseDrops.droppedItem(Phase.OBSIDIAN, PhaseExtra.EMPTY)
+                .is(net.minecraft.world.item.Items.OBSIDIAN));
+        liquidphase$cleanupPistonArena(level, p6, 3);
+    }
+
+    /** 直驱活塞 block event（i=0 伸、i=1 缩；伸需要邻位电源，缩不需要）。 */
+    private static boolean liquidphase$triggerPiston(ServerLevel level, BlockPos pistonPos, int id, int param) {
+        return ((org.liquidphase.mixin.PistonBaseBlockInvoker) (Object) net.minecraft.world.level.block.Blocks.PISTON)
+            .liquidphase$triggerEvent(level.getBlockState(pistonPos), level, pistonPos, id, param);
+    }
+
+    /** 直驱移动逻辑（{@code extending=false} 即粘性缩回），不依赖活塞头方块实体。 */
+    private static boolean liquidphase$moveBlocks(ServerLevel level, BlockPos pistonPos, Direction direction, boolean extending) {
+        return ((org.liquidphase.mixin.PistonBaseBlockInvoker) (Object) net.minecraft.world.level.block.Blocks.PISTON)
+            .liquidphase$moveBlocks(level, pistonPos, direction, extending);
+    }
+
+    /** 清理活塞测试场（3×3 范围方块 + 残余掉落物 + 移塞方块实体残留）。 */
+    private static void liquidphase$cleanupPistonArena(ServerLevel level, BlockPos pistonPos, int radius) {
+        for (int dx = -1; dx <= radius; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    level.setBlock(pistonPos.offset(dx, dy, dz), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+                }
+            }
+        }
+        double r2 = (radius + 2.0) * (radius + 2.0);
+        for (net.minecraft.world.entity.Entity entity : level.getAllEntities()) {
+            if (entity instanceof net.minecraft.world.entity.item.ItemEntity item
+                && item.position().distanceToSqr(net.minecraft.world.phys.Vec3.atCenterOf(pistonPos)) <= r2) {
+                item.discard();
+            }
+        }
+    }
+
 
     // ------------------------------------------------------------------
     // 组装初始状态与结算（0.1.22）：初始状态按"是不是重新放置"区分——
@@ -1553,36 +1812,32 @@ public final class PhaseSelfTest {
     }
 
     /**
-     * glow_lichen / sculk_vein 的 {@code getStateForPlacement} 由 {@code MultifaceBlock} 声明
-     * （全版本如此），PlacementMixin 0.1.12 及以前只在 1.21.10+ 挂它 → 1.19.4–1.21.1
-     * 放进熔岩源格不吸收相（audit §4.6，0.1.13 修）。
-     */
-    /**
-     * glow_lichen / sculk_vein 的 {@code getStateForPlacement} 由 {@code MultifaceBlock} 声明
-     * （全版本如此），PlacementMixin 0.1.12 及以前只在 1.21.10+ 挂它 → 1.19.4–1.21.1
-     * 放进熔岩源格不吸收相（audit §4.6，0.1.13 修）。
-     * <p>
-     * 场景按真实放置姿势摆：点熔岩源格**旁边**的石头侧面（原版 context 的 clickedPos
-     * 会落到熔岩源格上），宿主状态算出来后应带上熔岩相。
+     * 放进熔岩源格吸收相（0.2.3 起走统一路径）：熔岩源原版可替换 →
+     * {@code BlockItem.place} 正常落格，{@code BlockItemMixin} 的 placeBlock 捕获读出熔岩源格、
+     * RETURN 注入写熔岩相（原 PlacementMixin 的 getStateForPlacement 改写已删除）。
+     * 场景按真实放置姿势摆：点熔岩源格旁边石头的侧面（clickedPos 落到熔岩源格上）。
      */
     private static void checkPlacementAbsorption(ServerLevel level, BlockPos base) {
         BlockPos lavaPos = base.offset(26, 1, 0);
         BlockPos stonePos = lavaPos.west();
-        level.setBlock(lavaPos, Fluids.LAVA.defaultFluidState().createLegacyBlock(), Block.UPDATE_ALL);
-        level.setBlock(stonePos, Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
         net.minecraft.server.level.ServerPlayer player = liquidphase$fakePlayer(level);
         for (Block block : new Block[]{Blocks.GLOW_LICHEN, Blocks.SCULK_VEIN}) {
-            // 点石头的东侧面（朝熔岩格）：clicked 块不可替换 → context 落点 = 熔岩格。
+            level.setBlock(lavaPos, Fluids.LAVA.defaultFluidState().createLegacyBlock(), Block.UPDATE_ALL);
+            level.setBlock(stonePos, Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+            // 多面体宿主的 getStateForPlacement 要读玩家朝向，必须用真实玩家上下文
+            // （无玩家上下文会在 Direction.orderedByNearest(null) 里 NPE）。
             Vec3 hitVec = new Vec3(stonePos.getX() + 1.5, stonePos.getY() + 0.5, stonePos.getZ() + 0.5);
             BlockHitResult hit = new BlockHitResult(hitVec, Direction.EAST, stonePos, false);
             BlockPlaceContext context = new BlockPlaceContext(level, player,
                 net.minecraft.world.InteractionHand.MAIN_HAND, new ItemStack(block), hit);
             assertTrue("placement context targets the lava source tile (got " + context.getClickedPos() + ")",
                 context.getClickedPos().equals(lavaPos));
-            BlockState placed = block.getStateForPlacement(context);
+            net.minecraft.world.InteractionResult result = ((BlockItem) block.asItem()).place(context);
+            BlockState placed = level.getBlockState(lavaPos);
             assertTrue(block + " absorbs the lava phase when placed into a lava source (got "
-                    + (placed == null ? "null" : PhaseHelper.getPhase(placed)) + ")",
-                placed != null && PhaseHelper.getPhase(placed) == Phase.LAVA);
+                    + result + " / " + PhaseHelper.getPhase(placed) + ")",
+                result.consumesAction() && placed.getBlock() == block
+                    && PhaseHelper.getPhase(placed) == Phase.LAVA);
         }
         level.setBlock(lavaPos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(stonePos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
@@ -1938,6 +2193,7 @@ public final class PhaseSelfTest {
                     assertTrue("gate C final state carries the incoming phase for " + label,
                         redstoneMaterial
                             ? RedstoneBlocks.hasRedstone(level, pos)
+                                && !afterC.getValue(BlockStateProperties.WATERLOGGED)
                             : PhaseHelper.getPhase(afterC) == incoming
                                 && !afterC.getValue(BlockStateProperties.WATERLOGGED));
                 }

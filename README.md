@@ -13,6 +13,7 @@
 | 0.2.0 | 1.19.4 / 1.20.1 / 1.21.1 / 1.21.10 / 1.21.11 / 26.3 | 方案 C：`filling` 只保留 8 个材料类别，红石功率与元件参数进旁路表；**旧存档不兼容**（属性取值域变更） |
 | 0.2.1 | 同上 | 修复：红石相/元件相"有时显示有时不显示"——旁路表变化后客户端 section 未重画（`markDirty` 走了 `setBlockDirty` 的 `requiresRender` 门，同状态对象恒 false，静默 no-op） |
 | 0.2.2 | 同上 | 修复：**潜行右键宿主放中继器/比较器/侦测器从未生效**——装配取宿主用了 `getClickedPos()`，而原版对不可替换方块把它指向宿主旁的空气格（真实点击回归 `AssemblyInteractionTest` 抓到） |
+| 0.2.3 | 同上 | **清含水**：往含水宿主写红石/元件条目时水被清掉（一格只表达一个被含相）；**装配门控合一**：元件与红石相共用同一条可写入判定（熔岩相宿主可以贴元件），写条目清熔岩相；**吸收统一**：宿主放进任何相材料格（线/冰/霜冰/黑曜石/熔岩源）都走"可替换 + placeBlock 捕获"一条路径（删 `PlacementMixin` 与落点拦截）；**活塞**：黑曜石填充相一律推不动，相一律不随活塞移动——推动覆盖/破坏列表摧毁时弹出物品（固相掉对应物品、冰/霜冰无物品即消失、熔岩相按液体物品开关掉熔岩物品或消失、红石相掉红石粉、元件掉物品），粘性拉动/剩余清格时任意填充相实体化留在原位 |
 
 ---
 
@@ -46,7 +47,9 @@
 - **所有宿主的相都是"内缩叠加层"**：宿主模型始终照常渲染，相材质是一层比方块小 0.25px 的立方体。
 - **红石相 / 元件相**：红石相在宿主表面显示一层按功率着色的红石外壳；**潜行右键**宿主上表面，
   手持中继器 / 比较器 / 侦测器可把元件贴到宿主表面。两者都不占用 `filling` 取值，
-  参数存在旁路表里（见下文"方案 C"）。
+  参数存在旁路表里（见下文"方案 C"）。写条目时宿主上的水/熔岩相被清掉（清含水，一格只表达
+  一个被含相）；元件与红石粉共用同一条可写入判定（含熔岩相的宿主也可以贴元件；
+  冰/霜冰/黑曜石相不可覆盖）。
 
 ### 功能二：炼药锅（仅服务端，原版方块可表达的部分）
 
@@ -196,8 +199,9 @@
 1. **旧存档不兼容**：`filling` 的取值域已变更（8 个材料类别），旧状态无法映射。
 2. **元件只能放在有顶面空腔的宿主**：下半砖/下半楼梯等可以（足迹内存在 `top < 1` 的列），
    整格方块、上半砖拒绝。
-3. **元件参数与红石功率在旁路表里，不随活塞移动**：活塞推动宿主时该格条目被清掉，
-   元件/红石相不会跟着走。
+3. **相一律不随活塞移动（0.2.3）**：黑曜石填充相一律推不动；其余填充相被推/拉走时
+   留在原格（被覆盖/摧毁 → 弹出物品；被清空 → 实体化留原位），红石/元件条目同样不随动
+   （覆盖/摧毁弹出物品，拉动清格时红石相留对应功率红石线、元件掉物品）。
 4. **中继器 `locked` 只做逻辑锁定**，不显示原版的锁形。
 5. **1.19.4–1.21.11 所有相宿主方块（所有状态）都走 CUTOUT**：红石外壳是透明底贴图，
    因此失去原版 SOLID 的 mipmap（视觉/性能取舍）；26.3 由贴图透明度自动推导。
@@ -221,6 +225,7 @@ One block = solid phase (the block itself) + at most one contained phase.
 | 0.2.0 | 1.19.4 / 1.20.1 / 1.21.1 / 1.21.10 / 1.21.11 / 26.3 | Plan C: `filling` keeps only 8 material classes; redstone power and element parameters live in the side table; **old worlds are incompatible** (property value domain changed) |
 | 0.2.1 | same | Fix: redstone/element phase sometimes invisible — a table-only change never re-rendered its section (`markDirty` went through `setBlockDirty`'s `requiresRender` gate, which returns false for an identical state object) |
 | 0.2.2 | same | Fix: **sneak-placing repeaters/comparators/observers into hosts never fired** — assembly looked the host up via `getClickedPos()`, which vanilla points at the air cell next to a non-replaceable host (caught by the new real-click regression `AssemblyInteractionTest`) |
+| 0.2.3 | same | **Water clearing**: writing a redstone/element entry onto a waterlogged host removes the water (one contained phase per cell); **unified assembly gate**: elements share the same acceptability check as dust (lava-filled hosts accept elements), writing an entry clears a lava phase; **unified absorption**: placing a host into any phase-material cell (wire/ice/frosted ice/obsidian/lava source) goes through one replaceable-cell + placeBlock-capture path (`PlacementMixin` and the place-time intercept removed); **pistons**: obsidian-filled hosts are always unpushable, phases never travel with pistons — pushed-over/destroyed cells pop the phase as an item (obsidian drops obsidian, ice/frosted ice vanish, lava drops its liquid item with feature 3 on or vanishes, redstone pops dust, elements drop their item), sticky-pull/clearing materializes any filling in place |
 
 ### Feature 1 — more logged blocks (required on both sides)
 
@@ -244,7 +249,9 @@ One block = solid phase (the block itself) + at most one contained phase.
   (obsidian needs a diamond pickaxe; ice melts to water without silk touch; frosted ice has no item).
 - **Redstone / elements**: the redstone phase draws a power-tinted redstone shell on the host surface; **sneak right-click**
   the top face with a repeater / comparator / observer to attach the element to the host. Neither occupies a `filling`
-  value; their parameters live in the side table (see "Plan C").
+  value; their parameters live in the side table (see "Plan C"). Writing an entry clears the host's water/lava phase
+  (water clearing, one contained phase per cell); elements share the same acceptability check as dust (lava-filled
+  hosts accept elements; ice/frosted ice/obsidian phases cannot be overwritten).
 
 ### Feature 2 — cauldron behaviour (server-side only, vanilla-representable part)
 
@@ -370,8 +377,10 @@ files (`Unsupported class file major version 69`) — use a newer loader or JDK 
 1. **Old worlds are incompatible**: the `filling` value domain changed (8 material classes); old states cannot be mapped.
 2. **Elements only fit hosts with top-face cavity**: bottom slabs / bottom stairs work (some column has `top < 1`);
    full blocks and top slabs are refused.
-3. **Element parameters and redstone power live in the side table and do not move with pistons**: pushing the host
-   clears the entry, so elements/redstone phases are not carried along.
+3. **Phases never travel with pistons (0.2.3)**: obsidian-filled hosts are unpushable; other fillings stay at the
+   origin cell when the host is pushed/pulled (popped as items when covered/destroyed, materialized in place when
+   the origin is cleared), and redstone/element entries likewise (popped as items on the pop paths; on the pull path
+   redstone leaves a wire at its power and elements drop their item).
 4. **Repeater `locked` only implements the logical lock**, without the vanilla lock-bar visual.
 5. **On 1.19.4–1.21.11 every state of every phase host uses CUTOUT**: the redstone shell is a cutout texture, so
    vanilla SOLID mipmaps are lost (a visual/performance trade-off); 26.3 derives the layer from texture transparency.

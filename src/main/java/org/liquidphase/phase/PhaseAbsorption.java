@@ -49,6 +49,26 @@ public final class PhaseAbsorption {
     }
 
     /**
+     * {@return 放置落点格可被宿主吸收的相；不是"相材料格"返回 null}
+     * <p>
+     * 0.2.3 的统一口径：{@link #phaseOfBlock} 的方块形态，外加**熔岩源**（流体形态）。
+     * 红石线不在这里——它不占 {@link Phase} 取值，由 {@code RedstoneBlocks.setRedstonePhase}
+     * 单独写旁路表（调用点按 {@code Blocks.REDSTONE_WIRE} 先分流）。
+     * 流动熔岩不算源，不吸收。
+     */
+    public static Phase phaseOfCell(BlockState state) {
+        Phase block = phaseOfBlock(state);
+        if (block != null) {
+            return block;
+        }
+        net.minecraft.world.level.material.FluidState fluid = state.getFluidState();
+        if (fluid.is(net.minecraft.world.level.material.Fluids.LAVA) && fluid.isSource()) {
+            return Phase.LAVA;
+        }
+        return null;
+    }
+
+    /**
      * {@return 手持物品对应的填充相；非填充相材料返回 null}
      * <p>
      * 填充相材料的物品形态 → 相的唯一映射（0.1.17 起供接受层/改写层共用作门控入参，

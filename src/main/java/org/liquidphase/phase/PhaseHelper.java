@@ -158,6 +158,21 @@ public final class PhaseHelper {
         return true;
     }
 
+    /**
+     * {@return 同状态剥掉材料填充相与含水标志后的版本（0.2.3 清含水）}
+     * <p>
+     * 写入红石/元件条目时对宿主状态用这个：一格只表达一个被含相，条目本身就是一个被含相，
+     * 水不能再留在格内（含水 + 条目会变成两个被含相）。熔岩相同样清回 none；
+     * 已是干净状态时返回同一实例（{@code setValue} 对未变化取值返回缓存实例）。
+     */
+    public static BlockState withoutFillingAndWater(BlockState state) {
+        BlockState result = withPhase(state, Phase.NONE);
+        if (result.hasProperty(BlockStateProperties.WATERLOGGED) && result.getValue(BlockStateProperties.WATERLOGGED)) {
+            result = result.setValue(BlockStateProperties.WATERLOGGED, false);
+        }
+        return result;
+    }
+
     /** {@return 同属性、无相且未含水的兄弟状态——宿主本体充水能力探测用} */
     private static BlockState emptySibling(BlockState state) {
         BlockState probe = withPhase(state, Phase.NONE);

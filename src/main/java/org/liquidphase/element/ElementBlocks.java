@@ -21,7 +21,6 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
-import org.liquidphase.phase.Phase;
 import org.liquidphase.phase.PhaseExtra;
 import org.liquidphase.phase.PhaseExtras;
 import org.liquidphase.phase.PhaseHelper;
@@ -94,12 +93,15 @@ public final class ElementBlocks {
         return Math.min(1.0, top);
     }
 
-    /** {@return 足迹内是否存在"有空间"的列（放置前提，文档 §2.2）} */
+    /**
+     * {@return 足迹内是否存在"有空间"的列（放置前提，文档 §2.2）}
+     * <p>
+     * 相门控（0.2.3 通用化）：与红石相共用同一条"可写入"判定
+     * {@link PhaseHelper#canAcceptExtra}——条目为空且现有填充相为空（含水可写，水被清掉）
+     * 或熔岩（被清回 none）；冰/霜冰/黑曜石相不可覆盖。元件不再要求"严格空相"。
+     */
     public static boolean hasCavity(Level level, BlockPos pos, BlockState host) {
-        if (!PhaseHelper.hasPhaseProperty(host) || PhaseHelper.getPhase(host) != Phase.NONE) {
-            return false;
-        }
-        if (!PhaseExtra.isEmpty(PhaseExtras.get(level, pos))) {
+        if (!PhaseHelper.hasPhaseProperty(host) || !PhaseHelper.canAcceptExtra(level, pos, host)) {
             return false;
         }
         VoxelShape shape = host.getCollisionShape(level, pos, CollisionContext.empty());
@@ -124,10 +126,18 @@ public final class ElementBlocks {
     /**
      * 在宿主上表面放一个元件。{@code facing} 按元件语义解释（中继器/比较器 = 输入面，
      * 侦测器 = 观察面）。
+     * <p>
+     * 写入条目时宿主状态剥掉材料填充相与含水标志（清含水 / 覆盖熔岩相）——
+     * 条目本身就是一个被含相，一格只表达一个。
      */
     public static boolean place(Level level, BlockPos pos, BlockState host, PhaseExtra.Kind kind, Direction facing) {
         if (!hasCavity(level, pos, host)) {
             return false;
+        }
+        BlockState stripped = PhaseHelper.withoutFillingAndWater(host);
+        if (stripped != host) {
+            level.setBlock(pos, stripped, Block.UPDATE_ALL);
+            host = stripped;
         }
         int extra = PhaseExtra.element(kind, facing, 0, false, false);
         PhaseExtras.set(level, pos, extra);

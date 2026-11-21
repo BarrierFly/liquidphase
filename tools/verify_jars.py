@@ -114,11 +114,28 @@ for ver, jar in jars():
             bad += bad_conditions(data)
             always_true += always_true_conditions(data)
 
-        replace_mixin = z.read('org/liquidphase/mixin/RedstoneWireReplaceMixin.class')
-        block_item = z.read('org/liquidphase/mixin/BlockItemMixin.class')
-
-        has_replace_mixin = b'liquidphase$wireIsReplaceableForHost' in replace_mixin
-        has_phase_write = b'liquidphase$captureWirePower' in block_item
+        # 0.2.3 起：线格放行推广为"相材料格放行"（PhaseCellReplaceMixin），placeBlock 捕获
+        # 推广为"线格 + 相材料格"（liquidphase$captureCellPhase）。更老的 dist 包沿用旧探针，
+        # 这样本脚本可以同时对 dist 里的历史包做复核（旧包没有新 mixin 属正常）。
+        vmod = json.loads(z.read('fabric.mod.json'))
+        vstr = str(vmod['version'])
+        vnum = tuple(int(x) for x in re.match(r'(\d+)\.(\d+)\.(\d+)', vstr).groups())
+        if vnum >= (0, 2, 3):
+            replace_mixin = z.read('org/liquidphase/mixin/PhaseCellReplaceMixin.class')
+            block_item = z.read('org/liquidphase/mixin/BlockItemMixin.class')
+            piston_base = z.read('org/liquidphase/mixin/PistonBaseBlockMixin.class')
+            has_replace_mixin = b'liquidphase$phaseCellIsReplaceableForHost' in replace_mixin
+            has_phase_write = b'liquidphase$captureCellPhase' in block_item
+            # 活塞：破坏列表标记（≤1.21.1 走 setBlock 重定向，1.21.10+ 走 affect 重定向）+ 移动状态剥相。
+            has_piston_hooks = (b'liquidphase$markDestroyListSetBlock' in piston_base
+                                or b'liquidphase$destroyListAffect' in piston_base)
+            has_piston_strip = b'liquidphase$stripCarriedPhase' in piston_base
+        else:
+            replace_mixin = z.read('org/liquidphase/mixin/RedstoneWireReplaceMixin.class')
+            block_item = z.read('org/liquidphase/mixin/BlockItemMixin.class')
+            has_replace_mixin = b'liquidphase$wireIsReplaceableForHost' in replace_mixin
+            has_phase_write = b'liquidphase$captureWirePower' in block_item
+            has_piston_hooks = has_piston_strip = True
         removed_wire_use = 'org/liquidphase/mixin/RedstoneWireUseMixin.class' not in names
         removed_wire_ctx = 'org/liquidphase/redstone/WirePlaceContext.class' not in names
 
@@ -205,16 +222,18 @@ for ver, jar in jars():
             missing_blockstates.append('bundled phase-blocks.ids missing')
 
         line_ok = (bad == 0 and has_replace_mixin and has_phase_write
+                   and has_piston_hooks and has_piston_strip
                    and removed_wire_use and removed_wire_ctx
                    and not missing_markers and not missing_dynamic and not missing_blockstates
                    and not cullface_models and not shell_gaps
                    and always_true == 0)
         ok = ok and line_ok
         print('%-8s ver=%-8s blockstates=%-5d bad_conds=%-3d always_true=%-4d replace_mixin=%s '
-              'phase_write=%s render_sync=%s cullface=%s shell=%s missing_dynamic=%s '
+              'phase_write=%s piston=%s/%s render_sync=%s cullface=%s shell=%s missing_dynamic=%s '
               'unrendered_ids=%s -> %s'
               % (ver, mod['version'], len(blockstates), bad, always_true, has_replace_mixin,
-                 has_phase_write, 'ok' if not missing_markers else missing_markers,
+                 has_phase_write, has_piston_hooks, has_piston_strip,
+                 'ok' if not missing_markers else missing_markers,
                  cullface_models or 'none', shell_gaps or 'ok',
                  missing_dynamic or 'none', missing_blockstates or 'none',
                  'OK' if line_ok else 'BROKEN'))

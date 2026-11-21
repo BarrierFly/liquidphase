@@ -184,6 +184,8 @@ public final class RedstoneBlocks {
      * <p>
      * 方块本身不变，只写旁路条目；初始功率一律为 0——与"单独放置一根红石粉"一致，
      * 落地后由 {@code BlockStateBaseMixin} 在 onPlace 里立即按邻居重算出真实功率。
+     * 写入条目时宿主状态剥掉材料填充相与含水标志（0.2.3 清含水：一格只表达一个被含相，
+     * 熔岩相被红石粉覆盖时清回 none，含水宿主上的水一并清掉）。
      * <p>
      * 对比：**吸收**路径（把相容宿主放进红石线格）初始功率沿用原线
      * （{@code BlockItemMixin} / {@code FallingBlockIntoWireMixin}）。
@@ -192,10 +194,9 @@ public final class RedstoneBlocks {
         if (!PhaseHelper.hasPhaseProperty(state)) {
             return false;
         }
-        // 同格只表达一个相：把已有的材料相清掉（熔岩/水/冰/黑曜石）。
-        if (PhaseHelper.getPhase(state) != Phase.NONE) {
-            state = PhaseHelper.withPhase(state, Phase.NONE);
-            level.setBlock(pos, state, Block.UPDATE_ALL);
+        BlockState stripped = PhaseHelper.withoutFillingAndWater(state);
+        if (stripped != state) {
+            level.setBlock(pos, stripped, Block.UPDATE_ALL);
         }
         PhaseExtras.set(level, pos, PhaseExtra.redstone(0));
         // 状态没变（只写了旁路表），onPlace 不会触发：这里显式结算一次，
@@ -206,8 +207,18 @@ public final class RedstoneBlocks {
         return true;
     }
 
-    /** 吸收红石线：初始功率沿用原线（{@code power}），随后立即按邻居重算。 */
+    /**
+     * 吸收红石线：初始功率沿用原线（{@code power}），随后立即按邻居重算。
+     * <p>
+     * 落位的宿主状态若带含水标志（如带水下落的相容宿主落进线格），先剥掉水（清含水）——
+     * 条目本身就是一个被含相，水不能同时留在格内。
+     */
     public static void setRedstonePhase(LevelAccessor level, BlockPos pos, int power) {
+        BlockState state = level.getBlockState(pos);
+        if (state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)
+            && state.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)) {
+            level.setBlock(pos, state.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED, false), Block.UPDATE_ALL);
+        }
         PhaseExtras.set(level, pos, PhaseExtra.redstone(power));
         if (level instanceof ServerLevel serverLevel) {
             updatePower(serverLevel, pos, serverLevel.getBlockState(pos));
