@@ -28,11 +28,15 @@ public final class PhaseStorage {
     }
 
     public static long chunkKey(int x, int z) {
+        //? if 26.3 {
+        /*return ChunkPos.pack(x >> 4, z >> 4);
+         *///?} else {
         return ChunkPos.asLong(x >> 4, z >> 4);
+        //?}
     }
 
     public static long chunkKey(BlockPos pos) {
-        return ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4);
+        return chunkKey(pos.getX(), pos.getZ());
     }
 
     /** {@return 该格的旁路记录；没有记录返回 {@link PhaseExtra#EMPTY}} */
@@ -48,7 +52,7 @@ public final class PhaseStorage {
     public int get(long packedPos) {
         int x = BlockPos.getX(packedPos);
         int z = BlockPos.getZ(packedPos);
-        return get(packedPos, ChunkPos.asLong(x >> 4, z >> 4));
+        return get(packedPos, chunkKey(x, z));
     }
 
     /** 写入/删除一格；{@code extra == 0} 等价删除。{@return 旧值} */

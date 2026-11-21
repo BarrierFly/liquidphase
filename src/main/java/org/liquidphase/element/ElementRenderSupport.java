@@ -50,6 +50,12 @@ public final class ElementRenderSupport {
         };
     }
 
+    /** {@return 子模型路径（去掉 {@code liquidphase:} 前缀，动态模型表用它做键）} */
+    public static String subModelPath(int extra) {
+        String id = subModelId(extra);
+        return id.startsWith("liquidphase:") ? id.substring("liquidphase:".length()) : id;
+    }
+
     /**
      * {@return y 轴旋转角（度，按 {@code x' = x cosθ - z sinθ; z' = x sinθ + z cosθ} 绕方块中心旋转）}
      * <p>

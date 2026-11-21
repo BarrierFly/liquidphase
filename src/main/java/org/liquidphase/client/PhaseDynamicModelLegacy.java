@@ -2,6 +2,8 @@ package org.liquidphase.client;
 
 //? if 1.19.4 || 1.20.1 || 1.21.1 {
 /*
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -38,31 +40,49 @@ import org.liquidphase.phase.PhaseHelper;
 // liquidphase:block/dynamic，由 blockstate 里的无条件 part 触发。
 // 这一代 FRAPI 的 emitBlockQuads(view, state, pos, random, ctx) 自带世界与坐标，
 // 可以直接按旁路表发射红石外壳/元件子模型，并用 ctx.pushTransform 做旋转与逐列抬升。
+//
+// 这个文件整体包在注释里（活动版本 1.21.11 不编译它）。因此：
+//  - 不要在里面写块注释，也不要用嵌套的 //? 分支（会提前闭合外层注释）；
+//  - 三个旧版本的差异用"同时实现两个 bake 重载" + 反射构造 ResourceLocation 解决。
 public final class PhaseDynamicModelLegacy {
 
-    private static final ResourceLocation DYNAMIC = new ResourceLocation("liquidphase", "block/dynamic");
+    private static final ResourceLocation DYNAMIC = rl("block/dynamic");
     private static final List<ResourceLocation> SUB_MODELS = buildSubModelIds();
 
     private PhaseDynamicModelLegacy() {
     }
 
+    private static ResourceLocation rl(String path) {
+        try {
+            Method of = ResourceLocation.class.getMethod("fromNamespaceAndPath", String.class, String.class);
+            return (ResourceLocation) of.invoke(null, "liquidphase", path);
+        } catch (ReflectiveOperationException ignored) {
+        }
+        try {
+            Constructor<ResourceLocation> ctor = ResourceLocation.class.getConstructor(String.class, String.class);
+            return ctor.newInstance("liquidphase", path);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("liquidphase: cannot create ResourceLocation", e);
+        }
+    }
+
     private static List<ResourceLocation> buildSubModelIds() {
         List<ResourceLocation> ids = new ArrayList<>(38);
         for (int power = 0; power < 16; power++) {
-            ids.add(new ResourceLocation("liquidphase", "block/redstone_phase_" + power));
+            ids.add(rl("block/redstone_phase_" + power));
         }
         for (int delay = 1; delay <= 4; delay++) {
             for (int variant = 0; variant < 4; variant++) {
-                ids.add(new ResourceLocation("liquidphase", "block/element_repeater_" + delay + "tick"
+                ids.add(rl("block/element_repeater_" + delay + "tick"
                     + ((variant & 1) != 0 ? "_on" : "") + ((variant & 2) != 0 ? "_locked" : "")));
             }
         }
         for (int variant = 0; variant < 4; variant++) {
-            ids.add(new ResourceLocation("liquidphase", "block/element_comparator"
+            ids.add(rl("block/element_comparator"
                 + ((variant & 1) != 0 ? "_on" : "") + ((variant & 2) != 0 ? "_subtract" : "")));
         }
-        ids.add(new ResourceLocation("liquidphase", "block/element_observer"));
-        ids.add(new ResourceLocation("liquidphase", "block/element_observer_on"));
+        ids.add(rl("block/element_observer"));
+        ids.add(rl("block/element_observer_on"));
         return ids;
     }
 
@@ -85,18 +105,18 @@ public final class PhaseDynamicModelLegacy {
             }
         }
 
-        @Override
         public BakedModel bake(ModelBaker baker, Function<Material, TextureAtlasSprite> textureGetter,
-                               ModelState state
-            //? if 1.19.4 || 1.20.1 {
-            , ResourceLocation modelId
-            //?}
-        ) {
+                               ModelState state) {
             Map<ResourceLocation, BakedModel> parts = new HashMap<>(SUB_MODELS.size() * 2);
             for (ResourceLocation model : SUB_MODELS) {
                 parts.put(model, baker.bake(model, state));
             }
             return new DynamicBaked(parts);
+        }
+
+        public BakedModel bake(ModelBaker baker, Function<Material, TextureAtlasSprite> textureGetter,
+                               ModelState state, ResourceLocation modelId) {
+            return this.bake(baker, textureGetter, state);
         }
     }
 
@@ -114,7 +134,7 @@ public final class PhaseDynamicModelLegacy {
             if (!ElementRenderSupport.hasGeometry(extra)) {
                 return;
             }
-            BakedModel part = this.parts.get(new ResourceLocation("liquidphase",
+            BakedModel part = this.parts.get(rl(
                 ElementRenderSupport.subModelId(extra).substring("liquidphase:".length())));
             if (part == null) {
                 return;

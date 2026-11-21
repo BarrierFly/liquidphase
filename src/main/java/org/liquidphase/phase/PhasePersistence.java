@@ -38,7 +38,6 @@ public final class PhasePersistence {
     public static void register() {
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STARTED.register(PhasePersistence::loadAll);
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STOPPING.register(PhasePersistence::saveAll);
-        net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.AFTER_SAVE.register((server, flush, force) -> saveAll(server));
         net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents.END_SERVER_TICK.register(server -> {
             if (++tickCounter >= AUTOSAVE_TICKS) {
                 tickCounter = 0;

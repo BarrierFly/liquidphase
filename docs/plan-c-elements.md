@@ -34,9 +34,9 @@
 `kind == 0` 的条目不入表（删除条目）。
 
 **存储位置（与文档 §3.4/§6 的偏差，见 §5）**：每个 `Level` 挂一张
-`PhaseExtraStorage`：`Map<Long /*chunkPos*/, Long2IntOpenHashMap /*BlockPos.asLong -> extra*/>`。
+`PhaseStorage`：`Map<Long /*chunkPos*/, Long2IntOpenHashMap /*BlockPos.asLong -> extra*/>`。
 服务端权威、按区块分组（客户端请求/下发按区块），持久化走 mod 自己的
-`world/data/liquidphase_phase.dat`（NBT），不碰原版区块存档格式。
+`world/data/liquidphase_<dimension>.dat`（NBT），不碰原版区块存档格式。
 
 ### 1.3 一致性
 

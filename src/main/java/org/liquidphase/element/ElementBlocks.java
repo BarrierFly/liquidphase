@@ -319,15 +319,25 @@ public final class ElementBlocks {
         BlockPos behind = pos.relative(input);
         BlockState state = level.getBlockState(behind);
         if (state.hasAnalogOutputSignal()) {
+            //? if 1.21.10 || 1.21.11 || 26.3 {
             return state.getAnalogOutputSignal(level, behind, input.getOpposite());
+            //?} else {
+            /*return state.getAnalogOutputSignal(level, behind);
+             *///?}
         }
         if (signal < 15 && state.isRedstoneConductor(level, behind)) {
             BlockPos further = behind.relative(input);
             state = level.getBlockState(further);
             ItemFrame frame = itemFrame(level, input, further);
+            //? if 1.21.10 || 1.21.11 || 26.3 {
             int analog = Math.max(
                 frame == null ? Integer.MIN_VALUE : frame.getAnalogOutput(),
                 state.hasAnalogOutputSignal() ? state.getAnalogOutputSignal(level, further, input.getOpposite()) : Integer.MIN_VALUE);
+            //?} else {
+            /*int analog = Math.max(
+                frame == null ? Integer.MIN_VALUE : frame.getAnalogOutput(),
+                state.hasAnalogOutputSignal() ? state.getAnalogOutputSignal(level, further) : Integer.MIN_VALUE);
+             *///?}
             if (analog != Integer.MIN_VALUE) {
                 return analog;
             }

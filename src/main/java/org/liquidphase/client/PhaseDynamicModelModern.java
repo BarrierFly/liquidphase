@@ -8,6 +8,17 @@ import java.util.Map;
 import java.util.function.Predicate;
 import net.fabricmc.fabric.api.client.model.loading.v1.ModelLoadingPlugin;
 import net.fabricmc.fabric.api.client.model.loading.v1.ModelModifier;
+//? if 26.3 {
+/*import net.fabricmc.fabric.api.client.renderer.v1.mesh.MutableQuadView;
+import net.fabricmc.fabric.api.client.renderer.v1.mesh.QuadEmitter;
+import net.fabricmc.fabric.api.client.renderer.v1.model.FabricBlockStateModel;
+import net.fabricmc.fabric.api.client.renderer.v1.model.FabricBlockStateModelPart;
+import net.minecraft.client.renderer.block.BlockAndTintGetter;
+import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
+import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
+import net.minecraft.client.renderer.block.dispatch.Variant;
+import net.minecraft.client.resources.model.sprite.Material;
+*///?} else {
 import net.fabricmc.fabric.api.renderer.v1.mesh.MutableQuadView;
 import net.fabricmc.fabric.api.renderer.v1.mesh.QuadEmitter;
 import net.fabricmc.fabric.api.renderer.v1.model.FabricBlockModelPart;
@@ -15,21 +26,22 @@ import net.fabricmc.fabric.api.renderer.v1.model.FabricBlockStateModel;
 import net.minecraft.client.renderer.block.model.BlockModelPart;
 import net.minecraft.client.renderer.block.model.BlockStateModel;
 import net.minecraft.client.renderer.block.model.Variant;
+import net.minecraft.world.level.BlockAndTintGetter;
+//?}
 import net.minecraft.client.resources.model.ModelBaker;
 import net.minecraft.client.resources.model.ResolvableModel;
 import net.minecraft.core.BlockPos;
-import net.minecraft.resources.Identifier;
 import net.minecraft.util.RandomSource;
-import net.minecraft.world.level.BlockAndTintGetter;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.liquidphase.element.ElementRenderSupport;
+import org.liquidphase.phase.PhaseExtra;
 import org.liquidphase.phase.PhaseExtras;
 import org.liquidphase.phase.PhaseHelper;
 
 /**
- * 动态相/元件渲染（1.21.10+）：在 {@link BlockStateModel} 层给宿主模型追加几何。
+ * 动态相/元件渲染（1.21.10+）：在 {@code BlockStateModel} 层给宿主模型追加几何。
  * <p>
  * 这一代 {@code BlockModelPart} 的 {@code emitQuads} 拿不到世界与坐标，所以"给 blockstate
  * 追加一个动态 part"行不通；改为用 {@code modifyBlockModelOnLoad} 把宿主状态模型包一层，
@@ -40,48 +52,58 @@ import org.liquidphase.phase.PhaseHelper;
  */
 public final class PhaseDynamicModelModern {
 
-    /** 全部子模型 id：16 档红石外壳 + 16 中继器 + 4 比较器 + 2 侦测器。 */
-    private static final Identifier[] SUB_MODELS = buildSubModelIds();
+    /** 全部子模型（相对 {@code liquidphase:} 的路径）：16 外壳 + 16 中继器 + 4 比较器 + 2 侦测器。 */
+    private static final String[] SUB_PATHS = buildSubPaths();
 
-    private static final ModelBaker.SharedOperationKey<Map<Identifier, BlockModelPart>> PARTS_KEY =
+    private static final ModelBaker.SharedOperationKey<Map<String, Part>> PARTS_KEY =
         PhaseDynamicModelModern::bakeParts;
 
     private PhaseDynamicModelModern() {
     }
 
-    private static Identifier[] buildSubModelIds() {
-        Identifier[] ids = new Identifier[16 + 16 + 4 + 2];
+    //? if 26.3 {
+    /*private interface Part extends net.minecraft.client.renderer.block.dispatch.BlockStateModelPart {
+    }
+     *///?} else {
+    private interface Part extends BlockModelPart {
+    }
+    //?}
+
+    private static String[] buildSubPaths() {
+        String[] ids = new String[16 + 16 + 4 + 2];
         int i = 0;
         for (int power = 0; power < 16; power++) {
-            ids[i++] = id("block/redstone_phase_" + power);
+            ids[i++] = "block/redstone_phase_" + power;
         }
         for (int delay = 1; delay <= 4; delay++) {
             for (int variant = 0; variant < 4; variant++) {
-                ids[i++] = id("block/element_repeater_" + delay + "tick"
-                    + ((variant & 1) != 0 ? "_on" : "") + ((variant & 2) != 0 ? "_locked" : ""));
+                ids[i++] = "block/element_repeater_" + delay + "tick"
+                    + ((variant & 1) != 0 ? "_on" : "") + ((variant & 2) != 0 ? "_locked" : "");
             }
         }
         for (int variant = 0; variant < 4; variant++) {
-            ids[i++] = id("block/element_comparator" + ((variant & 1) != 0 ? "_on" : "")
-                + ((variant & 2) != 0 ? "_subtract" : ""));
+            ids[i++] = "block/element_comparator" + ((variant & 1) != 0 ? "_on" : "")
+                + ((variant & 2) != 0 ? "_subtract" : "");
         }
-        ids[i++] = id("block/element_observer");
-        ids[i++] = id("block/element_observer_on");
+        ids[i++] = "block/element_observer";
+        ids[i++] = "block/element_observer_on";
         return ids;
     }
 
-    private static Identifier id(String path) {
-        //? if 1.21.11 || 26.3 {
-        return Identifier.fromNamespaceAndPath("liquidphase", path);
-        //?} else {
-        /*return net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("liquidphase", path);
-         *///?}
+    //? if 1.21.10 {
+    /*private static net.minecraft.resources.ResourceLocation id(String path) {
+        return net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("liquidphase", path);
     }
+     *///?} else {
+    private static net.minecraft.resources.Identifier id(String path) {
+        return net.minecraft.resources.Identifier.fromNamespaceAndPath("liquidphase", path);
+    }
+    //?}
 
-    private static Map<Identifier, BlockModelPart> bakeParts(ModelBaker baker) {
-        Map<Identifier, BlockModelPart> baked = new HashMap<>(SUB_MODELS.length * 2);
-        for (Identifier model : SUB_MODELS) {
-            baked.put(model, new Variant(model).bake(baker));
+    private static Map<String, Part> bakeParts(ModelBaker baker) {
+        Map<String, Part> baked = new HashMap<>(SUB_PATHS.length * 2);
+        for (String path : SUB_PATHS) {
+            baked.put(path, (Part) new Variant(id(path)).bake(baker));
         }
         return baked;
     }
@@ -101,8 +123,8 @@ public final class PhaseDynamicModelModern {
         @Override
         public void resolveDependencies(ResolvableModel.Resolver resolver) {
             this.wrapped.resolveDependencies(resolver);
-            for (Identifier model : SUB_MODELS) {
-                resolver.markDependency(model);
+            for (String path : SUB_PATHS) {
+                resolver.markDependency(id(path));
             }
         }
 
@@ -121,18 +143,37 @@ public final class PhaseDynamicModelModern {
     // 动态模型
     // ------------------------------------------------------------------
 
-    private record DynamicModel(BlockStateModel base, Map<Identifier, BlockModelPart> parts)
+    private record DynamicModel(BlockStateModel base, Map<String, Part> parts)
         implements FabricBlockStateModel, BlockStateModel {
 
+        //? if 26.3 {
+        /*@Override
+        public void collectParts(RandomSource random, List<BlockStateModelPart> list) {
+            this.base.collectParts(random, list);
+        }
+         *///?} else {
         @Override
         public void collectParts(RandomSource random, List<BlockModelPart> list) {
             this.base.collectParts(random, list);
         }
+        //?}
 
+        //? if 26.3 {
+        /*@Override
+        public Material.Baked particleMaterial() {
+            return this.base.particleMaterial();
+        }
+
+        @Override
+        public int materialFlags() {
+            return this.base.materialFlags();
+        }
+         *///?} else {
         @Override
         public net.minecraft.client.renderer.texture.TextureAtlasSprite particleIcon() {
             return this.base.particleIcon();
         }
+        //?}
 
         @Override
         public void emitQuads(QuadEmitter emitter, BlockAndTintGetter view, BlockPos pos, BlockState state,
@@ -142,19 +183,27 @@ public final class PhaseDynamicModelModern {
             if (!ElementRenderSupport.hasGeometry(extra)) {
                 return;
             }
-            BlockModelPart part = this.parts.get(id(ElementRenderSupport.subModelId(extra).substring("liquidphase:".length())));
+            Part part = this.parts.get(ElementRenderSupport.subModelPath(extra));
             if (part == null) {
                 return;
             }
-            if (!org.liquidphase.phase.PhaseExtra.isElement(extra)) {
+            if (!PhaseExtra.isElement(extra)) {
+                //? if 26.3 {
+                /*((FabricBlockStateModelPart) part).emitQuads(emitter, direction -> false);
+                 *///?} else {
                 ((FabricBlockModelPart) part).emitQuads(emitter, direction -> false);
+                //?}
                 return;
             }
             VoxelShape shape = state.getCollisionShape(view, pos, CollisionContext.empty());
             float yaw = ElementRenderSupport.yawDegrees(extra);
             emitter.pushTransform(quad -> liftToHost(quad, shape, yaw));
             try {
+                //? if 26.3 {
+                /*((FabricBlockStateModelPart) part).emitQuads(emitter, direction -> false);
+                 *///?} else {
                 ((FabricBlockModelPart) part).emitQuads(emitter, direction -> false);
+                //?}
             } finally {
                 emitter.popTransform();
             }

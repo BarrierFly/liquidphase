@@ -38,7 +38,7 @@ public final class PhaseExtraSync {
             PhaseIds.id(REQUEST_PATH), (server, player, handler, buf, sender) -> {
                 int chunkX = buf.readVarInt();
                 int chunkZ = buf.readVarInt();
-                server.execute(() -> sendChunk(player, (ServerLevel) player.level(), chunkX, chunkZ));
+                server.execute(() -> sendChunk(player, levelOf(player), chunkX, chunkZ));
             });
          *///?} else {
         //? if 26.3 {
@@ -58,7 +58,7 @@ public final class PhaseExtraSync {
         //?}
         net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.registerGlobalReceiver(
             RequestPayload.TYPE, (payload, context) -> context.server().execute(
-                () -> sendChunk(context.player(), (ServerLevel) context.player().level(),
+                () -> sendChunk(context.player(), levelOf(context.player()),
                     payload.chunkX(), payload.chunkZ())));
         //?}
     }
@@ -91,12 +91,23 @@ public final class PhaseExtraSync {
         }
     }
 
+    /** {@return 玩家所在的 ServerLevel}（{@code level()} 是 1.20.5+ 的 API，旧版是 {@code getLevel()}） */
+    private static ServerLevel levelOf(ServerPlayer player) {
+        //? if 1.19.4 {
+        /*return player.getLevel();
+         *///?} elif 1.20.1 || 1.21.1 {
+        /*return player.serverLevel();
+         *///?} else {
+        return (ServerLevel) player.level();
+        //?}
+    }
+
     private static void sendChunk(ServerPlayer player, ServerLevel level, int chunkX, int chunkZ) {
         PhaseStorage storage = PhaseExtras.storage(level);
         if (storage == null || player == null) {
             return;
         }
-        long chunkKey = net.minecraft.world.level.ChunkPos.asLong(chunkX, chunkZ);
+        long chunkKey = PhaseStorage.chunkKey(chunkX << 4, chunkZ << 4);
         Long2IntMap cells = storage.chunk(chunkKey);
         int size = cells == null ? 0 : cells.size();
         long[] positions = new long[size];

@@ -49,6 +49,17 @@ public abstract class FillingPlacementMixin {
         BlockState converted = liquidphase$convert(level, pos, newState);
         if (converted != null) {
             cir.setReturnValue(level.setBlock(pos, converted, flags, limit));
+            return;
+        }
+        // 红石线写进已有的相容宿主格：该格原本没有线（重新放置口径），初始功率 0；
+        // 落地后由 onPlace 立即按邻居重算。方块状态不变，只写旁路表。
+        if (newState.is(Blocks.REDSTONE_WIRE)) {
+            BlockState current = level.getBlockState(pos);
+            if (current.getBlock() instanceof PhaseCapable && PhaseHelper.canAcceptExtra(level, pos, current)) {
+                org.liquidphase.redstone.RedstoneBlocks.setRedstonePhase(level, pos, current);
+                level.updateNeighborsAt(pos, current.getBlock());
+                cir.setReturnValue(true);
+            }
         }
     }
      *///?} else {

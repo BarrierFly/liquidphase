@@ -43,7 +43,8 @@ public final class PhaseExtraClientSync {
                 int extra = buf.readVarInt();
                 client.execute(() -> applyUpdate(pos, extra));
             });
-        ClientChunkEvents.CHUNK_LOAD.register((client, chunk) -> request(chunk.getPos().x, chunk.getPos().z));
+        ClientChunkEvents.CHUNK_LOAD.register((client, chunk) ->
+            request(chunkX(chunk.getPos()), chunkZ(chunk.getPos())));
          *///?} else {
         net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.registerGlobalReceiver(
             PhaseExtraSync.ChunkPayload.TYPE, (payload, context) ->
@@ -52,7 +53,8 @@ public final class PhaseExtraClientSync {
         net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking.registerGlobalReceiver(
             PhaseExtraSync.UpdatePayload.TYPE, (payload, context) ->
                 context.client().execute(() -> applyUpdate(payload.pos(), payload.extra())));
-        ClientChunkEvents.CHUNK_LOAD.register((client, chunk) -> request(chunk.getPos().x, chunk.getPos().z));
+        ClientChunkEvents.CHUNK_LOAD.register((client, chunk) ->
+            request(chunkX(chunk.getPos()), chunkZ(chunk.getPos())));
         //?}
 
         PhaseExtras.setClientDirtyHook(PhaseExtraClientSync::markDirty);
@@ -81,13 +83,29 @@ public final class PhaseExtraClientSync {
             return;
         }
         int radius = minecraft.options.renderDistance().get() + 1;
-        int centerX = minecraft.player.chunkPosition().x;
-        int centerZ = minecraft.player.chunkPosition().z;
+        int centerX = chunkX(minecraft.player.chunkPosition());
+        int centerZ = chunkZ(minecraft.player.chunkPosition());
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
                 request(centerX + dx, centerZ + dz);
             }
         }
+    }
+
+    private static int chunkX(ChunkPos pos) {
+        //? if 26.3 {
+        /*return pos.x();
+         *///?} else {
+        return pos.x;
+        //?}
+    }
+
+    private static int chunkZ(ChunkPos pos) {
+        //? if 26.3 {
+        /*return pos.z();
+         *///?} else {
+        return pos.z;
+        //?}
     }
 
     private static void request(int chunkX, int chunkZ) {
@@ -115,7 +133,7 @@ public final class PhaseExtraClientSync {
         if (storage == null) {
             return;
         }
-        long chunkKey = ChunkPos.asLong(chunkX, chunkZ);
+        long chunkKey = PhaseStorage.chunkKey(chunkX << 4, chunkZ << 4);
         // **合并**而不是整块替换：区块请求的回包可能比之后的单格更新更晚到达
         // （请求在区块加载时发出，场景/其它玩家在回包到达前又写了表），整块替换会把
         // 新数据抹掉。删除只会通过额外的 extra_update(0) 广播，不会依赖这里的"清空"。

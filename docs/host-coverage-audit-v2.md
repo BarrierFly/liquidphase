@@ -2,6 +2,9 @@
 
 > 口径注记（0.1.15）：填充相属性名由 `phase` 改为 **`filling`**（取值不变）。
 > 本文历史章节中的 `phase=`/`"phase":` 字样对应当时的代码，读时按新名映射。
+>
+> 口径注记（0.2.0）：红石外壳改由动态模型按坐标提供，`filling` 只保留 8 个材料类别；
+> 本文的"外壳"章节描述的是 0.1.x 的静态 part 口径，见 [`docs/plan-c-elements.md`](./plan-c-elements.md)。
 
 > 定位：对 0.1.13 收口七处缺口（`docs/host-coverage-audit.md` §6）之后的**全量复查**。
 > 与第一轮的差别：不再只查"清单/注入/外壳"三条可计算链路（它们已由
@@ -246,6 +249,7 @@ PASS）、营火（仅食物 → PASS）、栅栏（仅拴绳 → PASS）、发�
   （`BakedQuad.MaterialInfo.of` → `ChunkSectionLayer.byTransparency`，guardian d5822ca2a1 实证）。
   覆盖层/外壳的透明像素 quad 自动进 CUTOUT——不需要任何 mixin，
   也就不存在"漏接某族方块"的问题。
+  （0.2.0 起外壳改由动态模型提供，见 [`docs/plan-c-elements.md`](./plan-c-elements.md)。）
 
 ### 3.3 RenderShape / 方块实体宿主
 

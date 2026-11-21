@@ -32,6 +32,9 @@
 - `C-B`：生成了 blockstate，但拿不到属性 → 客户端报 `Unknown property 'phase'`，**整份 blockstate 加载失败**；
 - `C-S`：清单里有，但不生成红石外壳 → **红石相不显示**。
 
+> 📌 0.2.0 起外壳改由动态模型按坐标提供（每个宿主 blockstate 只有一条无条件 `dynamic` part），
+> 不再生成 16 条 `redstone_0..15` part；见 [`docs/plan-c-elements.md`](./plan-c-elements.md)。
+
 附带三类"能力被宿主覆写遮蔽"的检查（mixin 挂在基类/接口上，宿主自己声明同名方法就会遮蔽）：
 
 1. `PhaseCapable` 的 `canPlaceLiquid` / `placeLiquid` / `pickupBlock`；
@@ -97,6 +100,9 @@
 
 > 注意当时叠加了两个缺口：外壳只有 41 个；另外 1/24/197 个方块连 blockstate 都没有。
 > 所以 0.1.8 的"部分透明方块所含红石相看不到"其实有**两个**独立原因，0.1.9 只修掉了前一个。
+>
+> 📌 0.2.0 起外壳改由动态模型提供，见 [`docs/plan-c-elements.md`](./plan-c-elements.md)；
+> 本节描述的是 0.1.x 的静态 part 口径。
 
 ### 3.3 整格宿主判据的演进（同一类 bug 的三次复发）
 
