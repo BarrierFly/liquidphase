@@ -2,7 +2,7 @@
 
 **中文** | [English](#english)
 
-让"可含水方块"（楼梯、台阶、墙、栅栏、告示牌、箱子、树叶、蜡、锁链……）能额外持有一个**相**：
+让"可含水方块"（楼梯、台阶、墙、栅栏、告示牌、箱子、树叶、蜡、锁链……）能额外持有一个**填充相**：
 熔岩、黑曜石、冰、霜冰，以及红石线。一格 = 固相（方块本身）+ 至多一个被含相。
 
 支持 **Fabric** 1.19.4 / 1.20.1 / 1.21.1 / 1.21.10 / 1.21.11 / 26.3。
@@ -14,8 +14,9 @@
 ### 功能一：更多 logged 方块（双端必装）
 
 - **含熔岩**：熔岩桶（或液体熔岩物品）右键可含水方块、发射器装填、熔岩源流进该格，都会让它变成"含熔岩方块"。
-  内部熔岩是真实熔岩源：按宿主形状从没被固相挡住的方向流出，也会被相邻熔岩按形状灌入；
+  内部熔岩是真实化熔岩源：按宿主形状从没被固相挡住的方向流出，也会被相邻熔岩按形状灌入；
   整格发光 15；处于其中的实体会着火；随机刻复刻原版火蔓延。
+  
   > ⚠️ "被相邻熔岩灌入"对台阶/蜡烛/营火/干化恶魂不成立（它们自己覆写了 `placeLiquid`）：
   > 熔岩桶右键、放置吸收照常可用。见 `docs/host-coverage-audit.md` §4.3。
 - **凝固**：含熔岩方块旁边出现水 → 相变为**含黑曜石**，伴随嘶声粒子。
@@ -33,15 +34,9 @@
   延伸到方块外（高 1.5 格）的宿主，方块外的部分照常保留（0.1.21 及以前被整格覆盖丢失）；
   熔岩相不额外加碰撞（内部是流体）；红石相不加碰撞。
   对所有宿主一致（状态级注入），包括自己覆写碰撞形状的栅栏/玻璃板/铁栏杆、墙、
-  墙悬挂告示牌、脚手架、`sculk_shrieker`、`big_dripleaf`。逐版本数字见 `docs/host-coverage-audit.md`。
+  墙悬挂告示牌、脚手架、`sculk_shrieker`、`big_dripleaf`。
 - **直接挖相**：准星指向相露出的部分时，挖掘速度与掉落按相材质计算（黑曜石需钻石镐；冰/霜冰不精准采集则化水，霜冰无物品）。
-- **所有宿主的相都是"内缩叠加层"**：相材质是一层比方块小 0.25px 的立方体，
-  宿主模型始终照常渲染，从宿主贴图的缝隙里露出相——和**含熔岩**的观感一致。
-  树叶/铜格栅/红树根这类整格宿主也一样：不透明树叶遮住相、透明缝隙透出相，
-  不再"整格替换成相材质、树叶消失"。
-  > ⚠️ 这也意味着**薄宿主看不到自己的本体**：栅栏柱子只有 6..10、横杆 7..9，全在相立方体
-  > （0.25..15.75）内部，栅栏会被相完整包住。这是"相就是整块材质"的直接后果，
-  > 不是缺陷；要让栅栏可见必须改相的形状（挖空或贴合宿主），属于另一个设计决策。
+- **所有宿主的相都是"内缩叠加层"**：宿主模型始终照常渲染，相材质是一层比方块小 0.25px 的立方体。
 
 ### 功能二：炼药锅（仅服务端，原版方块可表达的部分）
 
@@ -55,13 +50,13 @@
   **锅本身保留**；只有满锅才能取（水锅要求 3 级水位）。右键取水被禁用（桶不再被换成液体物品，
   也不再凭空消失）；拿液体物品往空锅/未满水锅倾倒照常填锅，消耗 1 个且不返还空桶。
   发射器空桶抽锅、漏斗抽锅同样按满锅口径。功能三关闭时全部回到原版桶语义。
-- **没有**药水锅、染色锅、装黑曜石的锅——这些需要方块实体，本版不做。
+- 暂未添加药水锅、染色锅、装黑曜石的锅。
 
 ### 功能三：玩家与液体互动（**强制双端**）
 
 - 手持**空桶**左键液体（水源、熔岩源、含熔岩方块的熔岩相）→ 瞬间"挖掉"并**掉落液体物品**（不直接进包）。
 - 手持水/熔岩"液体物品"右键 → 像放方块一样放液体：对可含水方块写入相/含水，对空气放流体，
-  **消耗 1 个、不返还空桶**。合成/其他消耗也不再返还空桶。
+  消耗 1 个、不返还空桶。合成/其他消耗也不再返还空桶。
 - 装了 mod 的客户端手持空桶时，准星会对液体启用流体射线（原版射线打不中液体）。
 - 创造模式：仍只有空桶能挖，挖不掉落；放置不消耗。
 
@@ -89,18 +84,9 @@
 3. 雨天放一个含水楼梯（水桶点楼梯）→ 低温会冻成含冰楼梯；光照够了会化回水相。
 4. 空桶左键水源 → 掉落"水"物品；拿着它右键空气 → 放一个水源，物品消失、没有桶。
 5. 熔岩锅旁边倒水 → 掉黑曜石；水锅上倒熔岩 → 按水位掉石头/圆石/圆石台阶。
-6. 拿红石粉点楼梯 → 楼梯变成**含红石线的楼梯**：方块本身还是那格楼梯，只是多了一个 `filling` 取值
-   （`redstone_0`…`redstone_15` 编码功率）。外面罩一层 16³ 红石粉尘外壳
-   （透明底 cutout，贴图是**短碎屑铺满整面**的疏松红石纹理，
-   **亮度随功率变化**——0 档接近熄灭、15 档满亮，和原版红石线一致），
-   形状/碰撞/掉落仍是楼梯自己的。
-   功率语义：拿红石粉点它 = 新放置一根红石粉，初始功率 0、落地立即按周围信号源结算
-   （有电源就是 15，被宿主遮住的面不接收）；把相容方块放进红石线格 = 吸收那格已有的线，
-   初始功率沿用原线，落地同样按邻居结算（通常与原线一致）。
-   按红石线规则衰减传递信号（对相邻红石线 -1，对灯/活塞等元件满功率），
-   被宿主遮住的面不输出；破坏它 → 留下对应功率的红石线。
+6. 拿红石粉点楼梯 → 楼梯变成**含红石线的楼梯**。
    也可以反过来：把楼梯/台阶等可含水方块**放进红石线所在的那一格**，那条线就被吸进宿主、
-   变成含红石相的方块（功率沿原线）。这一步走的是普通方块放置流程，和谁在放无关：
+   变成含红石相的方块（功率沿原线）。
 7. 拿空桶**左键**水锅/熔岩锅 → 整锅拆空、掉落"水"/"熔岩"物品；**锅本身保留**。
    只有满锅才能取（水锅必须是 3 级）；右键对着锅不再取水。
 
@@ -108,10 +94,8 @@
 
 ## 兼容性注意
 
-- **移除本 mod 会丢失所有相**（含熔岩/冰/黑曜石/红石相）。降级前请先清场。
-- **相属性名是 `filling`**：换用属性名不同的版本会丢相，切换前请先清场。
-- 本 mod 独占"相"语义，**不与 Fluidlogged 这类通用 fluidlogged mod 互通**
-  （共存不崩，但互相看不见对方的数据）。
+- **移除本 mod 会丢失所有填充相**（含熔岩/冰/黑曜石/红石相）。
+- 本 mod 独占"填充相"语义，**不兼容 Fluidlogged 这类通用 fluidlogged mod 互通**。
 - **与第三方资源包自动兼容**：资源包覆盖宿主 blockstate
   （`assets/minecraft/blockstates/<宿主>.json`——栅栏/树叶/告示牌类包很常见）时，
   客户端会把相部件**合并进包的定义**，包只生效于宿主 part、相照常显示，
@@ -119,8 +103,7 @@
   无法合并时为 `overlay could not be merged …`。针对本 mod 的资源包
   （引用 `liquidphase:` 模型）不受合并影响，仍可整体覆盖。
   配置 `packMerge=false` 会**关闭合并**，此时相部件整体丢失，仅用于排查问题。
-- 26.x 的实验性红石评估器（`REDSTONE_EXPERIMENTS`）下，含红石相方块**不保证**
-  与原版红石线行为一致。
+- 含红石相方块不与原版红石线行为一致，例如没有弱充能方块能力。
 - 红石相是**宿主方块上的 `filling` 取值**（`redstone_0`…`redstone_15`，功率直接编码在
   取值里），不注册任何新方块；方块仍是原版楼梯/台阶/墙/栅栏。渲染外壳对**全部**相容宿主
   生成（含树叶/格栅/玻璃板/铁栏杆/梯子/锁链等透明方块），**外壳亮度随功率变化**。
@@ -132,12 +115,11 @@
   红石粉也能替换水/熔岩），冰/霜冰/黑曜石/红石相不可替换、材料按不可放置处理。
   水的流体路径不变：水桶/水流仍只进无相宿主，水不能直接替换熔岩相
   （含熔岩相宿主遇水邻居走凝固成黑曜石相）。
-- **组装时的红石相初始状态按"是不是重新放置"区分，落地后一律立即重算**（0.1.22 起）：
+- **组装时的红石相初始状态按"是不是重新放置"区分，落地后一律立即重算**：
   **新放置**（红石粉点宿主、改写层把线状态写进宿主格）的初始状态是"单独放置红石粉"的
   初始状态——功率 0；**吸收**（宿主放进/落进红石线格）那格的红石线本来就在、不是重新
   放置，初始功率**沿用原线**。以初始状态落地后，组合方块像原版红石线一样立即按邻居
-  重算出真实功率（0.1.21 及以前点粉直接写 15 且无人纠正；吸收在多数情况下重算结果与
-  原线一致，电源位于宿主遮蔽面上等分歧行会结算为真实值）。
+  重算出真实功率。
 - **告示牌/箱子/屏障/光源方块等原生"不渲染方块模型"的宿主也能显示相**：带相状态一律按
   方块模型渲染，宿主本体仍由各自的原版渲染路径绘制。
 - **状态数**：`filling` 共 24 个取值（其中 16 个 `redstone_*` 编码功率），
@@ -145,13 +127,7 @@
 - 含固相方块的**相覆盖层**是一层内缩 0.25px 的相材质立方体，碰撞是**宿主 ∪ 整格的组合形状**
   （对所有宿主一致，挂在状态级；栅栏/玻璃板/铁栏杆、墙、墙悬挂告示牌、脚手架这些
   自己覆写碰撞的宿主也生效——栅栏/墙延伸到方块外的碰撞柱照常保留）。挖掘按双口径：
-  准星落在宿主露出的部分就挖宿主，落在相露出的部分就挖相。黑曜石相需要钻石镐才能挖动相本身
-  （没有钻石镐时按黑曜石速度计算，非常慢——有意的设计，不是卡死）。
-  - 宿主模型**始终照常渲染**，相从宿主贴图的缝隙里露出；整格宿主（树叶/铜格栅/红树根）
-    与台阶的各变体都如此，与含熔岩的观感一致。
-  - ⚠️ **薄宿主的本体看不见**：栅栏柱 6..10、横杆 7..9、玻璃板/铁栏杆的板面等几何
-    整个落在相立方体（0.25..15.75）内部，会被相完整包住。这是"相就是整块材质"的
-    直接后果，不是缺陷；要让这些宿主可见，需要让相按宿主形状挖空或贴合。
+  准星落在宿主露出的部分就挖宿主，落在相露出的部分就挖相。黑曜石相需要钻石镐才能挖动相本身。
 - **熔岩桶右键按原版倒水优先级**（与原版"水桶点方块"完全同规则）：
   原版交互不消费右键的宿主（楼梯/台阶/栅栏/玻璃板/树叶等）→ 右键直接灌入；
   原版交互消费右键的宿主（**活板门开关、箱子/末影箱开箱、光源方块调亮度、告示牌开编辑、
@@ -161,7 +137,7 @@
   1.21.1+ 的 `barrier` 仍是相容宿主（红石相正常显示），但桶/放置吸收/相邻熔岩充不进相：
   原版对 barrier 的流体接受是"创造模式限定"，而相充入的探测调用不携带玩家身份
   （熔岩桶点 barrier 只是拒绝，不会崩）。
-- 1.19.4/1.20.1 的状态注入使用 **Statement** 依赖（会自动随 mod 提供）。
+- 1.19.4/1.20.1 的状态注入使用 **Statement** 依赖。
 - **依赖下限**：`fabricloader` 按各版本实测最小需求声明（1.19.4 ≥0.15.0、1.20.1 ≥0.16.10、
   1.21.1 ≥0.15.11、1.21.10 ≥0.17.0、1.21.11 ≥0.17.3、26.3 ≥0.19.3），
   `minecraft` 仍是补丁级匹配（`~x.y.z`），`fabric-api` 与 `statement` 为必需依赖。
@@ -171,7 +147,7 @@
 
 ## English
 
-Let waterloggable blocks (stairs, slabs, walls, fences, signs, chests, leaves, chains, candles, …) hold a **second phase**:
+Let waterloggable blocks (stairs, slabs, walls, fences, signs, chests, leaves, chains, candles, …) hold a **filling phase**:
 lava, obsidian, ice, frosted ice, and redstone wire. One block = solid phase (the block itself) + at most one contained phase.
 
 **Supported:** Fabric 1.19.4 / 1.20.1 / 1.21.1 / 1.21.10 / 1.21.11 / 26.3.
@@ -193,12 +169,11 @@ lava, obsidian, ice, frosted ice, and redstone wire. One block = solid phase (th
   ice/obsidian/a lava source to absorb that phase.
 - **Collision**: the solid-phase (ice/obsidian) combined collision is the **host's collision ∪ a full
   cube** — hosts whose collision column extends above the block (fences and walls are 1.5 blocks tall)
-  keep the part outside the block (up to 0.1.21 the full cube replaced the host shape and that part was
-  lost); lava adds no collision (it is a fluid) and the redstone phase adds none either.
+  keep the part outside the block; lava adds no collision (it is a fluid) and the redstone phase adds none either.
 - **Mining the phase directly**: when the crosshair points at an exposed phase, mining speed and drops follow the phase material
   (obsidian needs a diamond pickaxe; ice melts to water without silk touch; frosted ice has no item).
 - **Full-cube hosts**: leaves, copper grates and mangrove roots (whose vanilla model already fills the whole 16³ cube) render as
-  the phase material when phased — otherwise the overlay would be hidden inside the host model. `phase=none`/`lava` still show the host.
+  the filling material when filled, leaving the host invisible. This is an obvious bug but no one is dealing with it. `phase=none`/`lava` still show the host. 
 
 ### Feature 2 — cauldron behaviour (server-side only, vanilla-representable part)
 
@@ -211,7 +186,7 @@ With feature 3 on, buckets interact with cauldrons the "liquid item" way: **left
 to empty the whole cauldron and drop the matching liquid item **without breaking the cauldron itself**; only a full cauldron
 (water cauldron at level 3) can be emptied. Right-click filling is disabled (the bucket is never swapped away);
 pouring a liquid item into an empty/partially filled cauldron still fills it but consumes one item with no bucket returned.
-**Not** included: potion cauldrons, dyed-water cauldrons, obsidian-block cauldrons — all need block entities.
+**Currently not** included: potion cauldrons, dyed-water cauldrons, obsidian-block cauldrons.
 
 ### Feature 3 — player ↔ liquid interaction (**required on both sides**)
 
@@ -235,7 +210,7 @@ Existing phases in old worlds are then **lost permanently** (vanilla drops unkno
 
 ### Compatibility notes
 
-Removing this mod loses every phase. It does not interoperate with generic fluidlogged mods (coexistence is crash-free, data is not shared).
+Removing this mod loses every phase. It does not interoperate with generic fluidlogged mods (coexistence is not supported, data is not shared).
 The phase property is `filling`. Phase rendering overrides vanilla blockstate JSONs, and **resource packs are merged automatically**: when a
 pack replaces a host's blockstate JSON, the client merges the phase parts into the winning definition, so the pack only affects the host part,
 the phase visuals survive, and the pack's own host geometry is left untouched. A log line reports every merge
@@ -245,7 +220,7 @@ troubleshooting only).
 Filling absorption judges **the existing filling's replaceability**: empty / waterlogged / lava-filled hosts accept any filling
 material (ice replaces water, obsidian covers lava, redstone dust replaces water or lava); ice/frosted/obsidian/redstone fillings are not
 replaceable. The water fluid path is unchanged — buckets and flowing water still only enter empty hosts.
-Under the 26.x experimental redstone evaluator (`REDSTONE_EXPERIMENTS`) redstone-phase blocks are not guaranteed to match vanilla wire behaviour.
+Redstone-filling blocks are not guaranteed to match vanilla wire behaviour  (no weak charging capability for example).
 Redstone-phase composites are available on **all six versions** (every phase-capable host, not just stairs/slabs/walls/fences).
 The shell is generated for **all** phase hosts, including transparent ones (leaves, grates, glass panes, iron bars, ladders, chains).
 Composites render as **the vanilla host model with a full-cube redstone-dust shell on top**:
@@ -271,12 +246,8 @@ Phased blocks with a solid phase look like a full cube of that material, and the
 hanging signs and scaffolding that override the block-level shape — the fence/wall collision columns
 that stick out above the block are kept); mining is two-lane: aim at the exposed host and it mines at
 host speed, aim at the exposed phase and it mines as the phase material (obsidian still needs a diamond
-pickaxe — that slowness is intended).
-Every host keeps rendering its own model while phased: the phase is a 0.25px-inset cube of the phase material, so it shows through the
-gaps in the host's texture (opaque leaves hide it, transparent pixels reveal it) — the same look as a lava-filled host.
-⚠️ Thin hosts (fences, panes, bars, walls, ladders) are therefore enclosed by the phase: their geometry lies entirely inside the inset
-cube, so the host itself is hidden. That is the direct consequence of "the phase is a whole block of material"; making those hosts
-visible again would require carving the phase around the host geometry.
+pickaxe).
+Every host keeps rendering its own model while phased; the phase is a 0.25px-inset cube of the phase material.
 Lava buckets follow the vanilla water-bucket interaction priority: hosts whose vanilla interaction consumes the click
 (trapdoors toggle, chests/ender chests open, light blocks cycle, signs open the editor, decorated pots store the item, shelves/statues
 act) are not filled by a plain right-click — sneak right-click, dispensers and placing a block into a lava source still fill them;
@@ -285,8 +256,6 @@ every other host fills on right-click through the vanilla `useItem` path, identi
 it stays a host, but bucket/placement filling is refused there (vanilla only accepts fluids on barriers in creative mode).
 Slabs/candles/campfires/dried ghasts accept lava from neighbouring lava sources (their shadowed `placeLiquid`/`canPlaceLiquid`
 lava branch is restored by dedicated mixins), and `offsetType` hosts leave their phase behind when broken.
-Host-coverage invariants are audited by `python tools/audit_host_coverage.py <guardian> .` and documented in
-`docs/host-coverage-audit.md`.
 The redstone shell's brightness follows its power level (0 = nearly dark, 15 = full bright), matching the vanilla wire colour ramp.
 Hosts whose vanilla `RenderShape` is not `MODEL` (barriers, light blocks, all sign blocks, chest/pot families on older versions) still render
 the phase: phased states are forced back to `MODEL`, while the host itself keeps being drawn by its own vanilla render path.
