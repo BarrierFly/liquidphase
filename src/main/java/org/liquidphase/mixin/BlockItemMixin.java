@@ -175,11 +175,9 @@ public abstract class BlockItemMixin {
         }
         Direction facing = context.getHorizontalDirection().getOpposite();
         if (kind == PhaseExtra.Kind.OBSERVER) {
-            // 侦测器的 FACING 是观察面：观察玩家看向的那一面。
+            // 侦测器的 FACING 是观察面：与 ObserverBlock#getStateForPlacement 一致，
+            // 取 getNearestLookingDirection（含上/下），不再退化为水平。
             facing = context.getNearestLookingDirection();
-            if (facing.getAxis().isVertical()) {
-                facing = context.getHorizontalDirection();
-            }
         }
         if (!ElementBlocks.place(level, pos, target, kind, facing)) {
             return false;

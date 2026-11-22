@@ -282,8 +282,14 @@ public abstract class BlockStateBaseMixin {
     private void liquidphase$shouldRedstoneWireConnectTo(net.minecraft.world.level.BlockGetter level, BlockPos pos,
                                                          net.minecraft.core.Direction direction, CallbackInfoReturnable<Boolean> cir) {
         BlockState self = (BlockState) (Object) this;
-        if (org.liquidphase.phase.PhaseExtra.isRedstone(org.liquidphase.phase.PhaseExtras.get(level, pos))) {
-            cir.setReturnValue(direction == null || org.liquidphase.redstone.RedstoneBlocks.exposed(self, direction.getOpposite()));
+        int extra = org.liquidphase.phase.PhaseExtras.get(level, pos);
+        if (org.liquidphase.phase.PhaseExtra.isRedstone(extra)) {
+            cir.setReturnValue(direction == null
+                || org.liquidphase.redstone.RedstoneBlocks.exposed(self, direction.getOpposite()));
+        } else if (org.liquidphase.phase.PhaseExtra.isElement(extra)) {
+            cir.setReturnValue(direction != null
+                && org.liquidphase.element.ElementBlocks.connectsOnFace(extra, direction)
+                && org.liquidphase.redstone.RedstoneBlocks.exposed(self, direction.getOpposite()));
         }
     }
      *///?}

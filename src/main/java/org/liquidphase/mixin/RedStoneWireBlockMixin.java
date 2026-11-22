@@ -35,7 +35,13 @@ public abstract class RedStoneWireBlockMixin {
         BlockPos neighbourPos = pos.relative(direction);
         BlockState neighbour = level.getBlockState(neighbourPos);
         int extra = PhaseExtras.get(level, neighbourPos);
-        if (PhaseExtra.isRedstone(extra) && RedstoneBlocks.exposed(neighbour, direction.getOpposite())) {
+        boolean exposed = RedstoneBlocks.exposed(neighbour, direction.getOpposite());
+        if (PhaseExtra.isRedstone(extra) && exposed) {
+            cir.setReturnValue(RedstoneSide.SIDE);
+            return;
+        }
+        if (PhaseExtra.isElement(extra) && exposed
+            && org.liquidphase.element.ElementBlocks.connectsOnFace(extra, direction)) {
             cir.setReturnValue(RedstoneSide.SIDE);
         }
     }

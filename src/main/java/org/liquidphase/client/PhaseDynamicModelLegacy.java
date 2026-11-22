@@ -67,7 +67,7 @@ public final class PhaseDynamicModelLegacy {
     }
 
     private static List<ResourceLocation> buildSubModelIds() {
-        List<ResourceLocation> ids = new ArrayList<>(38);
+        List<ResourceLocation> ids = new ArrayList<>(48);
         for (int power = 0; power < 16; power++) {
             ids.add(rl("block/redstone_phase_" + power));
         }
@@ -81,8 +81,10 @@ public final class PhaseDynamicModelLegacy {
             ids.add(rl("block/element_comparator"
                 + ((variant & 1) != 0 ? "_on" : "") + ((variant & 2) != 0 ? "_subtract" : "")));
         }
-        ids.add(rl("block/element_observer"));
-        ids.add(rl("block/element_observer_on"));
+        for (String suffix : new String[]{"", "_south", "_east", "_west", "_up", "_down"}) {
+            ids.add(rl("block/element_observer" + suffix));
+            ids.add(rl("block/element_observer" + suffix + "_on"));
+        }
         return ids;
     }
 
@@ -143,9 +145,14 @@ public final class PhaseDynamicModelLegacy {
                 ((FabricBakedModel) part).emitBlockQuads(view, state, pos, random, context);
                 return;
             }
+            // 侦测器六个朝向都在烘焙期定好，运行期不旋转、不抬升，直接发几何。
+            if (org.liquidphase.phase.PhaseExtra.kind(extra) == org.liquidphase.phase.PhaseExtra.Kind.OBSERVER) {
+                ((FabricBakedModel) part).emitBlockQuads(view, state, pos, random, context);
+                return;
+            }
             VoxelShape shape = state.getCollisionShape(view, pos, CollisionContext.empty());
             float yaw = ElementRenderSupport.yawDegrees(extra);
-            context.pushTransform(quad -> liftToHost(quad, shape, yaw));
+            context.pushTransform(quad -> transformElement(quad, shape, yaw));
             try {
                 ((FabricBakedModel) part).emitBlockQuads(view, state, pos, random, context);
             } finally {
@@ -199,22 +206,75 @@ public final class PhaseDynamicModelLegacy {
         }
     }
 
-    private static boolean liftToHost(MutableQuadView quad, VoxelShape shape, float yawDegrees) {
-        double radians = Math.toRadians(yawDegrees);
-        float cos = (float) Math.cos(radians);
-        float sin = (float) Math.sin(radians);
+    // 1/64 方块：足够跨过像素边界取样，又不会落进相邻像素列。
+    private static final float INWARD = 1.0F / 64.0F;
+
+    // 旋转并按列抬升一个元件小面（只用于中继器/比较器；侦测器已按朝向预烘焙）。
+    // 子模型已经按 1/16 像素列切好，所以每个小面只取一个列高度、整面刚性平移
+    // （而不是逐顶点插值）：这样跨台阶时每个像素列都真正搭在宿主顶面上，
+    // 同一根杆/红条内部允许逐列落差。侧立面用面法线朝内偏移半格取样，避免正好落在
+    // 像素边界上取到相邻列。
+    private static boolean transformElement(MutableQuadView quad, VoxelShape shape, float yawDegrees) {
+        double yawRadians = Math.toRadians(yawDegrees);
+        float cosY = (float) Math.cos(yawRadians);
+        float sinY = (float) Math.sin(yawRadians);
+        float lift = 0.0F;
+        if (shape != null && !shape.isEmpty()) {
+            float minX = Float.MAX_VALUE;
+            float maxX = -Float.MAX_VALUE;
+            float minZ = Float.MAX_VALUE;
+            float maxZ = -Float.MAX_VALUE;
+            for (int i = 0; i < 4; i++) {
+                minX = Math.min(minX, quad.x(i));
+                maxX = Math.max(maxX, quad.x(i));
+                minZ = Math.min(minZ, quad.z(i));
+                maxZ = Math.max(maxZ, quad.z(i));
+            }
+            float dx = (minX + maxX) * 0.5F - 0.5F;
+            float dz = (minZ + maxZ) * 0.5F - 0.5F;
+            float rx = 0.5F + dx * cosY - dz * sinY;
+            float rz = 0.5F + dx * sinY + dz * cosY;
+            Direction face = quad.nominalFace();
+            if (face != null) {
+                float nx = face.getStepX() * cosY - face.getStepZ() * sinY;
+                float nz = face.getStepX() * sinY + face.getStepZ() * cosY;
+                rx -= nx * INWARD;
+                rz -= nz * INWARD;
+            }
+            lift = (float) ElementRenderSupport.columnTop(shape, rx, rz);
+        }
+        // 只改顶点位置不够：法线与朝向面一并旋转，否则光照会按模型空间的方向算。
+        Direction rotatedFace = rotateDirection(quad.nominalFace(), cosY, sinY);
+        if (rotatedFace != null) {
+            quad.nominalFace(rotatedFace);
+        }
         for (int i = 0; i < 4; i++) {
-            float x = quad.x(i);
-            float y = quad.y(i);
-            float z = quad.z(i);
-            float dx = x - 0.5F;
-            float dz = z - 0.5F;
-            float rx = 0.5F + dx * cos - dz * sin;
-            float rz = 0.5F + dx * sin + dz * cos;
-            double top = ElementRenderSupport.columnTop(shape, rx, rz);
-            quad.pos(i, rx, (float) (y + top), rz);
+            float x = quad.x(i) - 0.5F;
+            float z = quad.z(i) - 0.5F;
+            float x1 = x * cosY - z * sinY;
+            float z1 = x * sinY + z * cosY;
+            quad.pos(i, x1 + 0.5F, quad.y(i) + lift, z1 + 0.5F);
+            if (quad.hasNormal(i)) {
+                float nx = quad.normalX(i);
+                float nz = quad.normalZ(i);
+                quad.normal(i, nx * cosY - nz * sinY, quad.normalY(i), nx * sinY + nz * cosY);
+            }
         }
         return true;
+    }
+
+    private static Direction rotateDirection(Direction face, float cosY, float sinY) {
+        if (face == null) {
+            return null;
+        }
+        float x = face.getStepX();
+        float z = face.getStepZ();
+        float x1 = x * cosY - z * sinY;
+        float z1 = x * sinY + z * cosY;
+        if (Math.abs(x1) >= Math.abs(z1)) {
+            return x1 > 0.0F ? Direction.EAST : Direction.WEST;
+        }
+        return z1 > 0.0F ? Direction.SOUTH : Direction.NORTH;
     }
 }
 

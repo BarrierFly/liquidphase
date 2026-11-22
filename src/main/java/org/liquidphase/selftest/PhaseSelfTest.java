@@ -80,6 +80,8 @@ public final class PhaseSelfTest {
             checkEntryWriteClearsWater(level, base.offset(42, 1, 0));
             checkElementPlacementByPlayer(level, base);
             checkElementBlockAbsorption(level, base);
+            checkElementSignalGating(level, base.offset(24, 1, 6));
+            checkElementAssets();
             checkPistonPhaseBehavior(level, base);
             checkRedstonePhaseInitialState(level, base);
             checkPlaceIntoWire(level, base);
@@ -721,6 +723,264 @@ public final class PhaseSelfTest {
                 && PhaseExtra.subtractMode(rewriteExtra));
         PhaseExtras.set(level, rewritePos, PhaseExtra.EMPTY);
         level.setBlock(rewritePos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+    }
+
+    /**
+     * 元件 I/O 的"宿主相应面露出"门控（0.2.4）：下半楼梯朝北时南脸被高半格完全盖住、
+     * 北脸露出。输入/输出/观察面/侧向（比较器 alternate、中继器锁存）都按此判定。
+     */
+    private static void checkElementSignalGating(ServerLevel level, BlockPos origin) {
+        BlockState stair = Blocks.OAK_STAIRS.defaultBlockState()
+            .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.NORTH);
+        BlockPos pos = origin;
+        level.setBlockAndUpdate(pos, stair);
+        // 下半楼梯朝北 = 台阶升向北侧：北脸被高半格完全盖住，南脸露出。
+        assertTrue("element gating: bottom stair facing north has a fully covered north face",
+            !RedstoneBlocks.exposed(stair, Direction.NORTH)
+                && RedstoneBlocks.exposed(stair, Direction.SOUTH));
+
+        // 1) 输入面被覆盖（facing=NORTH）→ 不输入；输出面（SOUTH）露出 → 有输出。
+        BlockPos covered = pos.offset(2, 0, 0);
+        level.setBlockAndUpdate(covered, stair);
+        level.setBlockAndUpdate(covered.north(), Blocks.REDSTONE_BLOCK.defaultBlockState());
+        assertTrue("element gating: repeater on a covered-input stair is placed",
+            ElementBlocks.place(level, covered, stair, PhaseExtra.Kind.REPEATER, Direction.NORTH));
+        int coveredExtra = PhaseExtras.get(level, covered);
+        assertTrue("element gating: covered input face does not schedule a turn-on tick",
+            !level.getBlockTicks().hasScheduledTick(covered, stair.getBlock())
+                && !PhaseExtra.powered(coveredExtra));
+        assertTrue("element gating: exposed output face emits 15",
+            ElementBlocks.getSignal(stair, level, covered, Direction.NORTH,
+                PhaseExtra.withPowered(coveredExtra, true)) == 15);
+
+        // 红石线连接同样按"线 → 宿主"的方向与露出判定：
+        // 输入侧（北，覆盖）不连；输出侧（南，露出）连。
+        level.setBlockAndUpdate(covered.north(), Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(covered.north().below(), Blocks.STONE.defaultBlockState());
+        // 红石块只作"孤立线补十字"的锚点：有东西向连接时原版不再给南北补 SIDE，
+        // 这样读到 SOUTH=NONE 才能证明是被覆盖的宿主面不连，而不是孤立线补齐。
+        level.setBlockAndUpdate(covered.north().east(), Blocks.REDSTONE_BLOCK.defaultBlockState());
+        BlockPlaceContext northContext = liquidphase$context(level, Blocks.REDSTONE_WIRE,
+            covered.north(), Direction.UP);
+        BlockState northWire = Blocks.REDSTONE_WIRE.getStateForPlacement(northContext);
+        assertTrue("element gating: wire placement produced a state", northWire != null);
+        if (northWire != null) {
+            net.minecraft.world.level.block.state.properties.RedstoneSide side =
+                northWire.getValue(BlockStateProperties.SOUTH_REDSTONE);
+            assertTrue("element gating: wire does not connect through a covered host face"
+                    + " (got " + side + ", exposedNorth="
+                    + RedstoneBlocks.exposed(stair, Direction.NORTH) + ")",
+                side == net.minecraft.world.level.block.state.properties.RedstoneSide.NONE);
+        }
+        level.setBlockAndUpdate(covered.south().below(), Blocks.STONE.defaultBlockState());
+        BlockPlaceContext southContext = liquidphase$context(level, Blocks.REDSTONE_WIRE,
+            covered.south(), Direction.UP);
+        BlockState southWire = Blocks.REDSTONE_WIRE.getStateForPlacement(southContext);
+        assertTrue("element gating: wire placement produced a state", southWire != null);
+        if (southWire != null) {
+            assertTrue("element gating: wire connects to an exposed host face",
+                southWire.getValue(BlockStateProperties.NORTH_REDSTONE)
+                    != net.minecraft.world.level.block.state.properties.RedstoneSide.NONE);
+        }
+
+        // 2) 输入面露出（facing=SOUTH）→ 正常输入；输出面（NORTH）被覆盖 → 0。
+        BlockPos open = pos.offset(4, 0, 0);
+        level.setBlockAndUpdate(open, stair);
+        level.setBlockAndUpdate(open.south(), Blocks.REDSTONE_BLOCK.defaultBlockState());
+        assertTrue("element gating: repeater on an exposed-input stair is placed",
+            ElementBlocks.place(level, open, stair, PhaseExtra.Kind.REPEATER, Direction.SOUTH));
+        int openExtra = PhaseExtras.get(level, open);
+        ElementBlocks.tick(level, open, stair, openExtra);
+        int openPowered = PhaseExtras.get(level, open);
+        assertTrue("element gating: exposed input face powers the repeater",
+            PhaseExtra.powered(openPowered));
+        assertTrue("element gating: covered output face emits 0",
+            ElementBlocks.getSignal(stair, level, open, Direction.SOUTH, openPowered) == 0);
+
+        // 3) 侦测器观察面被覆盖 → 不排计划刻；观察面露出 → 排 2 tick。
+        BlockPos observerCovered = pos.offset(6, 0, 0);
+        level.setBlockAndUpdate(observerCovered, stair);
+        assertTrue("element gating: observer on a covered-observation stair is placed",
+            ElementBlocks.place(level, observerCovered, stair, PhaseExtra.Kind.OBSERVER, Direction.NORTH));
+        ElementBlocks.onUpdateShape(level, observerCovered, stair,
+            PhaseExtras.get(level, observerCovered), Direction.NORTH);
+        assertTrue("element gating: covered observation face does not schedule the observer tick",
+            !level.getBlockTicks().hasScheduledTick(observerCovered, stair.getBlock()));
+
+        BlockPos observerOpen = pos.offset(8, 0, 0);
+        level.setBlockAndUpdate(observerOpen, stair);
+        assertTrue("element gating: observer on an exposed-observation stair is placed",
+            ElementBlocks.place(level, observerOpen, stair, PhaseExtra.Kind.OBSERVER, Direction.SOUTH));
+        ElementBlocks.onUpdateShape(level, observerOpen, stair,
+            PhaseExtras.get(level, observerOpen), Direction.SOUTH);
+        assertTrue("element gating: exposed observation face schedules the observer tick",
+            level.getBlockTicks().hasScheduledTick(observerOpen, stair.getBlock()));
+
+        // 4) 比较器侧向输入：被覆盖的北侧红石块不参与 alternate；露出的南侧参与。
+        BlockPos comparator = pos.offset(10, 0, 0);
+        level.setBlockAndUpdate(comparator, stair);
+        assertTrue("element gating: comparator on the stair is placed",
+            ElementBlocks.place(level, comparator, stair, PhaseExtra.Kind.COMPARATOR, Direction.WEST));
+        int comparatorExtra = PhaseExtra.withMode(PhaseExtras.get(level, comparator), true);
+        PhaseExtras.set(level, comparator, comparatorExtra);
+        level.setBlockAndUpdate(comparator.west(), Blocks.REDSTONE_BLOCK.defaultBlockState());
+        level.setBlockAndUpdate(comparator.north(), Blocks.REDSTONE_BLOCK.defaultBlockState());
+        assertTrue("element gating: comparator ignores the alternate signal on a covered side",
+            ElementBlocks.comparatorOutputForTest(level, comparator, stair, comparatorExtra) == 15);
+        level.setBlockAndUpdate(comparator.north(), Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(comparator.south(), Blocks.REDSTONE_BLOCK.defaultBlockState());
+        assertTrue("element gating: comparator reads the alternate signal on an exposed side",
+            ElementBlocks.comparatorOutputForTest(level, comparator, stair, comparatorExtra) == 0);
+
+        // 5) 中继器锁存：侧向元件在覆盖面不锁定，在露出面锁定。
+        BlockPos lock = pos.offset(12, 0, 0);
+        level.setBlockAndUpdate(lock, stair);
+        assertTrue("element gating: repeater for the lock test is placed",
+            ElementBlocks.place(level, lock, stair, PhaseExtra.Kind.REPEATER, Direction.WEST));
+        int lockExtra = PhaseExtras.get(level, lock);
+        PhaseExtras.set(level, lock.north(),
+            PhaseExtra.element(PhaseExtra.Kind.REPEATER, Direction.NORTH, 0, false, true));
+        assertTrue("element gating: a side diode on a covered face does not lock the repeater",
+            !ElementBlocks.isLocked(level, lock, stair, lockExtra));
+        PhaseExtras.set(level, lock.north(), PhaseExtra.EMPTY);
+        PhaseExtras.set(level, lock.south(),
+            PhaseExtra.element(PhaseExtra.Kind.REPEATER, Direction.SOUTH, 0, false, true));
+        assertTrue("element gating: a side diode on an exposed face locks the repeater",
+            ElementBlocks.isLocked(level, lock, stair, lockExtra));
+
+        // 清理旁路表条目（方块本身由 clearArea 统一清）。
+        for (BlockPos cell : new BlockPos[]{covered, covered.north(), open, open.south(),
+            observerCovered, observerOpen, comparator, comparator.west(), comparator.north(),
+            lock, lock.north(), lock.south()}) {
+            PhaseExtras.set(level, cell, PhaseExtra.EMPTY);
+        }
+    }
+
+    /** 元件子模型/贴图的产物断言：只含要求的部位，且侦测器没有整面。 */
+    private static void checkElementAssets() {
+        String repeater = liquidphase$resource(
+            "/assets/liquidphase/models/block/element_repeater_1tick_on.json");
+        assertTrue("element repeater model exists", repeater != null);
+        if (repeater != null) {
+            assertTrue("element repeater renders no 2px smooth-stone base",
+                !repeater.contains("smooth_stone") && !repeater.contains("#slab"));
+            assertTrue("element repeater renders no lock bar",
+                !repeater.contains("#lock") && !repeater.contains("bedrock"));
+            assertTrue("element repeater renders a lit rod and the red bar",
+                repeater.contains("#lit") && repeater.contains("element_repeater_bar_on"));
+            assertTrue("element repeater geometry carries no cullface",
+                !repeater.contains("\"cullface\""));
+            int bars = liquidphase$countFaceTexture(repeater, "#bar");
+            assertTrue("element repeater red bar is split into 16 pixel cells (got " + bars + ")",
+                bars == 16);
+        }
+        String comparator = liquidphase$resource(
+            "/assets/liquidphase/models/block/element_comparator_on_subtract.json");
+        assertTrue("element comparator model exists", comparator != null);
+        if (comparator != null) {
+            assertTrue("element comparator renders no smooth-stone base or lock bar",
+                !comparator.contains("smooth_stone") && !comparator.contains("#slab")
+                    && !comparator.contains("#lock") && !comparator.contains("bedrock"));
+            assertTrue("element comparator renders rods and the red bar",
+                comparator.contains("#lit") && comparator.contains("element_comparator_bar_on"));
+            assertTrue("element comparator red bar is split into 16 pixel cells (got "
+                    + liquidphase$countFaceTexture(comparator, "#bar") + ")",
+                liquidphase$countFaceTexture(comparator, "#bar") == 16);
+        }
+        for (String name : new String[]{"element_repeater_bar", "element_repeater_bar_on",
+            "element_comparator_bar", "element_comparator_bar_on", "element_observer_front",
+            "element_observer_port", "element_observer_port_on"}) {
+            assertTrue("element texture " + name + " is shipped",
+                liquidphase$exists("/assets/liquidphase/textures/block/" + name + ".png"));
+        }
+        // 侦测器 6 个朝向 × on/off 全部预烘焙：每个只有"正面五官"和"背面输出口"两块平面，
+        // 平面在对应方块边界外侧 0.01（不会被宿主侧脸挡住）。
+        String[][] facings = {
+            {"", "north", "south"}, {"_south", "south", "north"},
+            {"_east", "east", "west"}, {"_west", "west", "east"},
+            {"_up", "up", "down"}, {"_down", "down", "up"},
+        };
+        for (String[] facing : facings) {
+            for (boolean powered : new boolean[]{false, true}) {
+                String name = "element_observer" + facing[0] + (powered ? "_on" : "");
+                String json = liquidphase$resource("/assets/liquidphase/models/block/" + name + ".json");
+                assertTrue("observer model " + name + " exists", json != null);
+                if (json == null) {
+                    continue;
+                }
+                assertTrue("observer model " + name + " has no full side/top face",
+                    !json.contains("observer_side") && !json.contains("observer_top"));
+                assertTrue("observer model " + name + " renders a front and a back plane",
+                    liquidphase$countFaceTexture(json, "#front") == 1
+                        && liquidphase$countFaceTexture(json, "#back") == 1);
+                assertTrue("observer model " + name + " front plane faces " + facing[1],
+                    liquidphase$observerPlane(json, 0, facing[1], "#front"));
+                assertTrue("observer model " + name + " back plane faces " + facing[2],
+                    liquidphase$observerPlane(json, 1, facing[2], "#back"));
+            }
+        }
+    }
+
+    /** {@return JSON 第 index 个元素是否为"只含 face 一个面、位于该边界外侧 0.01、贴图给定"} */
+    private static boolean liquidphase$observerPlane(String json, int index, String face, String texture) {
+        try {
+            com.google.gson.JsonArray elements = com.google.gson.JsonParser.parseString(json)
+                .getAsJsonObject().getAsJsonArray("elements");
+            if (elements.size() != 2) {
+                return false;
+            }
+            com.google.gson.JsonObject element = elements.get(index).getAsJsonObject();
+            com.google.gson.JsonObject faces = element.getAsJsonObject("faces");
+            if (faces.size() != 1 || !faces.has(face)) {
+                return false;
+            }
+            com.google.gson.JsonElement value = faces.getAsJsonObject(face).get("texture");
+            if (value == null || !texture.equals(value.getAsString())) {
+                return false;
+            }
+            double[] from = liquidphase$vec(element.getAsJsonArray("from"));
+            double[] to = liquidphase$vec(element.getAsJsonArray("to"));
+            return switch (face) {
+                case "north" -> from[2] == -0.01 && to[2] == -0.01;
+                case "south" -> from[2] == 16.01 && to[2] == 16.01;
+                case "west" -> from[0] == -0.01 && to[0] == -0.01;
+                case "east" -> from[0] == 16.01 && to[0] == 16.01;
+                case "up" -> from[1] == 16.01 && to[1] == 16.01;
+                case "down" -> from[1] == -0.01 && to[1] == -0.01;
+                default -> false;
+            };
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private static double[] liquidphase$vec(com.google.gson.JsonArray array) {
+        double[] out = new double[3];
+        for (int i = 0; i < 3; i++) {
+            out[i] = array.get(i).getAsDouble();
+        }
+        return out;
+    }
+
+    /** {@return JSON 文本里 face.texture 等于给定值的面数} */
+    private static int liquidphase$countFaceTexture(String json, String texture) {
+        int count = 0;
+        try {
+            com.google.gson.JsonElement root = com.google.gson.JsonParser.parseString(json);
+            com.google.gson.JsonArray elements = root.getAsJsonObject().getAsJsonArray("elements");
+            for (com.google.gson.JsonElement element : elements) {
+                com.google.gson.JsonObject faces = element.getAsJsonObject().getAsJsonObject("faces");
+                for (String key : faces.keySet()) {
+                    com.google.gson.JsonElement value = faces.getAsJsonObject(key).get("texture");
+                    if (value != null && texture.equals(value.getAsString())) {
+                        count++;
+                    }
+                }
+            }
+        } catch (RuntimeException e) {
+            return -1;
+        }
+        return count;
     }
 
     private static void checkPistonPhaseBehavior(ServerLevel level, BlockPos base) {

@@ -60,7 +60,21 @@
   注入，只有"该格有红石条目且该面露出"才算连接。功率读取走
   `level.getBestNeighborSignal` → `getSignal`，天然正确。
 - 中继器/比较器/侦测器沿用原版算式，输入面 = `facing`，输出面 = `facing.getOpposite()`
-  （三类一致，与 `DiodeBlock`/`ObserverBlock` 的 FACING 语义一致）；被宿主遮住的面不输入也不输出。
+  （三类一致，与 `DiodeBlock`/`ObserverBlock` 的 FACING 语义一致）；**凡是参与输入/输出的面
+  都受宿主相应面控制**：`RedstoneBlocks.exposed(host, face)` 为 false 时该面不输入也不输出。
+  - 中继器/比较器：输入面、输出面；
+  - 比较器的侧向 alternate 输入：两侧面分别判定；
+  - 中继器的锁存：侧向二极管输入的两侧面分别判定；
+  - 侦测器：观察面（`facing`）不露出时不排检测刻；输出面不露出时不出信号。
+- 比较器侧向输入按原版 `SignalGetter.getControlInputSignal` 实现：中继器锁存
+  `sideInputDiodesOnly=true`（只认中继器/比较器）；比较器 `false`（红石块 15、红石线读
+  `POWER`、红石相按线规则读满功率、其余信号源读 `getDirectSignal`）。
+- 红石线连接：新增"元件宿主"分支，规则对齐原版 `shouldConnectTo`——中继器/比较器的
+  输入面与输出面都连，侦测器只在输出面连；连接同样要求宿主相应面露出
+  （`RedStoneWireBlockMixin` / 26.3 的 `BlockStateBase.shouldRedstoneWireConnectTo`）。
+  没有这个分支时，红石线对元件宿主返回 0（线自己的 `getSignal` 要求"朝接收方那一侧已连接"）。
+- 中继器 tick 镜像原版 `DiodeBlock#tick`：已排队的刻即使输入已消失也会点亮并按延迟再排一次，
+  短脉冲因此仍能输出一个完整延迟的脉冲。中继器放置时按原版补初始 `locked`。
 - 侦测器：观察 `facing` 邻居变化 → 计划刻 2 tick 翻转 `powered`。
 
 ## 3. 放置与破坏
@@ -91,14 +105,23 @@
   `liquidphase:block/dynamic`。该模型：
   - 按坐标查旁路表；
   - 红石条目 → 发 `liquidphase:block/redstone_phase_<power>` 子模型的 quad（16 档颜色）；
-  - 元件条目 → 发对应（kind × facing × 变体）子模型，并用 `QuadTransform` 把每个顶点
-    抬到**宿主顶面所在列的高度**（逐列采样，`VoxelShape.max(Y, x, z)`），
-    保证五官/输出口/杆都画在宿主表面**上层**；
+  - 中继器/比较器条目 → 发对应（kind × facing × 变体）子模型。子模型**只有杆与红条**：
+    原版模型里的 2px 平滑石底板、锁存条都不生成；杆（红石火把，含点亮光晕）整体下移
+    2px 让杆底落在 y=0，红条是从原版顶面贴图里裁出的 2×8 / 8×2 贴图。
+    几何在生成时按 **1/16 像素列**切开，运行时每个小面只取**该列**的宿主顶面高度
+    （`VoxelShape.max(Y, x, z)`）整面刚性平移——"每一平方像素都搭在宿主相应像素的最高处，
+    同一根杆/红条内部允许落差"。旋转时连法线与 `nominalFace` 一起转，否则光照/剔除仍按
+    模型空间方向算。
+  - 侦测器条目 → 发对应（facing × powered）子模型。**6 个朝向各自预烘焙**，16×16 正常比例，
+    固定在方块内（运行时不旋转、不抬升）；只生成"侦测面五官"和"输出面输出口"两块平面，
+    贴图是原版 `observer_front` / `observer_back` 的裁切（其余像素透明），不显示任何一个整面。
+    平面放在对应方块边界**外侧 0.01**，所以下半砖/楼梯的侧脸不会把五官/输出口挡住。
   - 无条目 → 一个 quad 都不发。
 - 子模型由 `tools/gen_element_models.py` 从客户端 jar 的原版模型生成
-  （复用原版贴图与 UV，按朝向预旋转），版本无关。
-- 图层：由 Fabric Rendering API 的 material 决定（红石外壳是 cutout，
-  元件贴图不透明）；不再依赖状态级 `ItemBlockRenderTypes` 注入来区分红石相。
+  （33 个模型：16 中继器 + 4 比较器 + 12 侦测器 + `dynamic.json`；另有 7 份元件贴图），
+  版本无关。比较器/中继器的 `_locked` 变体只保留逻辑锁定，不渲染锁形。
+- 图层：由 Fabric Rendering API 的 material 决定（红石外壳与侦测器裁切贴图是 cutout，
+  杆/红条贴图不透明）；不再依赖状态级 `ItemBlockRenderTypes` 注入来区分红石相。
 - `getRenderShape`：把 `PhaseCapable` 方块在**块级**强制为 `MODEL`
   （替代原按状态的 `PhaseRenderShapeMixin`；状态里已经看不出有没有元件）。
 
@@ -122,7 +145,9 @@
 ## 6. 验收
 
 - 6 个版本编译通过；
-- 服务端自检全过（新增：旁路表读写、元件信号、渲染资源、状态数上限断言）；
+- 服务端自检全过（1.21.11 实测 **486 passed, 0 failed**；含旁路表读写、元件 I/O 露出门控、
+  红石线连接、元件资源形状/贴图、状态数上限断言）；
 - `python tools/validate_blockstates.py` / `check_mixin_targets.py` / `verify_jars.py` /
   `audit_host_coverage.py` 全绿；
-- 1.21.11 客户端 gametest（栅栏红石相 + 元件几何 quad 断言）。
+- 1.21.11 客户端 gametest（栅栏红石相 + 元件几何 quad 断言 + 下半楼梯逐像素落差 +
+  侦测器五官/输出口）。

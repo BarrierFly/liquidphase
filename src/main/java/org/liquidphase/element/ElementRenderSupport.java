@@ -4,34 +4,36 @@ import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.liquidphase.phase.PhaseExtra;
-import org.liquidphase.phase.PhaseStorage;
 
 /**
  * 元件/红石相的渲染选择（纯逻辑，服务端也安全：不引用任何客户端类）。
  * <p>
- * 动态模型在区块构建期按坐标查旁路表，选出要发射的子模型 id 与 y 轴旋转角：
+ * 动态模型在区块构建期按坐标查旁路表，选出要发射的子模型 id 与旋转角：
  * <ul>
  *   <li>红石：{@code liquidphase:block/redstone_phase_<power>}（16 档颜色），不旋转、不抬升；</li>
- *   <li>中继器：{@code liquidphase:block/element_repeater_<n>tick[_on][_locked]}，
- *       模型按"朝向 = 南"手工（脚本从原版模型复制），需要按 facing 旋转；</li>
+ *   <li>中继器：{@code liquidphase:block/element_repeater_<n>tick[_on][_locked]}；
+ *       子模型只含杆与红条，按 1/16 像素分列，运行时逐列贴到宿主顶面；</li>
  *   <li>比较器：{@code liquidphase:block/element_comparator[_on][_subtract]}，同上；</li>
- *   <li>侦测器：{@code liquidphase:block/element_observer[_on]}，模型按"观察面 = 北"手工，需要旋转。</li>
+ *   <li>侦测器：{@code liquidphase:block/element_observer[_<facing>][_on]}；16×16 正常比例、
+ *       固定在方块内（不抬升），只含侦测面五官与输出面输出口两个平面。
+ *       **六个朝向各自预烘焙**，运行期不旋转（单面平面转向后容易被区块网格按旧朝向剔除）。</li>
  * </ul>
- * 抬升 = 逐顶点采样宿主碰撞形状在该列的最高点（0–1），即"画在宿主表面上层"。
+ * 中继器/比较器的 y 轴旋转按原版 blockstate 的 {@code y} 值。
  */
 public final class ElementRenderSupport {
 
     private ElementRenderSupport() {
     }
 
-    /** 元件几何高度（方块空间，0–1）：中继器/比较器 7px，侦测器 8px。 */
-    public static double elementHeight(PhaseExtra.Kind kind) {
-        return kind == PhaseExtra.Kind.OBSERVER ? 0.5 : 7.0 / 16.0;
-    }
-
     /** {@return 需要动态几何的条目} */
     public static boolean hasGeometry(int extra) {
         return PhaseExtra.isRedstone(extra) || PhaseExtra.isElement(extra);
+    }
+
+    /** {@return 该条目是否按"每个 1/16 像素列各自贴到宿主顶面"处理（中继器/比较器）} */
+    public static boolean terrainLift(int extra) {
+        PhaseExtra.Kind kind = PhaseExtra.kind(extra);
+        return kind == PhaseExtra.Kind.REPEATER || kind == PhaseExtra.Kind.COMPARATOR;
     }
 
     /** {@return 子模型 id（{@code namespace:path}，不带 {@code .json}）} */
@@ -45,7 +47,9 @@ public final class ElementRenderSupport {
             case COMPARATOR -> "liquidphase:block/element_comparator"
                 + (PhaseExtra.powered(extra) ? "_on" : "")
                 + (PhaseExtra.subtractMode(extra) ? "_subtract" : "");
-            case OBSERVER -> "liquidphase:block/element_observer" + (PhaseExtra.powered(extra) ? "_on" : "");
+            case OBSERVER -> "liquidphase:block/element_observer"
+                + (PhaseExtra.facing(extra) == Direction.NORTH ? "" : "_" + PhaseExtra.facing(extra).getName())
+                + (PhaseExtra.powered(extra) ? "_on" : "");
             default -> "liquidphase:block/dynamic";
         };
     }
@@ -59,18 +63,16 @@ public final class ElementRenderSupport {
     /**
      * {@return y 轴旋转角（度，按 {@code x' = x cosθ - z sinθ; z' = x sinθ + z cosθ} 绕方块中心旋转）}
      * <p>
-     * 对应原版 blockstate 的 {@code y} 值：中继器/比较器模型在无旋转时朝南，
-     * 侦测器（我们的贴花模型）在无旋转时观察面朝北。
+     * 与原版 blockstate 的 {@code y} 值一致：中继器/比较器无旋转时 FACING=SOUTH。
+     * 侦测器按朝向预烘焙，不走这条旋转。
      */
     public static float yawDegrees(int extra) {
-        PhaseExtra.Kind kind = PhaseExtra.kind(extra);
         Direction facing = PhaseExtra.facing(extra);
-        boolean observer = kind == PhaseExtra.Kind.OBSERVER;
         return switch (facing) {
-            case SOUTH -> observer ? 180.0F : 0.0F;
-            case NORTH -> observer ? 0.0F : 180.0F;
-            case EAST -> observer ? 90.0F : 270.0F;
-            case WEST -> observer ? 270.0F : 90.0F;
+            case SOUTH -> 0.0F;
+            case NORTH -> 180.0F;
+            case EAST -> 270.0F;
+            case WEST -> 90.0F;
             default -> 0.0F;
         };
     }
@@ -90,20 +92,6 @@ public final class ElementRenderSupport {
             return 0.0;
         }
         return Math.min(1.0, top);
-    }
-
-    /** {@return 宿主顶面最高点（用于放置前提判断）} */
-    public static double footprintTop(VoxelShape shape) {
-        if (shape == null || shape.isEmpty()) {
-            return 0.0;
-        }
-        double best = 0.0;
-        for (int i = 0; i < 8; i++) {
-            for (int j = 0; j < 8; j++) {
-                best = Math.max(best, columnTop(shape, (i + 0.5) / 8.0, (j + 0.5) / 8.0));
-            }
-        }
-        return best;
     }
 
     /** 便捷：按存储取条目（异常/无存储返回 0）。 */

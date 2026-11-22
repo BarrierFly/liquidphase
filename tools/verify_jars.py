@@ -11,6 +11,8 @@ import sys
 import zipfile
 
 VERSIONS = sys.argv[1:]
+# 只检查指定 mod 版本（例如发布时 dist/ 里还留着旧包）：LIQUIDPHASE_VERIFY_VERSION=0.2.4
+TARGET_VERSION = os.environ.get('LIQUIDPHASE_VERIFY_VERSION', '').strip()
 
 # jar 里的类已 remap 成 intermediary，不能按 Mojang 名查字符串，
 # 只能查我们自己写的、不会被 remap 的 handler/方法名。
@@ -171,8 +173,62 @@ for ver, jar in jars():
         if len(shell_textures) != len(list(SHELL_POWERS)):
             shell_gaps.append('power textures not all distinct')
 
+        # 元件子模型/贴图：33 个模型 + 7 份裁切贴图；中继器/比较器无底板/锁存条，
+        # 侦测器只有五官/输出口两平面。
+        element_gaps = []
+        element_models = (
+            ['element_repeater_%dtick%s%s' % (d, on, lock)
+             for d in range(1, 5) for on in ('', '_on') for lock in ('', '_locked')]
+            + ['element_comparator' + on + sub for on in ('', '_on') for sub in ('', '_subtract')]
+            + ['element_observer' + face + on
+               for face in ('', '_south', '_east', '_west', '_up', '_down')
+               for on in ('', '_on')]
+            + ['dynamic']
+        )
+        for model in element_models:
+            if 'assets/liquidphase/models/block/%s.json' % model not in names:
+                element_gaps.append(model + ' (missing)')
+        element_textures = ['element_repeater_bar', 'element_repeater_bar_on',
+                            'element_comparator_bar', 'element_comparator_bar_on',
+                            'element_observer_front', 'element_observer_port',
+                            'element_observer_port_on']
+        for texture in element_textures:
+            if 'assets/liquidphase/textures/block/%s.png' % texture not in names:
+                element_gaps.append(texture + ' (missing)')
+        for model in ('element_repeater_1tick_on', 'element_comparator_on_subtract'):
+            path = 'assets/liquidphase/models/block/%s.json' % model
+            if path in names:
+                data = z.read(path)
+                if any(marker in data for marker in
+                       (b'smooth_stone', b'#slab', b'#lock', b'bedrock', b'"cullface"')):
+                    element_gaps.append(model + ' still has base/lock/cullface')
+                if b'element_repeater_bar' not in data and b'element_comparator_bar' not in data:
+                    element_gaps.append(model + ' misses the red bar')
+        for face, opposite in (('', 'south'), ('_south', 'north'), ('_east', 'west'),
+                               ('_west', 'east'), ('_up', 'down'), ('_down', 'up')):
+            for on in ('', '_on'):
+                model = 'element_observer' + face + on
+                path = 'assets/liquidphase/models/block/%s.json' % model
+                if path not in names:
+                    continue
+                data = json.loads(z.read(path))
+                elements = data.get('elements') or []
+                if len(elements) != 2:
+                    element_gaps.append(model + ' must have two planes')
+                    continue
+                front = 'north' if face == '' else face[1:]
+                expected = [front, opposite]
+                if any(set(element.get('faces') or {}) != {expected_face}
+                       for element, expected_face in zip(elements, expected)):
+                    element_gaps.append(model + ' planes face the wrong way')
+                if b'observer_side' in z.read(path) or b'observer_top' in z.read(path):
+                    element_gaps.append(model + ' renders a side/top texture')
+
         # 渲染层 mixin 配置必须在 fabric.mod.json 里接线（仅 1.19.4–1.21.11）。
         mod = json.loads(z.read('fabric.mod.json'))
+        if TARGET_VERSION and mod['version'].split('+', 1)[0] != TARGET_VERSION:
+            print('%-8s skip mod version %s (wanted %s)' % (ver, mod['version'], TARGET_VERSION))
+            continue
         layer_wired = 'liquidphase.layer.mixins.json' in mod.get('mixins', [])
         if ver in LAYER_MARKER_VERSIONS and not layer_wired:
             missing_markers.append('layer mixin config not wired')
@@ -225,16 +281,16 @@ for ver, jar in jars():
                    and has_piston_hooks and has_piston_strip
                    and removed_wire_use and removed_wire_ctx
                    and not missing_markers and not missing_dynamic and not missing_blockstates
-                   and not cullface_models and not shell_gaps
+                   and not cullface_models and not shell_gaps and not element_gaps
                    and always_true == 0)
         ok = ok and line_ok
         print('%-8s ver=%-8s blockstates=%-5d bad_conds=%-3d always_true=%-4d replace_mixin=%s '
-              'phase_write=%s piston=%s/%s render_sync=%s cullface=%s shell=%s missing_dynamic=%s '
-              'unrendered_ids=%s -> %s'
+              'phase_write=%s piston=%s/%s render_sync=%s cullface=%s shell=%s elements=%s '
+              'missing_dynamic=%s unrendered_ids=%s -> %s'
               % (ver, mod['version'], len(blockstates), bad, always_true, has_replace_mixin,
                  has_phase_write, has_piston_hooks, has_piston_strip,
                  'ok' if not missing_markers else missing_markers,
-                 cullface_models or 'none', shell_gaps or 'ok',
+                 cullface_models or 'none', shell_gaps or 'ok', element_gaps or 'ok',
                  missing_dynamic or 'none', missing_blockstates or 'none',
                  'OK' if line_ok else 'BROKEN'))
 

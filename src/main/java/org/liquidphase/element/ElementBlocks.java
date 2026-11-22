@@ -16,6 +16,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.DiodeBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.AABB;
@@ -195,17 +196,29 @@ public final class ElementBlocks {
         }
         int extra = PhaseExtra.element(kind, facing, 0, false, false);
         PhaseExtras.set(level, pos, extra);
-        level.playSound(null, pos, SoundEvents.ITEM_FRAME_ADD_ITEM, SoundSource.BLOCKS, 0.4F, 1.0F);
-        // 有输入时立即排一次刻（镜像 setPlacedBy → shouldTurnOn）。
-        if (level instanceof ServerLevel serverLevel) {
-            int input = inputSignal(serverLevel, pos, host, extra);
-            if (kind == PhaseExtra.Kind.REPEATER && input > 0) {
-                serverLevel.scheduleTick(pos, host.getBlock(), 1);
-            } else if (kind == PhaseExtra.Kind.COMPARATOR) {
-                serverLevel.scheduleTick(pos, host.getBlock(), 2);
+        // 原版 getStateForPlacement 会给中继器补 LOCKED；这里在条目落地后按同一算式补一次。
+        if (level instanceof ServerLevel serverLevel && kind == PhaseExtra.Kind.REPEATER) {
+            boolean locked = isLocked(serverLevel, pos, host, extra);
+            if (locked) {
+                extra = PhaseExtra.withLocked(extra, true);
+                PhaseExtras.set(level, pos, extra);
             }
         }
+        level.playSound(null, pos, SoundEvents.ITEM_FRAME_ADD_ITEM, SoundSource.BLOCKS, 0.4F, 1.0F);
+        // 镜像 DiodeBlock#setPlacedBy：shouldTurnOn 时排 1 tick；只有有输入才需要。
+        if (level instanceof ServerLevel serverLevel && shouldTurnOnOnPlace(serverLevel, pos, host, extra)) {
+            serverLevel.scheduleTick(pos, host.getBlock(), 1);
+        }
         return true;
+    }
+
+    /** 放置时的初始判断（中继器 = 输入 > 0；比较器 = 原版 shouldTurnOn）。 */
+    private static boolean shouldTurnOnOnPlace(Level level, BlockPos pos, BlockState host, int extra) {
+        return switch (PhaseExtra.kind(extra)) {
+            case REPEATER -> inputSignal(level, pos, host, extra) > 0;
+            case COMPARATOR -> shouldTurnOn(level, pos, host, extra);
+            default -> false;
+        };
     }
 
     /** 破坏元件：清条目 + 掉落对应物品；宿主保留。 */
@@ -249,6 +262,22 @@ public final class ElementBlocks {
         return getSignal(host, level, pos, direction, extra);
     }
 
+    /**
+     * 元件宿主与红石线的连接规则（对齐原版 {@code RedStoneWireBlock.shouldConnectTo}）：
+     * 中继器/比较器的输入面与输出面都连；侦测器只在输出面连（观察面不接受红石信号）。
+     * <p>
+     * {@code direction} 是"线 → 元件宿主"的方向；原版 {@code shouldConnectTo} 的
+     * {@code direction} 参数与之同向。是否露出由调用方按 {@code exposed} 另行判定。
+     */
+    public static boolean connectsOnFace(int extra, Direction direction) {
+        return switch (PhaseExtra.kind(extra)) {
+            case REPEATER, COMPARATOR -> direction == PhaseExtra.facing(extra)
+                || direction == PhaseExtra.facing(extra).getOpposite();
+            case OBSERVER -> direction == PhaseExtra.facing(extra);
+            default -> false;
+        };
+    }
+
     // ------------------------------------------------------------------
     // 计划刻与邻居变化
     // ------------------------------------------------------------------
@@ -267,6 +296,10 @@ public final class ElementBlocks {
             return;
         }
         if (changedDirection != PhaseExtra.facing(extra) || PhaseExtra.powered(extra)) {
+            return;
+        }
+        // 观察面被宿主覆盖时不观测（与红石相"被覆盖的面不输入"同一口径）。
+        if (!RedstoneBlocks.exposed(host, PhaseExtra.facing(extra))) {
             return;
         }
         if (!(level instanceof ServerLevel serverLevel)) {
@@ -315,23 +348,34 @@ public final class ElementBlocks {
                 if (PhaseExtra.locked(extra)) {
                     return;
                 }
+                // 原版 DiodeBlock#tick：即使输入已经消失，已排队的刻也要把输出点亮并按延迟再排一次，
+                // 这样短脉冲也能输出一个完整延迟的脉冲（只是 if(turnOn != powered) 会丢掉短脉冲）。
+                boolean powered = PhaseExtra.powered(extra);
                 boolean turnOn = inputSignal(level, pos, host, extra) > 0;
-                if (turnOn != PhaseExtra.powered(extra)) {
-                    int previous = extra;
-                    extra = PhaseExtra.withPowered(extra, turnOn);
-                    PhaseExtras.set(level, pos, extra);
-                    notifyOutput(level, pos, host, previous);
+                if (powered && !turnOn) {
+                    PhaseExtras.set(level, pos, PhaseExtra.withPowered(extra, false));
+                    notifyOutput(level, pos, host, extra);
+                } else if (!powered) {
+                    PhaseExtras.set(level, pos, PhaseExtra.withPowered(extra, true));
+                    notifyOutput(level, pos, host, extra);
+                    if (!turnOn) {
+                        level.scheduleTick(pos, host.getBlock(), PhaseExtra.delayTicks(extra) * 2);
+                    }
                 }
             }
             case COMPARATOR -> {
+                // 原版 ComparatorBlock#refreshOutputState：输出强度变化、或比较模式下，
+                // 刷新 POWERED 并通知前方；比较模式即使数值没变也要刷新一次。
                 int output = comparatorOutput(level, pos, host, extra);
-                boolean turnOn = shouldTurnOn(level, pos, host, extra);
-                int previous = extra;
-                extra = PhaseExtra.withPower(PhaseExtra.withPowered(extra, turnOn), output);
-                if (extra != previous) {
-                    PhaseExtras.set(level, pos, extra);
-                    notifyOutput(level, pos, host, previous);
+                if (output == PhaseExtra.power(extra) && PhaseExtra.subtractMode(extra)) {
+                    return;
                 }
+                boolean turnOn = shouldTurnOn(level, pos, host, extra);
+                int updated = PhaseExtra.withPower(PhaseExtra.withPowered(extra, turnOn), output);
+                if (updated != extra) {
+                    PhaseExtras.set(level, pos, updated);
+                }
+                notifyOutput(level, pos, host, extra);
             }
             case OBSERVER -> {
                 int previous = extra;
@@ -416,25 +460,58 @@ public final class ElementBlocks {
         return frames.size() == 1 ? frames.get(0) : null;
     }
 
-    /** 比较器侧输入（{@code DiodeBlock.getAlternateSignal} 的等价物）。 */
+    /**
+     * 侧向输入（{@code DiodeBlock.getAlternateSignal} 的等价物）。
+     * <p>
+     * 中继器锁存走 {@code sideInputDiodesOnly=true}（只认中继器/比较器），比较器走
+     * {@code false}（原版 {@code SignalGetter.getControlInputSignal} 的完整口径）。
+     * 两侧面都必须露出（被宿主覆盖的侧脸不输入）。
+     */
     private static int alternateSignal(Level level, BlockPos pos, BlockState host, int extra) {
         Direction input = PhaseExtra.facing(extra);
-        return Math.max(sideSignal(level, pos.relative(input.getClockWise()), input.getClockWise()),
-            sideSignal(level, pos.relative(input.getCounterClockWise()), input.getCounterClockWise()));
+        boolean diodesOnly = PhaseExtra.kind(extra) == PhaseExtra.Kind.REPEATER;
+        return Math.max(
+            controlInput(level, pos, host, input.getClockWise(), diodesOnly),
+            controlInput(level, pos, host, input.getCounterClockWise(), diodesOnly));
     }
 
-    private static int sideSignal(Level level, BlockPos pos, Direction side) {
-        BlockState state = level.getBlockState(pos);
-        int extra = PhaseExtras.get(level, pos);
-        if (PhaseExtra.isElement(extra)) {
-            PhaseExtra.Kind kind = PhaseExtra.kind(extra);
-            if ((kind == PhaseExtra.Kind.REPEATER || kind == PhaseExtra.Kind.COMPARATOR)
-                && PhaseExtra.facing(extra) == side) {
-                return getSignal(state, level, pos, side, extra);
+    /**
+     * {@code SignalGetter.getControlInputSignal(pos, direction, diodesOnly)} 的等价物。
+     * <p>
+     * 旁路表里的元件/红石相不是原版方块，{@code isSignalSource()} 为 false，所以这里按
+     * "红石相 = 红石线、元件 = 二极管信号源"补齐分支；其余完全照原版。
+     */
+    private static int controlInput(Level level, BlockPos pos, BlockState host, Direction side, boolean diodesOnly) {
+        if (!RedstoneBlocks.exposed(host, side)) {
+            return 0;
+        }
+        BlockPos neighbourPos = pos.relative(side);
+        BlockState neighbour = level.getBlockState(neighbourPos);
+        int extra = PhaseExtras.get(level, neighbourPos);
+        PhaseExtra.Kind kind = PhaseExtra.kind(extra);
+        if (diodesOnly) {
+            if (neighbour.getBlock() instanceof DiodeBlock) {
+                return level.getDirectSignal(neighbourPos, side);
+            }
+            if (kind == PhaseExtra.Kind.REPEATER || kind == PhaseExtra.Kind.COMPARATOR) {
+                return getDirectSignal(neighbour, level, neighbourPos, side, extra);
             }
             return 0;
         }
-        return level.getSignal(pos, side);
+        if (neighbour.is(Blocks.REDSTONE_BLOCK)) {
+            return 15;
+        }
+        if (RedstoneBlocks.isWire(neighbour)) {
+            return neighbour.getValue(BlockStateProperties.POWER);
+        }
+        if (PhaseExtra.isRedstone(extra)) {
+            // 红石相按红石线规则：侧向直接给满功率（不衰减）。
+            return PhaseExtra.power(extra);
+        }
+        if (PhaseExtra.isElement(extra)) {
+            return getDirectSignal(neighbour, level, neighbourPos, side, extra);
+        }
+        return neighbour.isSignalSource() ? level.getDirectSignal(neighbourPos, side) : 0;
     }
 
     private static boolean shouldTurnOn(Level level, BlockPos pos, BlockState host, int extra) {
@@ -462,24 +539,9 @@ public final class ElementBlocks {
     // 中继器锁存
     // ------------------------------------------------------------------
 
+    /** 中继器锁存（原版 {@code RepeaterBlock.isLocked} = 侧向二极管输入 > 0）。 */
     public static boolean isLocked(Level level, BlockPos pos, BlockState host, int extra) {
-        Direction input = PhaseExtra.facing(extra);
-        for (Direction side : new Direction[]{input.getClockWise(), input.getCounterClockWise()}) {
-            BlockPos sidePos = pos.relative(side);
-            int sideExtra = PhaseExtras.get(level, sidePos);
-            if (!PhaseExtra.isElement(sideExtra) || !PhaseExtra.powered(sideExtra)) {
-                continue;
-            }
-            PhaseExtra.Kind kind = PhaseExtra.kind(sideExtra);
-            if (kind != PhaseExtra.Kind.REPEATER && kind != PhaseExtra.Kind.COMPARATOR) {
-                continue;
-            }
-            // 侧向元件要对着本格输出（其输出面 = facing.getOpposite() 指向本格）。
-            if (PhaseExtra.facing(sideExtra).getOpposite() == side.getOpposite()) {
-                return true;
-            }
-        }
-        return false;
+        return alternateSignal(level, pos, host, extra) > 0;
     }
 
     public static void refreshLock(Level level, BlockPos pos, BlockState host, int extra) {

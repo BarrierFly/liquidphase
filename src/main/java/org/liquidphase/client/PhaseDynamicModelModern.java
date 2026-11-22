@@ -52,7 +52,7 @@ import org.liquidphase.phase.PhaseHelper;
  */
 public final class PhaseDynamicModelModern {
 
-    /** 全部子模型（相对 {@code liquidphase:} 的路径）：16 外壳 + 16 中继器 + 4 比较器 + 2 侦测器。 */
+    /** 全部子模型（相对 {@code liquidphase:} 的路径）：16 外壳 + 16 中继器 + 4 比较器 + 12 侦测器。 */
     private static final String[] SUB_PATHS = buildSubPaths();
 
     private static final ModelBaker.SharedOperationKey<Map<String, Object>> PARTS_KEY =
@@ -62,7 +62,8 @@ public final class PhaseDynamicModelModern {
     }
 
     private static String[] buildSubPaths() {
-        String[] ids = new String[16 + 16 + 4 + 2];
+        String[] facings = {"", "_south", "_east", "_west", "_up", "_down"};
+        String[] ids = new String[16 + 16 + 4 + facings.length * 2];
         int i = 0;
         for (int power = 0; power < 16; power++) {
             ids[i++] = "block/redstone_phase_" + power;
@@ -77,8 +78,10 @@ public final class PhaseDynamicModelModern {
             ids[i++] = "block/element_comparator" + ((variant & 1) != 0 ? "_on" : "")
                 + ((variant & 2) != 0 ? "_subtract" : "");
         }
-        ids[i++] = "block/element_observer";
-        ids[i++] = "block/element_observer_on";
+        for (String suffix : facings) {
+            ids[i++] = "block/element_observer" + suffix;
+            ids[i++] = "block/element_observer" + suffix + "_on";
+        }
         return ids;
     }
 
@@ -189,9 +192,18 @@ public final class PhaseDynamicModelModern {
                 //?}
                 return;
             }
+            // 侦测器六个朝向都在烘焙期定好，运行期不旋转、不抬升，直接发几何。
+            if (PhaseExtra.kind(extra) == PhaseExtra.Kind.OBSERVER) {
+                //? if 26.3 {
+                /*((FabricBlockStateModelPart) part).emitQuads(emitter, direction -> false);
+                 *///?} else {
+                ((FabricBlockModelPart) part).emitQuads(emitter, direction -> false);
+                //?}
+                return;
+            }
             VoxelShape shape = state.getCollisionShape(view, pos, CollisionContext.empty());
             float yaw = ElementRenderSupport.yawDegrees(extra);
-            emitter.pushTransform(quad -> liftToHost(quad, shape, yaw));
+            emitter.pushTransform(quad -> transformElement(quad, shape, yaw));
             try {
                 //? if 26.3 {
                 /*((FabricBlockStateModelPart) part).emitQuads(emitter, direction -> false);
@@ -209,28 +221,88 @@ public final class PhaseDynamicModelModern {
             if (!ElementRenderSupport.hasGeometry(extra)) {
                 return null;
             }
-            VoxelShape shape = state.getCollisionShape(view, pos, CollisionContext.empty());
-            return new ElementRenderSupport.GeometryKey(extra, pos.asLong(), System.identityHashCode(shape));
+            // 只有中继器/比较器依赖宿主形状；侦测器固定在方块内，形状变化不应导致重画。
+            VoxelShape shape = ElementRenderSupport.terrainLift(extra)
+                ? state.getCollisionShape(view, pos, CollisionContext.empty()) : null;
+            return new ElementRenderSupport.GeometryKey(extra, pos.asLong(),
+                shape == null ? 0 : System.identityHashCode(shape));
         }
     }
 
-    /** 把子模型的每个顶点绕方块中心旋转，再抬到该列宿主顶面高度（逐列采样）。 */
-    private static boolean liftToHost(MutableQuadView quad, VoxelShape shape, float yawDegrees) {
-        double radians = Math.toRadians(yawDegrees);
-        float cos = (float) Math.cos(radians);
-        float sin = (float) Math.sin(radians);
+    /** 1/64 方块：足够跨过像素边界取样，又不会落进相邻像素列。 */
+    private static final float INWARD = 1.0F / 64.0F;
+
+    /**
+     * 旋转并按列抬升一个元件小面（只用于中继器/比较器；侦测器已按朝向预烘焙）。
+     * <p>
+     * 子模型已经按 1/16 像素列切好，所以每个小面只取**一个**列高度、整面刚性平移
+     * （而不是逐顶点插值）：这样跨台阶时每个像素列都真正搭在宿主顶面上，
+     * 同一根杆/红条内部允许逐列落差。侧立面用面法线朝内偏移半格取样，避免正好落在
+     * 像素边界上取到相邻列。
+     */
+    private static boolean transformElement(MutableQuadView quad, VoxelShape shape, float yawDegrees) {
+        double yawRadians = Math.toRadians(yawDegrees);
+        float cosY = (float) Math.cos(yawRadians);
+        float sinY = (float) Math.sin(yawRadians);
+        float lift = 0.0F;
+        if (shape != null && !shape.isEmpty()) {
+            float minX = Float.MAX_VALUE;
+            float maxX = -Float.MAX_VALUE;
+            float minZ = Float.MAX_VALUE;
+            float maxZ = -Float.MAX_VALUE;
+            for (int i = 0; i < 4; i++) {
+                minX = Math.min(minX, quad.x(i));
+                maxX = Math.max(maxX, quad.x(i));
+                minZ = Math.min(minZ, quad.z(i));
+                maxZ = Math.max(maxZ, quad.z(i));
+            }
+            float dx = (minX + maxX) * 0.5F - 0.5F;
+            float dz = (minZ + maxZ) * 0.5F - 0.5F;
+            float rx = 0.5F + dx * cosY - dz * sinY;
+            float rz = 0.5F + dx * sinY + dz * cosY;
+            net.minecraft.core.Direction face = quad.nominalFace();
+            if (face != null) {
+                float nx = face.getStepX() * cosY - face.getStepZ() * sinY;
+                float nz = face.getStepX() * sinY + face.getStepZ() * cosY;
+                rx -= nx * INWARD;
+                rz -= nz * INWARD;
+            }
+            lift = (float) ElementRenderSupport.columnTop(shape, rx, rz);
+        }
+        // 只改顶点位置不够：法线与朝向面一并旋转，否则光照会按模型空间的方向算。
+        net.minecraft.core.Direction rotatedFace = rotateDirection(quad.nominalFace(), cosY, sinY);
+        if (rotatedFace != null) {
+            quad.nominalFace(rotatedFace);
+        }
         for (int i = 0; i < 4; i++) {
-            float x = quad.x(i);
-            float y = quad.y(i);
-            float z = quad.z(i);
-            float dx = x - 0.5F;
-            float dz = z - 0.5F;
-            float rx = 0.5F + dx * cos - dz * sin;
-            float rz = 0.5F + dx * sin + dz * cos;
-            double top = ElementRenderSupport.columnTop(shape, rx, rz);
-            quad.pos(i, rx, (float) (y + top), rz);
+            float x = quad.x(i) - 0.5F;
+            float z = quad.z(i) - 0.5F;
+            float x1 = x * cosY - z * sinY;
+            float z1 = x * sinY + z * cosY;
+            quad.pos(i, x1 + 0.5F, quad.y(i) + lift, z1 + 0.5F);
+            if (quad.hasNormal(i)) {
+                float nx = quad.normalX(i);
+                float nz = quad.normalZ(i);
+                quad.normal(i, nx * cosY - nz * sinY, quad.normalY(i),
+                    nx * sinY + nz * cosY);
+            }
         }
         return true;
+    }
+
+    private static net.minecraft.core.Direction rotateDirection(net.minecraft.core.Direction face,
+                                                                float cosY, float sinY) {
+        if (face == null) {
+            return null;
+        }
+        float x = face.getStepX();
+        float z = face.getStepZ();
+        float x1 = x * cosY - z * sinY;
+        float z1 = x * sinY + z * cosY;
+        if (Math.abs(x1) >= Math.abs(z1)) {
+            return x1 > 0.0F ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST;
+        }
+        return z1 > 0.0F ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH;
     }
 }
 

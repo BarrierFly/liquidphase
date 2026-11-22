@@ -42,7 +42,7 @@
 | 旁路表同步 | `sync/PhaseExtraSync.java`（`extra_request` / `extra_chunk` / `extra_update`）+ `sync/PhaseExtraClientSync.java`（区块加载/握手/Level 更换请求 + 标脏） |
 | 红石信号与放置 | `redstone/RedstoneBlocks.java`；`mixin/RedstoneSignalMixin.java`；红石线连接 `mixin/RedStoneWireBlockMixin`（≤1.21.11）/ `BlockStateBaseMixin.shouldRedstoneWireConnectTo`（26.3）；点粉/宿主进线格 `mixin/BlockItemMixin` + `mixin/RedstoneWireReplaceMixin`；下落方块 `mixin/FallingBlockIntoWireMixin` |
 | 活塞路径与弹出物品（0.2.3） | `phase/PistonPhaseOps.java`（破坏列表线程内标记 + 移动状态剥相）+ `mixin/PistonBaseBlockMixin.java`（`moveBlocks` 两处重定向）+ `phase/PhaseDrops.java`（"相 → 弹出物品"纯函数）；黑曜石相推不动在 `BlockStateBaseMixin.getPistonPushReaction` |
-| 元件相（中继器/比较器/侦测器） | `element/ElementBlocks.java`（放置/破坏/信号/计划刻/锁存；`extraOfBlock` 让真实元件方块成为可吸收的相材料格）+ `element/ElementRenderSupport.java`（子模型 id / 旋转 / 逐列抬升）+ `mixin/ElementShapeUpdateMixin.java`（状态级 `updateShape`） |
+| 元件相（中继器/比较器/侦测器） | `element/ElementBlocks.java`（放置/破坏/信号/计划刻/锁存/红石线连接规则；`extraOfBlock` 让真实元件方块成为可吸收的相材料格）+ `element/ElementRenderSupport.java`（子模型 id / 朝向 / 逐列抬升）+ `mixin/ElementShapeUpdateMixin.java`（状态级 `updateShape`）+ `mixin/RedStoneWireBlockMixin.java`（线连元件宿主） |
 | 旁路表一致性 | `mixin/LevelChunkExtraMixin.java`（方块被换成另一个方块时清条目）；`BlockStateBaseMixin` 的 onRemove/放置路径（写 `filling != none` 时清条目） |
 | 动态渲染（两代 API） | `client/PhaseDynamicModelLegacy.java`（≤1.21.1，接管 `liquidphase:block/dynamic`）/ `client/PhaseDynamicModelModern.java`（1.21.10+，包装宿主 `BlockStateModel`） |
 | 资源包兼容合并（§3.7，0.1.17） | `client/PhasePackMerge.java`（ResourceManager 代理 + 栈顶合并）+ `client/PhasePackMergeCore.java`（纯 Gson 合并核心）+ `mixin/client/PhaseLoaderMixin.java`（≤1.21.1 挂 `ModelManager.loadBlockStates`，1.21.10+ 挂 `BlockStateModelLoader.loadBlockStates`）+ 片段 `assets/liquidphase/phase_parts/<id>.json`（生成器产出） |
@@ -73,8 +73,9 @@ python tools/gen_item_textures.py src/main/resources/assets/liquidphase/textures
 #    只作为动态模型的子模型资源；blockstate 由第 3 步追加无条件 dynamic part。
 python tools/gen_redstone_assets.py src/main/resources/assets/liquidphase
 
-# 6) 元件相子模型（方案 C：从客户端 jar 复制原版几何与贴图）
-#    产出 22 个 element_*.json + dynamic.json（共 23 个文件）；改了元件几何/贴图后必须重跑。
+# 6) 元件相子模型（方案 C：从客户端 jar 取原版几何/贴图并裁切）
+#    产出 16 中继器 + 4 比较器 + 12 侦测器（6 朝向 × on/off）+ dynamic.json（共 33 个模型），
+#    以及 7 份贴图（4 红条裁切 + 3 侦测器裁切）；改了元件几何/贴图后必须重跑。
 python tools/gen_element_models.py "<client-jar>" src/main/resources
 ```
 
@@ -241,13 +242,24 @@ python tools/audit_host_coverage.py "<guardian 仓库路径>" .
 
 - 模型按坐标查旁路表：红石条目发 `liquidphase:block/redstone_phase_<power>` 子模型
   （16 档颜色）；元件条目发 `liquidphase:block/element_*` 子模型。
-- 元件几何按逐顶点采样宿主碰撞形状顶面高度（`VoxelShape.max(Y, x, z)`）抬升，
-  再按 facing 做 y 轴旋转；五官/输出口/杆因此画在宿主表面上层。
+- **中继器/比较器**：子模型只含**杆**（红石火把，含点亮光晕）和**红条**；原版 2px
+  平滑石底板、锁存条不生成（锁存只做逻辑锁定）。几何在生成时按 **1/16 像素列**切开
+  （`gen_element_models.py` 的 `split_element`，UV 同步细分），运行时每个小面取该列
+  宿主顶面高度（`VoxelShape.max(Y, x, z)`）**整面刚性平移**——不是逐顶点插值，
+  所以跨台阶时每个像素列都真的搭在相应最高处，同杆/红条内部允许逐列落差。
+  旋转时连 `normal` / `nominalFace` 一起转（只转位置会让光照/剔除仍按模型空间方向算）。
+- **侦测器**：16×16 正常比例，**6 个朝向 × on/off 全部预烘焙**（`element_observer[_<facing>][_on]`），
+  运行期不旋转、不抬升；子模型只有"侦测面五官"和"输出面输出口"两块平面，贴图是原版
+  `observer_front` / `observer_back` 的 alpha 裁切，不显示任何一个整面。平面放在对应
+  方块边界**外侧 0.01**（不是内缩），这样下半砖/楼梯的侧脸不会把五官/输出口埋掉。
+  ⚠️ 单面平面如果运行期旋转，区块网格会按**旧 nominal face/法线**做背面剔除（直发网格
+  正常、实机不可见）；所以侦测器必须预烘焙朝向，不能靠运行期 yaw/pitch。
 - ≤1.21.1 的 `emitBlockQuads` 自带 `BlockAndTintGetter + BlockPos`，可直接发几何；
   1.21.10+ 的 `BlockModelPart.emitQuads` 拿不到坐标，所以改为包装宿主 `BlockStateModel`，
   并在 `createGeometryKey` 里带上 extra/pos（否则不同格会共用缓存）。
-- 子模型由 `tools/gen_element_models.py` 从客户端 jar 复制原版模型（23 个文件：
-  22 个元件模型 + `dynamic.json`）；红石外壳 16 份模型/贴图保留为子模型。
+- 子模型由 `tools/gen_element_models.py` 从客户端 jar 生成（16 中继器 + 4 比较器 +
+  12 侦测器 + `dynamic.json` = 33 个模型，另有 7 份裁切贴图）；红石外壳 16 份模型/贴图
+  保留为子模型。
 - 1.19.4–1.21.11：所有相宿主方块（**含 `filling=none` 状态**）的 `ItemBlockRenderTypes`
   图层从 SOLID 升为 CUTOUT（红石外壳是透明底贴图）；26.3 由贴图透明度自动推导。
   ⚠️ 这是整块方块的取舍：失去原版 SOLID 的 mipmap，已写进 README 已知限制。
@@ -539,6 +551,19 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 因为元件不占状态，`updateShape` 必须挂在状态级分发点（`ElementShapeUpdateMixin`），
 否则宿主自己的覆写会把元件更新整个遮掉。
 
+**所有参与 I/O 的面都受宿主相应面控制**（`RedstoneBlocks.exposed`，与红石相同口径）：
+中继器/比较器的输入/输出、比较器侧向 alternate 输入、中继器锁存的两侧面、侦测器的
+观察面/输出面。比较器侧向输入按原版 `SignalGetter.getControlInputSignal` 实现
+（中继器锁存 `diodesOnly=true`；比较器 `false`，红石相按线规则给满功率）。
+红石线必须在 `getConnectingSide` / 26.3 `shouldRedstoneWireConnectTo` 里也认元件宿主
+（中继器/比较器输入+输出面，侦测器输出面），否则线自己的 `getSignal` 会因"朝接收方
+那一侧未连接"返回 0。中继器 tick 镜像原版 `DiodeBlock#tick`（短脉冲也输出完整延迟），
+放置时补初始 `locked`。
+
+> ⚠️ 元件几何的旋转必须同时转 `normal` 与 `nominalFace`；侦测器单面平面不能运行期旋转，
+> 必须按 6 朝向预烘焙，否则区块网格会按旧朝向背面剔除（直发网格正常、实机不可见，
+> 0.2.4 实机排查过）。
+
 ### 3.7 资源包兼容合并（0.1.17）
 
 第三方包覆盖宿主 blockstate 时，客户端把片段（`assets/liquidphase/phase_parts/<id>.json`，
@@ -616,18 +641,25 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
   1. **宿主 quad 和外壳 quad 都在**（红石相是叠加，不能让宿主消失，也不能没有外壳）；
   2. 区块图层不是 `SOLID`（外壳透明底，SOLID 会丢像素）；
   3. 外壳 quad 顶点落在本格内（方块空间 0..1，宽松量 0.01px 外扩）。
-- 场景二（元件）：在下半砖/楼梯上放中继器、比较器、侦测器，断言：
-  1. 三类元件的动态 quad 都存在；
-  2. 元件顶点 y ∈ [0.5, 1.0]（抬到宿主顶面之上，不埋进方块）；
-  3. 中继器能被紧邻的真实红石块点亮（`powered` 翻转）。
+- 场景二（元件）：三个下半砖 + 一个下半楼梯；断言：
+  1. 中继器/比较器只发**杆（红石火把）+ 红条**，不发 `smooth_stone`/底板/锁存条；
+  2. 侦测器只发 `element_observer_front` + `element_observer_port` 两块裁切面，不发侧/顶面；
+     16×16 面固定在方块内（minY≈0，不抬升）；东侧观察面被诊断石头挡住时不可见，
+     截图前把石头移走；
+  3. 下半砖上的元件 y ∈ [0.5, 1.0]；下半楼梯上的中继器有**至少两个高度层**
+     （南侧 0.5、北侧高半格 1.0，最高 1.3125 = 杆高），验证逐 1/16 像素列抬升；
+  4. 中继器能被紧邻的真实红石块点亮（`powered` 翻转）。
   元件场景放在 **x+36**（与栅栏列隔开两个 section）：侦测器每 4 tick 脉冲会重画本
   section 及邻居，靠得太近会让场景三的"mesh 是否被替换"观测失真。
+  截图：`element_oblique`/`element_topdown`/`observer_face_east`/`observer_port_west`/
+  `element_stair`。
 - 场景三（0.2.1，markDirty 回归）：对栅栏 z=2 **只写旁路表**（功率 15→7，不动状态、
   不通知邻居），等表值到达客户端后断言该 section 的 `SectionMesh` 引用在超时前被整体
   替换（=真的重画了），随后恢复 15。0.2.0 的 `markDirty` 是 `setBlockDirty(pos, state,
   state)` 同参调用（见 §双端同步的警告），在本断言下必超时。注意观测窗内时间固定正午、
   玩家静止，避免无关重画把断言洗成假阳性。
-- 每次会落三张截图到 `screenshots/`：斜视、近垂直俯视、0 档对比。
+- 每次会落截图到 `screenshots/`：栅栏斜视/近垂直俯视/0 档对比，以及元件斜视/俯视、
+  侦测器东侧五官/西侧输出口、下半楼梯逐像素落差。
 
 > ⚠️ 只在 **1.21.11** 接线：`BakedQuad.position(int)` 是这一版才有的 API（1.21.10 的顶点还打包在
 > `int[] vertices` 里），其余版本的渲染覆盖仍靠服务端自检 + `tools/verify_jars.py`。
@@ -640,9 +672,12 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
 `ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，断言数为
-**约 349（0.2.0；1.21.11 实测 349，1.21.10/26.3 为 350，以实测日志为准）**。
-含 0.1.20 的分派识别回归、0.1.22 的组装初始状态与组合碰撞断言，以及 0.2.0 新增的
-旁路表读写、红石 updatePower、元件放置空腔判定、dynamic part/外壳资源存在性断言。
+**约 486（0.2.4；1.21.11 实测 486 passed, 0 failed，其他版本以实测日志为准）**。
+含 0.1.20 的分派识别回归、0.1.22 的组装初始状态与组合碰撞断言、0.2.0 的旁路表读写/
+红石 updatePower/元件放置空腔/dynamic part 断言，以及 0.2.4 新增的**元件 I/O 露出门控**
+（下半楼梯南/北脸：输入、输出、观察面、比较器 alternate、中继器锁存、红石线连接）
+与**元件资源形状**（33 个模型/7 份贴图；红条 16 像素格；侦测器 6 朝向 × on/off 各只有
+五官/输出口两平面且位于正确边界外侧）。
 各版本已经收敛到几乎相同，因为断言改成**全量扫描**而不是写死几个代表方块：
 凡是"原生 RenderShape 不是 MODEL 的 phase 宿主"都会被逐个验证，各版本有几个就查几个
 （实测 1.20.1 有 **51** 个，1.21.11 只有 **2** 个（1.21.11 起是 `barrier`/`light`；1.19.4/1.20.1
@@ -666,7 +701,8 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
   写入清 `filling`、`canAcceptExtra` 与 `canAcceptPhase` 的互斥边界）、
 **元件放置空腔判定**（下半砖/下半楼梯接受，整格方块/上半砖拒绝）、
 **blockstate 渲染资源**（楼梯宿主可见 + 动态 part；整格宿主/透明宿主都有动态 part；
-  元件子模型 23 个文件存在）、
+  33 个元件子模型 + 7 份裁切贴图存在；中继器/比较器无底板/锁存条；侦测器 6 朝向 × on/off
+  只有五官/输出口两平面且在正确边界外侧）、
 **模型几何**（内缩覆盖层/外壳子模型不带 `cullface`；`phase_*_full` 保留但不再被引用）、
 **外壳按功率分档**（16 份模型/贴图互不相同，0 档与 15 档不同）、
 **宿主 part 不带恒真 filling 条件**（否则 `Condition ... is always true` 刷屏）、
@@ -748,8 +784,9 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 | 元件方块作相材料格 | 宿主放进/写进/落进中继器·比较器·侦测器方块所在格 → 吸收成元件相，继承朝向/延迟/模式/锁定/供电 |
 | 元件放置前提 | 整格方块/上半砖拒绝；已有填充相或旁路条目的格子拒绝 |
 | 破坏元件 | 左键命中元件：清条目 + 掉落对应物品，宿主保留；破坏宿主时元件随宿主消失、不额外掉落 |
-| 元件信号 | 中继器/比较器 FACING = 输入面，输出 = `facing.getOpposite()`；侦测器 FACING = 观察面，观察面邻居变化 2 tick 后翻 powered、再 2 tick 复位；被宿主覆盖的面不输入不输出 |
-| 中继器锁存 | 侧向红石信号锁定后停止翻转（逻辑锁定；锁形视觉未实现） |
+| 元件信号 | 中继器/比较器 FACING = 输入面，输出 = `facing.getOpposite()`；侦测器 FACING = 观察面，观察面邻居变化 2 tick 后翻 powered、再 2 tick 复位；**输入面/输出面/观察面/侧向 alternate/锁存两侧面都按宿主相应面是否露出判定**；红石线可连到元件宿主的允许面；侦测器支持上下朝向 |
+| 元件渲染 | 中继器/比较器只画杆 + 红条，逐 1/16 像素列搭在宿主顶面（台阶上两根杆/红条有落差）；侦测器只画 16×16 五官/输出口裁切面（6 朝向预烘焙、固定在方块内、在宿主相应表面外侧 0.01），不画底板/锁存条/侦测器侧面 |
+| 中继器锁存 | 侧向二极管在**露出**的侧脸输入时锁定、停止翻转（逻辑锁定；锁形视觉未实现） |
 | 活塞推动/拉回含相宿主（0.2.3） | 黑曜石填充相推不动（推动失败、方块原地不动、无掉落）；其余填充相不随方块移动：推动覆盖/破坏列表摧毁 → 弹出物品（黑曜石掉黑曜石、冰/霜冰无物品、熔岩相按液体物品开关掉熔岩物品或消失、红石相掉红石粉、元件掉对应物品），粘性拉动/剩余清格 → 相实体化留在原位（冰→冰块、熔岩→熔岩源、红石相→对应功率红石线、元件掉物品） |
 | 传送门宿主 | 下界门/末地门/末地折跃门可含材料相，且补注入 `WATERLOGGED` 后含水语义与其他宿主一致（水桶灌/取、流体态、带相拒水）；含冰/霜冰/黑曜石时整格碰撞堵住传送门（预期） |
 | 旁路表持久化 | 30 s 自动保存 + 关服保存；重启后红石功率/元件参数保持；`world/data/liquidphase_<dimension>.dat` 存在 |
@@ -807,17 +844,20 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    1.19.4–1.21.11 由 `PhaseRenderLayerMixin` 直接注入 `ItemBlockRenderTypes`；
    26.3 没有该类，按贴图透明度自动推导。
    注意 1.21.11 的原版 blockstate/模型 JSON **不支持** `render_type`。
-3. **元件相（中继器/比较器/侦测器）已实现**（0.2.0，方案 C）：**潜行右键**宿主上表面放置，
-   普通右键保持原版。放置前提是足迹内存在顶面空腔（`top < 1`）：下半砖/下半楼梯可以，
-   整格方块/上半砖拒绝。信号语义、几何与宿主形状采样见 `docs/plan-c-elements.md`；
-   状态预算与旧方案（`docs/state-budget-analysis.md`、`docs/milestone-2.5-repeater-proposal.md`）
-   只作历史记录。
+3. **元件相（中继器/比较器/侦测器）已实现**（0.2.0 起，0.2.4 按规划重做渲染与 I/O）：
+   **普通右键**宿主上表面装配（潜行右键保留原版放在上面一格）。放置前提是足迹内存在
+   顶面空腔（`top < 1`）：下半砖/下半楼梯可以，整格方块/上半砖拒绝。
+   中继器/比较器只渲染杆与红条（1/16 像素列逐列贴在宿主顶面）；侦测器只渲染 16×16
+   五官/输出口（6 朝向预烘焙、固定在方块内、在宿主相应表面外侧 0.01）。
+   输入/输出/观察面/侧向 alternate/锁存/红石线连接都按宿主相应面露出判定。
+   信号语义、几何与宿主形状采样见 `docs/plan-c-elements.md`；状态预算与旧方案
+   （`docs/state-budget-analysis.md`、`docs/milestone-2.5-repeater-proposal.md`）只作历史记录。
    > ⚠️ **不要重新引入"每个元件参数一个属性"或"元件参数并进 `filling` 取值域"的方案。**
    > 状态数是**相乘**的：`24 × 33 × 17 × 13` = 36.7 亿，越过 `int` 状态 id 空间；
    > 并进取值域则 1.21.11 至少 81.3 万状态（V=84）。现行实现把参数放进旁路表，
    > `filling` 固定 8 值，总状态 176,563。
    > 新增元件种类时只加 `PhaseExtra.Kind` 与子模型，**不要动 `filling` 取值域**。
-4. 行为层已做服务端自检（0.2.0 约 349 项断言/版本，1.21.11 实测 349（1.21.10/26.3 为 350），其余可能 ±1）+ 启动冒烟 + 6 版本编译；
+4. 行为层已做服务端自检（0.2.4：1.21.11 实测 486 passed, 0 failed，其他版本以日志为准）+ 启动冒烟 + 6 版本编译；
    **渲染层与剔除面已在真实客户端（1.21.11 `runClient`）取证修复**：
    带相状态图层为 CUTOUT（半透明宿主保持 TRANSLUCENT）、内缩覆盖层/外扩外壳的
    quad 进入不可剔除列表、几何坐标在宿主外侧；
@@ -877,7 +917,7 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
      `python tools/audit_host_coverage.py <guardian> .` 复核；"覆写遮蔽"清单里
      已被新 mixin 接管的条目会标为"覆写已接管"。
 
-9. **0.2.0 已知限制（README 与 §7 必须保持一致）**：
+9. **0.2.4 已知限制（README 与 §7 必须保持一致）**：
    - **旧存档不兼容**：`filling` 取值域变更，旧状态无法映射。
    - **元件只能放在有顶面空腔的宿主**：下半砖/下半楼梯等（足迹内存在 `top < 1` 的列）可以，
      整格方块/上半砖拒绝。
@@ -892,3 +932,10 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
      隐形宿主（barrier/light/告示牌）的 blockstate 模型本身没有 `elements`，不会凭空多出几何。
    - 红石相没有弱充能方块能力；**普通**破坏宿主时元件随宿主消失、不额外掉落
      （活塞路径按 0.2.3 口径弹出）。
+   - **中继器/比较器只渲染杆与红条**：原版 2px 平滑石底板、锁存条不画；杆/红条按
+     1/16 像素列贴宿主顶面，楼梯高半格那侧的杆会升到方块顶面之上（"每像素搭最高处"
+     的直接结果）。
+   - **侦测器只渲染 16×16 五官/输出口**：六朝向预烘焙、固定在方块内、画在宿主相应
+     表面外侧 0.01；不渲染侧/顶/底面，楼梯上与宿主露出的侧脸可能重叠。
+   - **元件 I/O 的露出是整面判定**：`Block.isFaceFull == false` 即算露出（与红石相同），
+     部分被覆盖的面仍可输入/输出。

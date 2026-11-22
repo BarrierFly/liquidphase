@@ -22,6 +22,7 @@ import net.minecraft.client.renderer.chunk.SectionRenderDispatcher;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.MinecraftServer;
@@ -31,6 +32,7 @@ import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import org.liquidphase.LiquidPhase;
 import org.liquidphase.phase.PhaseExtra;
 import org.liquidphase.phase.PhaseExtras;
@@ -123,9 +125,33 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
                 failures.add(rebuildFailure);
             }
 
+            // 侦测器脉冲用的东侧石头会挡住观察面五官；照片阶段移走（移除本身也会触发一次 updateShape）。
+            sp.getServer().runOnServer(server -> {
+                ServerLevel level = server.getLevel(Level.OVERWORLD);
+                if (level != null) {
+                    level.setBlockAndUpdate(
+                        bright.offset(36, 0, 21).relative(net.minecraft.core.Direction.EAST),
+                        Blocks.AIR.defaultBlockState());
+                }
+            });
+            sp.getClientWorld().waitForChunksRender();
+
             shot(context, sp, bright, -3.5, 1.0, 1.2, 0.5, 1.0, 4.5, "fence_redstone_oblique");
             shot(context, sp, bright, 0.5, 3.2, 4.5, 0.5, 0.0, 4.5, "fence_redstone_topdown");
             shot(context, sp, dark, -3.5, 1.0, 1.2, 0.5, 1.0, 4.5, "fence_redstone_power0");
+            // 元件场景（x+36, z+20..22）：斜视近景 + 俯视，便于人工复核杆/红条/五官/输出口。
+            shot(context, sp, bright.offset(36, 0, 20), 2.0, 1.4, 3.0, 0.5, 0.55, 1.0,
+                "element_oblique");
+            shot(context, sp, bright.offset(36, 0, 20), 0.5, 2.6, 2.6, 0.5, 0.2, 1.0,
+                "element_topdown");
+            // 侦测器是 facing=east：从东侧看观察面（五官），从西侧看输出口。
+            shot(context, sp, bright.offset(36, 0, 20), 3.0, 1.1, 1.5, 0.5, 0.6, 1.5,
+                "observer_face_east");
+            shot(context, sp, bright.offset(36, 0, 20), -2.0, 1.1, 1.5, 0.5, 0.6, 1.5,
+                "observer_port_west");
+            // 下半楼梯上的中继器：杆/红条横跨台阶，用于人工复核逐像素落差。
+            shot(context, sp, bright.offset(36, 0, 23), 2.2, 1.4, 3.0, 0.5, 0.8, 0.5,
+                "element_stair");
 
             if (!failures.isEmpty()) {
                 throw new AssertionError("fence redstone phase rendering broken:\n  "
@@ -288,10 +314,25 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
         };
         for (int i = 0; i < kinds.length; i++) {
             BlockPos pos = origin.offset(36, 0, 20 + i);
+            // 薄地板：只为截图有参照，不影响元件信号。
+            for (int dx = -2; dx <= 2; dx++) {
+                for (int dz = -2; dz <= 2; dz++) {
+                    level.setBlockAndUpdate(pos.offset(dx, -1, dz), Blocks.SMOOTH_STONE.defaultBlockState());
+                }
+            }
             BlockState slab = Blocks.SMOOTH_STONE_SLAB.defaultBlockState();
             level.setBlockAndUpdate(pos, slab);
             org.liquidphase.element.ElementBlocks.place(level, pos, slab, kinds[i], facings[i]);
         }
+        // 第 4 个：下半楼梯（台阶升向北侧）。中继器朝 EAST，两根杆与红条横跨台阶边界，
+        // 用来验证"每个 1/16 像素列各自搭在宿主顶面"（北侧杆/红条应抬到 y=1.0）。
+        BlockPos stairPos = origin.offset(36, 0, 23);
+        BlockState stair = Blocks.OAK_STAIRS.defaultBlockState()
+            .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.NORTH);
+        level.setBlockAndUpdate(stairPos.below(), Blocks.SMOOTH_STONE.defaultBlockState());
+        level.setBlockAndUpdate(stairPos, stair);
+        org.liquidphase.element.ElementBlocks.place(
+            level, stairPos, stair, org.liquidphase.phase.PhaseExtra.Kind.REPEATER, Direction.EAST);
         // 中继器输入：facing 侧放红石块，2 tick 后 powered。
         BlockPos repeaterPos = origin.offset(36, 0, 20);
         level.setBlockAndUpdate(repeaterPos.relative(net.minecraft.core.Direction.NORTH),
@@ -310,7 +351,7 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
         if (level == null) {
             return out;
         }
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 4; i++) {
             BlockPos pos = origin.offset(36, 0, 20 + i);
             int extra = PhaseExtras.get(level, pos);
             out.add("element z=%d block=%s extra=%s".formatted(
@@ -336,7 +377,7 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
         SpriteFinder spriteFinder = atlas instanceof FabricSpriteAtlasTexture fabricAtlas
             ? fabricAtlas.spriteFinder() : null;
         MutableMesh mesh = Renderer.get().mutableMesh();
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 4; i++) {
             BlockPos pos = origin.offset(36, 0, 20 + i);
             BlockState state = mc.level.getBlockState(pos);
             BlockStateModel model = shaper.getBlockModel(state);
@@ -344,37 +385,107 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
             int[] elementQuads = {0};
             double[] minY = {Double.MAX_VALUE};
             double[] maxY = {-Double.MAX_VALUE};
+            boolean[] hasRod = {false};
+            boolean[] hasBar = {false};
+            boolean[] hasObserverFront = {false};
+            boolean[] hasObserverPort = {false};
+            java.util.Set<Integer> levels = new java.util.HashSet<>();
+            List<String> hostSprites = new ArrayList<>();
+            List<String> elementSprites = new ArrayList<>();
+            double[] hostMinY = {Double.MAX_VALUE};
+            double[] hostMaxY = {-Double.MAX_VALUE};
+            List<String> forbidden = new ArrayList<>();
             mesh.clear();
             ((FabricBlockStateModel) model).emitQuads(mesh.emitter(), mc.level, pos, state,
                 RandomSource.create(), direction -> false);
-            String[] expected = {"repeater", "observer_", "comparator"};
+            String[] expected = {"repeater", "observer_", "comparator", "repeater"};
             final int index = i;
             mesh.forEachMutable(quad -> {
                 TextureAtlasSprite sprite = spriteFinder.find(quad);
                 String name = sprite == null ? "" : sprite.contents().name().toString();
                 boolean elementSprite = name.contains(expected[index])
-                    || ((index == 0 || index == 2) && name.contains("redstone_torch"));
+                    || ((index != 1) && name.contains("redstone_torch"));
                 if (!elementSprite) {
                     hostQuads[0]++;
+                    if (!hostSprites.contains(name)) {
+                        hostSprites.add(name);
+                    }
+                    for (int v = 0; v < 4; v++) {
+                        hostMinY[0] = Math.min(hostMinY[0], quad.y(v));
+                        hostMaxY[0] = Math.max(hostMaxY[0], quad.y(v));
+                    }
                     return;
                 }
                 elementQuads[0]++;
+                if (!elementSprites.contains(name)) {
+                    elementSprites.add(name);
+                }
+                hasRod[0] |= name.contains("redstone_torch");
+                hasBar[0] |= name.contains("_bar");
+                hasObserverFront[0] |= name.contains("observer_front");
+                hasObserverPort[0] |= name.contains("observer_port");
+                // 只允许杆/红条/五官/输出口：底板、锁存条、侦测器侧面顶面都不该出现。
+                if (name.contains("smooth_stone") || name.contains("bedrock")
+                    || name.contains("observer_side") || name.contains("observer_top")) {
+                    forbidden.add(name);
+                }
+                double quadMinY = Double.MAX_VALUE;
                 for (int v = 0; v < 4; v++) {
                     minY[0] = Math.min(minY[0], quad.y(v));
                     maxY[0] = Math.max(maxY[0], quad.y(v));
+                    quadMinY = Math.min(quadMinY, quad.y(v));
                 }
+                levels.add((int) Math.round(quadMinY * 16.0));
             });
             int clientExtra = PhaseExtras.get(mc.level, pos);
-            out.add("element z=%d pos=%s clientExtra=%s hostQuads=%d elementQuads=%d y=[%.4f,%.4f]".formatted(
-                20 + i, pos, PhaseExtra.describe(clientExtra), hostQuads[0], elementQuads[0], minY[0], maxY[0]));
+            out.add(("element z=%d pos=%s clientExtra=%s hostQuads=%d elementQuads=%d y=[%.4f,%.4f]"
+                    + " hostSprites=%s elementSprites=%s hostY=[%.4f,%.4f]")
+                .formatted(20 + i, pos, PhaseExtra.describe(clientExtra), hostQuads[0],
+                    elementQuads[0], minY[0], maxY[0], hostSprites, elementSprites,
+                    hostMinY[0], hostMaxY[0]));
             if (elementQuads[0] == 0) {
                 out.add("element z=%d FAIL no element_* quad emitted".formatted(20 + i));
             }
-            if (minY[0] < 0.5 - SHELL_SLACK) {
-                out.add("element z=%d FAIL element geometry sank into the slab (minY=%.4f)"
-                    .formatted(20 + i, minY[0]));
+            if (!forbidden.isEmpty()) {
+                out.add("element z=%d FAIL renders a forbidden base/side face %s"
+                    .formatted(20 + i, forbidden));
             }
-            if (maxY[0] > 1.0 + SHELL_SLACK) {
+            if (i == 1) {
+                // 侦测器：16×16 面固定在方块内，不做地形抬升。
+                if (!hasObserverFront[0] || !hasObserverPort[0]) {
+                    out.add("element z=%d FAIL observer must render both 五官 and 输出口 (front=%s port=%s)"
+                        .formatted(20 + i, hasObserverFront[0], hasObserverPort[0]));
+                }
+                if (minY[0] < -SHELL_SLACK || minY[0] > 0.05) {
+                    out.add("element z=%d FAIL observer geometry must stay fixed in the block (minY=%.4f)"
+                        .formatted(20 + i, minY[0]));
+                }
+            } else {
+                // 中继器/比较器：杆 + 红条，逐像素坐在宿主顶面上。
+                if (!hasRod[0] || !hasBar[0]) {
+                    out.add("element z=%d FAIL repeater/comparator must render rods and the red bar (rod=%s bar=%s)"
+                        .formatted(20 + i, hasRod[0], hasBar[0]));
+                }
+                if (minY[0] < 0.5 - SHELL_SLACK) {
+                    out.add("element z=%d FAIL element geometry sank into the host (minY=%.4f)"
+                        .formatted(20 + i, minY[0]));
+                }
+            }
+            if (i == 3) {
+                // 下半楼梯：北侧（高半格）的杆/红条必须被抬到 y=1.0，南侧留在 y=0.5。
+                if (maxY[0] <= 1.0) {
+                    out.add("element z=%d FAIL stair upper-step pixels were not lifted (maxY=%.4f)"
+                        .formatted(20 + i, maxY[0]));
+                }
+                if (levels.size() < 2) {
+                    out.add("element z=%d FAIL stair element has a single height level %s"
+                        .formatted(20 + i, levels));
+                }
+                if (maxY[0] > 1.0 + 7.0 / 16.0 + SHELL_SLACK) {
+                    out.add("element z=%d FAIL stair element overshoots its rod height (maxY=%.4f)"
+                        .formatted(20 + i, maxY[0]));
+                }
+            } else if (maxY[0] > 1.0 + SHELL_SLACK) {
                 out.add("element z=%d FAIL element geometry escapes the block (maxY=%.4f)"
                     .formatted(20 + i, maxY[0]));
             }

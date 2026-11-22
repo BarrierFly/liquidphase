@@ -14,6 +14,7 @@
 | 0.2.1 | 同上 | 修复：红石相/元件相"有时显示有时不显示"——旁路表变化后客户端 section 未重画（`markDirty` 走了 `setBlockDirty` 的 `requiresRender` 门，同状态对象恒 false，静默 no-op） |
 | 0.2.2 | 同上 | 修复：**潜行右键宿主放中继器/比较器/侦测器从未生效**——装配取宿主用了 `getClickedPos()`，而原版对不可替换方块把它指向宿主旁的空气格（真实点击回归 `AssemblyInteractionTest` 抓到） |
 | 0.2.3 | 同上 | **元件装配改为普通右键**（潜行右键回归原版"放在宿主上面一格"）；**真实元件方块是相材料格**（宿主放进/写进/落进元件方块格 → 吸收成元件相并继承朝向/延迟/模式/锁定/供电）；**清含水**：往含水宿主写红石/元件条目时水被清掉（一格只表达一个被含相）；**装配门控合一**：元件与红石相共用同一条可写入判定（熔岩相宿主可以贴元件），写条目清熔岩相；**吸收统一**：宿主放进任何相材料格（线/冰/霜冰/黑曜石/熔岩源）都走"可替换 + placeBlock 捕获"一条路径（删 `PlacementMixin` 与落点拦截）；**活塞**：黑曜石填充相一律推不动，相一律不随活塞移动——推动覆盖/破坏列表摧毁时弹出物品（固相掉对应物品、冰/霜冰无物品即消失、熔岩相按液体物品开关掉熔岩物品或消失、红石相掉红石粉、元件掉物品），粘性拉动/剩余清格时任意填充相实体化留在原位 |
+| 0.2.4 | 同上 | **元件按规划重做渲染与 I/O**：中继器/比较器只渲染杆和红条（逐 1/16 像素列搭在宿主顶面，无 2px 底板/锁存条）；侦测器只渲染 16×16 五官/输出口（六朝向预烘焙、固定在方块内、画在宿主相应表面外侧一层）；输入/输出/比较器侧向输入/中继器锁存/侦测器观察面都按宿主相应面是否露出判定；红石线可连到元件宿主；中继器短脉冲按原版 tick 语义；侦测器允许上下朝向 |
 
 ---
 
@@ -53,6 +54,13 @@
   参数存在旁路表里（见下文"方案 C"）。写条目时宿主上的水/熔岩相被清掉（清含水，一格只表达
   一个被含相）；元件与红石粉共用同一条可写入判定（含熔岩相的宿主也可以贴元件；
   冰/霜冰/黑曜石相不可覆盖）。
+  **渲染按规划收窄**：中继器/比较器只显示杆（红石火把，含点亮光晕）和红条，按
+  1/16 像素列逐列搭在宿主顶面（台阶上会有逐像素落差，不再画 2px 平滑石底板/锁存条）；
+  侦测器只显示 16×16 的"五官"和"输出口"两块裁切平面（六朝向预烘焙、固定在方块内、
+  画在宿主相应表面外侧一层），不显示侧面/顶面/底面。
+  **输入/输出按宿主相应面露出判定**：中继器/比较器的输入/输出、比较器的侧向输入、
+  中继器的锁存、侦测器的观察面/输出面都受宿主对应面控制；红石线也能连接到元件宿主
+  （中继器/比较器的输入与输出面、侦测器的输出面）。
 
 ### 功能二：炼药锅（仅服务端，原版方块可表达的部分）
 
@@ -127,14 +135,16 @@
   旁路表变化不伴随方块状态变化，必须绕过 `setBlockDirty` 的 `requiresRender` 门
   （同状态对象直接返回 false），直接走 `setSectionDirtyWithNeighbors`。
 - **红石线连接**：`isSignalSource()` 没有坐标，不再对红石相返回 true；红石线改在
-  `getConnectingSide`（26.3 是 `shouldRedstoneWireConnectTo`）按坐标判断"该格有红石条目且该面露出"。
+  `getConnectingSide`（26.3 是 `shouldRedstoneWireConnectTo`）按坐标判断"该格有红石/
+  元件条目、该面露出且元件允许在该面连接"（中继器/比较器输入+输出面，侦测器输出面）。
 - **渲染**：每个宿主 blockstate 只追加一条**无条件** part `liquidphase:block/dynamic`。
   ≤1.21.1 由 `PhaseDynamicModelLegacy` 接管该模型 id，1.21.10+ 由
   `PhaseDynamicModelModern` 包装宿主 `BlockStateModel`；两者都按坐标查旁路表发射几何。
-  红石外壳 16 份子模型保留；元件的 22 份子模型 + `dynamic.json` 由
-  `tools/gen_element_models.py` 从客户端 jar 的原版模型复制（共 23 个文件）。
-- **元件**：几何按逐顶点采样宿主碰撞形状顶面高度抬升，并按 facing 旋转，
-  所以五官/输出口/杆画在宿主表面上层。
+  红石外壳 16 份子模型保留；元件子模型由 `tools/gen_element_models.py` 从客户端 jar 生成
+  （16 中继器 + 4 比较器 + 12 侦测器 + `dynamic.json`，另有 7 份裁切贴图）。
+- **元件**：中继器/比较器子模型只含杆与红条（1/16 像素列切分，运行时按列取宿主顶面高度
+  整面平移）；侦测器六朝向预烘焙、只含五官/输出口两块 16×16 裁切平面，固定在方块内、
+  画在宿主相应表面外侧 0.01，不做抬升。
 
 完整口径、位布局、信号语义与取舍见 [`docs/plan-c-elements.md`](docs/plan-c-elements.md)。
 
@@ -197,7 +207,7 @@
   （`Unsupported class file major version 69`），这不是本 mod 的问题。用 JDK 25 时请把 loader
   升到较新版本，或改用 JDK 17/21 启动。
 
-### 已知限制（0.2.0）
+### 已知限制（0.2.4）
 
 1. **旧存档不兼容**：`filling` 的取值域已变更（8 个材料类别），旧状态无法映射。
 2. **元件只能放在有顶面空腔的宿主**：下半砖/下半楼梯等可以（足迹内存在 `top < 1` 的列），
@@ -214,6 +224,14 @@
 8. **`getRenderShape` 对全部相宿主状态强制 `MODEL`**：红石/元件存在性在状态里看不出来。
    隐形宿主（barrier/light/告示牌）的 blockstate 模型本身没有 `elements`，不会凭空多出几何。
 9. 红石相没有弱充能方块能力；破坏宿主时元件随宿主一起消失，不额外掉落。
+10. **中继器/比较器只渲染杆与红条**：原版的 2px 平滑石底板、锁存条都不画。杆/红条按
+    1/16 像素列各自贴在宿主顶面；在楼梯上，高半格那一侧的杆会随顶面升到方块顶面之上
+    （这就是"每像素搭在相应最高处"的直接结果）。
+11. **侦测器只渲染 16×16 的五官与输出口**：六朝向预烘焙，位置固定在方块内、画在宿主
+    相应表面外侧 0.01；不渲染侧面/顶面/底面。楼梯等形状变化较大的宿主上，两张平面可能
+    与宿主露出的侧脸重叠（被遮住的部分本来就不可见）。
+12. **元件 I/O 的"露出"是整面判定**：`Block.isFaceFull` 为 false 即视为露出（与红石相
+    同一口径）；部分被宿主覆盖的面仍可作为输入/输出面。
 
 ## English
 
@@ -229,6 +247,7 @@ One block = solid phase (the block itself) + at most one contained phase.
 | 0.2.1 | same | Fix: redstone/element phase sometimes invisible — a table-only change never re-rendered its section (`markDirty` went through `setBlockDirty`'s `requiresRender` gate, which returns false for an identical state object) |
 | 0.2.2 | same | Fix: **sneak-placing repeaters/comparators/observers into hosts never fired** — assembly looked the host up via `getClickedPos()`, which vanilla points at the air cell next to a non-replaceable host (caught by the new real-click regression `AssemblyInteractionTest`) |
 | 0.2.3 | same | **Element assembly is now a plain right-click** (sneak-click restores vanilla "place on top of the host"); **real element blocks are phase-material cells** (host placed into / setBlock'd into / falling into a repeater-comparator-observer cell absorbs it with facing/delay/mode/locked/powered); **water clearing**: writing a redstone/element entry onto a waterlogged host removes the water (one contained phase per cell); **unified assembly gate**: elements share the same acceptability check as dust (lava-filled hosts accept elements), writing an entry clears a lava phase; **unified absorption**: placing a host into any phase-material cell (wire/ice/frosted ice/obsidian/lava source) goes through one replaceable-cell + placeBlock-capture path (`PlacementMixin` and the place-time intercept removed); **pistons**: obsidian-filled hosts are always unpushable, phases never travel with pistons — pushed-over/destroyed cells pop the phase as an item (obsidian drops obsidian, ice/frosted ice vanish, lava drops its liquid item with feature 3 on or vanishes, redstone pops dust, elements drop their item), sticky-pull/clearing materializes any filling in place |
+| 0.2.4 | same | **Elements re-done per the spec (rendering + I/O)**: repeaters/comparators draw only rods and the red bar (per 1/16-pixel column on the host top; no 2px base or lock bar); observers draw only the 16×16 face/port cutouts (six facings pre-baked, fixed in the block, drawn on the outer layer of the host surface); input/output, comparator side inputs, repeater locking and the observer detection face are gated by host-face exposure; redstone wire connects to element hosts; repeater short pulses follow vanilla tick semantics; observers allow up/down facings |
 
 ### Feature 1 — more logged blocks (required on both sides)
 
@@ -258,6 +277,13 @@ One block = solid phase (the block itself) + at most one contained phase.
   value; their parameters live in the side table (see "Plan C"). Writing an entry clears the host's water/lava phase
   (water clearing, one contained phase per cell); elements share the same acceptability check as dust (lava-filled
   hosts accept elements; ice/frosted ice/obsidian phases cannot be overwritten).
+  **Rendering narrowed to the spec**: repeaters/comparators draw only the rods (redstone torches, including the lit
+  glow) and the red bar, seated per 1/16-pixel column on the host top (stepped on stairs; no 2px smooth-stone base or
+  lock bar). Observers draw only the 16×16 "face" and "output port" cutout planes (six facings pre-baked, fixed in the
+  block, drawn 0.01 outside the host's corresponding surface), with no side/top/bottom faces.
+  **I/O follows the host faces**: repeater/comparator input and output, comparator side inputs, repeater locking, and
+  the observer's detection/output faces are all gated by whether the host face is exposed; redstone wire also connects
+  to element hosts (both faces of a repeater/comparator, the output face of an observer).
 
 ### Feature 2 — cauldron behaviour (server-side only, vanilla-representable part)
 
@@ -306,14 +332,17 @@ side-table entry per position (`PhaseExtra`); no new blocks, no new properties, 
   that dimension, so writes made before tracking starts are not lost.
 - **Wire connection**: `isSignalSource()` has no position, so it no longer returns true for the redstone phase;
   wire connection is decided per position in `getConnectingSide` (26.3: `shouldRedstoneWireConnectTo`):
-  "this cell has a redstone entry and that face is exposed".
+  "this cell has a redstone/element entry, that face is exposed, and the element allows a connection there"
+  (both faces of a repeater/comparator, the output face of an observer).
 - **Rendering**: every host blockstate gets one **unconditional** part, `liquidphase:block/dynamic`.
   On ≤1.21.1 `PhaseDynamicModelLegacy` takes over that model id; on 1.21.10+ `PhaseDynamicModelModern` wraps the
   host `BlockStateModel`; both emit geometry by looking up the side table at the position. The 16 redstone-shell
-  sub-models are kept; the 22 element sub-models + `dynamic.json` are generated from the client jar by
-  `tools/gen_element_models.py` (23 files).
-- **Elements**: geometry is lifted per vertex to the top of the host collision shape and rotated by facing, so the
-  repeater torch / comparator output / observer face are drawn above the host surface.
+  sub-models are kept; element sub-models are generated from the client jar by `tools/gen_element_models.py`
+  (16 repeaters + 4 comparators + 12 observers + `dynamic.json`, plus 7 cutout textures).
+- **Elements**: repeater/comparator sub-models contain only rods and the red bar (split per 1/16-pixel column, each
+  column rigidly translated to its host-top height). Observer sub-models are pre-baked for six facings and contain
+  only the 16×16 face/port cutout planes, fixed in the block and drawn 0.01 outside the host's corresponding surface
+  (no lift).
 
 Full details: [`docs/plan-c-elements.md`](docs/plan-c-elements.md).
 
@@ -378,7 +407,7 @@ Dependency floors follow each version's real minimum (`fabricloader` 0.15.0 / 0.
 `statement` remain required. Note: loader 0.15.x/0.16.x bundle an old Mixin that cannot read JDK 25 class
 files (`Unsupported class file major version 69`) — use a newer loader or JDK 17/21 in that case.
 
-### Known limitations (0.2.0)
+### Known limitations (0.2.4)
 
 1. **Old worlds are incompatible**: the `filling` value domain changed (8 material classes); old states cannot be mapped.
 2. **Elements only fit hosts with top-face cavity**: bottom slabs / bottom stairs work (some column has `top < 1`);
@@ -397,6 +426,14 @@ files (`Unsupported class file major version 69`) — use a newer loader or JDK 
    in the state. Invisible hosts (barrier/light/signs) have no `elements` in their blockstate model, so no host geometry
    appears out of nowhere.
 9. The redstone phase has no weak-charging capability; breaking the host removes its element without an extra drop.
+10. **Repeaters/comparators draw only rods and the red bar**: the vanilla 2px smooth-stone base and the lock bar are
+    not drawn. Rods/bar are seated per 1/16-pixel column; on stairs the high-step side follows the surface and can
+    rise above the block top (a direct consequence of "every pixel rests on its own highest point").
+11. **Observers draw only the 16×16 face and output-port cutouts**: six facings are pre-baked, fixed in the block and
+    drawn 0.01 outside the host's corresponding surface; no side/top/bottom faces. On strongly shaped hosts (stairs)
+    the planes may overlap the host's exposed side (the covered part is invisible by definition).
+12. **Element I/O exposure is face-level**: `Block.isFaceFull == false` counts as exposed (the same rule as the
+    redstone phase); a partially covered face can still act as an input/output face.
 
 ### Licence
 
