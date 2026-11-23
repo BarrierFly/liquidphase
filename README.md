@@ -16,6 +16,7 @@
 | 0.2.3 | 同上 | **元件装配改为普通右键**（潜行右键回归原版"放在宿主上面一格"）；**真实元件方块是相材料格**（宿主放进/写进/落进元件方块格 → 吸收成元件相并继承朝向/延迟/模式/锁定/供电）；**清含水**：往含水宿主写红石/元件条目时水被清掉（一格只表达一个被含相）；**装配门控合一**：元件与红石相共用同一条可写入判定（熔岩相宿主可以贴元件），写条目清熔岩相；**吸收统一**：宿主放进任何相材料格（线/冰/霜冰/黑曜石/熔岩源）都走"可替换 + placeBlock 捕获"一条路径（删 `PlacementMixin` 与落点拦截）；**活塞**：黑曜石填充相一律推不动，相一律不随活塞移动——推动覆盖/破坏列表摧毁时弹出物品（固相掉对应物品、冰/霜冰无物品即消失、熔岩相按液体物品开关掉熔岩物品或消失、红石相掉红石粉、元件掉物品），粘性拉动/剩余清格时任意填充相实体化留在原位 |
 | 0.2.4 | 同上 | **元件按规划重做渲染与 I/O**：中继器/比较器只渲染杆和红条（逐 1/16 像素列搭在宿主顶面，无 2px 底板/锁存条）；侦测器只渲染 16×16 五官/输出口（六朝向预烘焙、固定在方块内、画在宿主相应表面外侧一层）；输入/输出/比较器侧向输入/中继器锁存/侦测器观察面都按宿主相应面是否露出判定；红石线可连到元件宿主；中继器短脉冲按原版 tick 语义；侦测器允许上下朝向 |
 | 0.2.5 | 同上 | **坐标换算修正**：元件逐列抬升取宿主顶面高度时，`VoxelShape.max(axis, a, b)` 的坐标参数实际是 (z, x)，此前按 (x, z) 传，导致 x/z 不对称宿主（栅栏柱、台阶、楼梯、墙）上的杆/红条错位；**两相透明度分开**：材料相覆盖层改由动态模型发射，每个 quad 各自选图层（冰/霜冰→TRANSLUCENT、黑曜石→CUTOUT），不再一刀切整块状态，半透明冰不再被画成死白、玻璃宿主上的黑曜石不再被拖进排序层；**右键调档**：宿主没有使用键交互时，右键可调所含中继器延迟（1→2→3→4→1）/比较器模式（比较↔减法）；**充水冲落**：水把可冲落的填充相（红石相/元件，判定为实时类型判断）冲落成对应物品后正常充水 |
+| 0.2.6 | 同上 | **相材料格判定收敛为一份**（`PhaseAbsorption.cellOf` / `canAbsorbCell` / `absorbCell`）：以前"红石线 / 材料相 / 真实元件方块"三分支在交互层、改写层、下落方块、接受层各写一遍，加一种填充要改四处，元件（0.2.3 后加）只被逐点打补丁——这是"冰/黑曜石好了、中继器·比较器·侦测器组装仍不全"的根因；现在四条路径全部委托同一份判定，新增种类只需改一处。**元件装配补齐两处不对称**：①不再要求有玩家（发射器/命令/其它 mod 放下元件物品时也能装配，潜行无从判断时按普通右键处理）；②也认落点格（点旁边的方块让元件"落进"宿主格，与材料吸收同构）。回归：自检新增 `checkAssemblyPathConsistency` |
 
 ---
 
@@ -124,6 +125,8 @@
    变成含红石相的方块（功率沿原线）。
 7. **普通右键**宿主（下半砖、下半楼梯等顶面留有空腔的宿主），手持中继器/比较器/侦测器
    → 元件贴到宿主表面。**潜行右键**仍是原版"把元件放在宿主上面一格"（需要真实元件方块时用它）。
+   点**旁边**的方块、让元件"落进"宿主格也能装配（与冰/黑曜石/红石粉的手势一致）；
+   发射器/命令/其它 mod 放下元件物品同样会装配（不要求有玩家）。
    左键元件先拆元件并掉落对应物品，宿主保留；元件只能放在顶面有空腔的宿主上
    （整格方块、上半砖放不下）。
    装好之后再**普通右键**（宿主本身没有使用键交互时）可以调档：
@@ -187,6 +190,8 @@
   `canAcceptExtra`：现有条目必须为空，且 `filling` 为 `none` 或熔岩（水/熔岩会被清回
   `none`）。水的流体路径不变：水桶/水流仍只进无相宿主，水不能直接替换熔岩相
   （含熔岩相宿主遇水邻居走凝固成黑曜石相）。
+  **"这一格装着哪种填充"只由 `PhaseAbsorption.cellOf` 判定一处**（0.2.6）：
+  交互层、`Level.setBlock` 改写层、下落方块、放置接受层都委托它，新增填充种类只需改一处。
 - **红石相初始功率按"是不是重新放置"区分，落地后一律立即重算**：
   **新放置**（红石粉点宿主、改写层把线状态写进宿主格）的初始状态是"单独放置红石粉"的
   初始状态——功率 0；**吸收**（宿主放进/落进红石线格）那格的红石线本来就在、不是重新
@@ -221,7 +226,7 @@
   （`Unsupported class file major version 69`），这不是本 mod 的问题。用 JDK 25 时请把 loader
   升到较新版本，或改用 JDK 17/21 启动。
 
-### 已知限制（0.2.5）
+### 已知限制（0.2.6）
 
 1. **旧存档不兼容**：`filling` 的取值域已变更（8 个材料类别），旧状态无法映射。
 2. **元件只能放在有顶面空腔的宿主**：下半砖/下半楼梯等可以（足迹内存在 `top < 1` 的列），
@@ -268,6 +273,7 @@ One block = solid phase (the block itself) + at most one contained phase.
 | 0.2.3 | same | **Element assembly is now a plain right-click** (sneak-click restores vanilla "place on top of the host"); **real element blocks are phase-material cells** (host placed into / setBlock'd into / falling into a repeater-comparator-observer cell absorbs it with facing/delay/mode/locked/powered); **water clearing**: writing a redstone/element entry onto a waterlogged host removes the water (one contained phase per cell); **unified assembly gate**: elements share the same acceptability check as dust (lava-filled hosts accept elements), writing an entry clears a lava phase; **unified absorption**: placing a host into any phase-material cell (wire/ice/frosted ice/obsidian/lava source) goes through one replaceable-cell + placeBlock-capture path (`PlacementMixin` and the place-time intercept removed); **pistons**: obsidian-filled hosts are always unpushable, phases never travel with pistons — pushed-over/destroyed cells pop the phase as an item (obsidian drops obsidian, ice/frosted ice vanish, lava drops its liquid item with feature 3 on or vanishes, redstone pops dust, elements drop their item), sticky-pull/clearing materializes any filling in place |
 | 0.2.4 | same | **Elements re-done per the spec (rendering + I/O)**: repeaters/comparators draw only rods and the red bar (per 1/16-pixel column on the host top; no 2px base or lock bar); observers draw only the 16×16 face/port cutouts (six facings pre-baked, fixed in the block, drawn on the outer layer of the host surface); input/output, comparator side inputs, repeater locking and the observer detection face are gated by host-face exposure; redstone wire connects to element hosts; repeater short pulses follow vanilla tick semantics; observers allow up/down facings |
 | 0.2.5 | same | **Coordinate fix**: lifting rods/bars onto the host surface sampled `VoxelShape.max(axis, a, b)` with `(x, z)`, but its two coordinates are actually `(z, x)`, so on x/z-asymmetric hosts (fence posts, slabs, stairs, walls) the element geometry was misplaced; **per-phase transparency**: the material-phase overlay is now emitted by the dynamic model, each quad picking its own layer (ice/frosted ice → TRANSLUCENT, obsidian → CUTOUT) instead of one layer for the whole state, so translucent ice is no longer drawn opaque-white and obsidian on a translucent host is no longer dragged into the sorted layer; **right-click tuning**: hosts without their own use-key interaction cycle the contained repeater's delay (1→2→3→4→1) or the comparator's mode (compare↔subtract) on right-click; **water flushing**: water flushes a washable filling (redstone/element, judged live by entry kind) into its item and then waterlogs normally |
+| 0.2.6 | same | **One single source of truth for phase-material cells** (`PhaseAbsorption.cellOf` / `canAbsorbCell` / `absorbCell`): the old "wire / material / real element block" three-way branch was duplicated in the interaction layer, the rewrite layer, the falling-block path and the acceptance layer, so adding a filling kind meant editing four places — and elements (added in 0.2.3) had only been patched per call site. That is the root cause of "ice/obsidian work but repeater/comparator/observer assembly is still incomplete". All four paths now delegate to the same predicate, so a new kind only needs one edit. **Two element-assembly gaps closed**: (a) it no longer requires a player (dispensers, commands and other mods placing element items now assemble too; with no player to detect sneaking it behaves like a plain right-click), and (b) it also honours the *landing* cell (clicking a neighbouring block so the element lands in the host cell, matching material absorption). Regression: new selftest `checkAssemblyPathConsistency` |
 
 ### Feature 1 — more logged blocks (required on both sides)
 
@@ -291,7 +297,9 @@ One block = solid phase (the block itself) + at most one contained phase.
   (obsidian needs a diamond pickaxe; ice melts to water without silk touch; frosted ice has no item).
 - **Redstone / elements**: the redstone phase draws a power-tinted redstone shell on the host surface; **plain right-click**
   the host with a repeater / comparator / observer to attach the element to the host (sneak right-click keeps the vanilla
-  placement above the host). Real element blocks are phase-material cells too: placing a host into a repeater/comparator/
+  placement above the host). Clicking a **neighbouring** block so the element lands in the host cell works as well (the same
+  gesture ice/obsidian/dust already had), and dispensers / commands / other mods placing an element item also assemble —
+  no player is required. Real element blocks are phase-material cells too: placing a host into a repeater/comparator/
   observer tile, a setBlock into the host cell, or a falling host landing there absorbs the element with its
   facing/delay/mode/locked/powered. Neither occupies a `filling`
   value; their parameters live in the side table (see "Plan C"). Writing an entry clears the host's water/lava phase
@@ -435,7 +443,7 @@ Dependency floors follow each version's real minimum (`fabricloader` 0.15.0 / 0.
 `statement` remain required. Note: loader 0.15.x/0.16.x bundle an old Mixin that cannot read JDK 25 class
 files (`Unsupported class file major version 69`) — use a newer loader or JDK 17/21 in that case.
 
-### Known limitations (0.2.5)
+### Known limitations (0.2.6)
 
 1. **Old worlds are incompatible**: the `filling` value domain changed (8 material classes); old states cannot be mapped.
 2. **Elements only fit hosts with top-face cavity**: bottom slabs / bottom stairs work (some column has `top < 1`);

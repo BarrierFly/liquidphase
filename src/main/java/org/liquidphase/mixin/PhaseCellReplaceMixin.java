@@ -3,7 +3,6 @@ package org.liquidphase.mixin;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
-import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.block.state.BlockState;
 import org.liquidphase.phase.PhaseAbsorption;
@@ -15,10 +14,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * 让"相材料所在格"在「要放进去的是相容宿主方块」时算作可替换（0.2.3 起从线格推广到
- * 全部相材料格：红石线 / 冰 / 霜冰 / 黑曜石 / 真实元件方块（中继器/比较器/侦测器）；
- * 熔岩源与水源本来就是原版可替换格）。落位后的相写入由 {@code BlockItemMixin} 的
- * placeBlock 捕获统一完成。
+ * 让"相材料所在格"在「要放进去的是相容宿主方块」时算作可替换。
  * <p>
  * <b>为什么必须在这一层</b>：{@code BlockState.canBeReplaced(BlockPlaceContext)} 是唯一
  * 的状态级分发点——它 {@code invokevirtual getBlock().canBeReplaced(state, context)}。
@@ -38,9 +34,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  *       {@code FallingBlockIntoWireMixin} 换成宿主自己的物品）。</li>
  * </ul>
  * <p>
- * <b>判定依据</b>：这一格是相材料格（线/冰/霜冰/黑曜石），并且这次放置要放进去的方块是
+ * <b>判定依据</b>：这一格是相材料格（{@link PhaseAbsorption#cellOf}——冰/霜冰/黑曜石、
+ * 红石线、真实元件方块、熔岩源<b>都在同一个判定里</b>），并且这次放置要放进去的方块是
  * {@link PhaseCapable}。其它方块（石头、红石粉、雪层……）不受影响：它们不是相容宿主，
  * 这里直接放行到原版逻辑；红石线自身的 {@code canBeReplaced()}（无参）也保持 {@code false}。
+ * <p>
+ * ⚠️ 0.2.6 起这里<b>不再</b>手写 {@code wire / material / element} 三分支：
+ * 那正是"只对现有填充相打补丁"的来源（新加一种填充要改四个调用点，漏一个就少一条组装路径）。
+ * 现在一律问 {@link PhaseAbsorption#cellOf}，新增种类只需改那份唯一判定。
  */
 @Mixin(BlockBehaviour.BlockStateBase.class)
 public abstract class PhaseCellReplaceMixin {
@@ -53,11 +54,7 @@ public abstract class PhaseCellReplaceMixin {
             return;
         }
         BlockState self = (BlockState) (Object) this;
-        boolean wire = self.is(Blocks.REDSTONE_WIRE);
-        boolean material = !wire && PhaseAbsorption.phaseOfCell(self) != null;
-        // 真实元件方块（中继器/比较器/侦测器）也是相材料格（0.2.3）。
-        boolean element = !wire && !material && org.liquidphase.element.ElementBlocks.isElementBlock(self);
-        if (!wire && !material && !element) {
+        if (PhaseAbsorption.cellOf(self) == null) {
             return;
         }
         // Client-side prediction must wait for the server handshake: on a vanilla server the
@@ -71,7 +68,8 @@ public abstract class PhaseCellReplaceMixin {
             return;
         }
         // 相材料格对相容宿主物品放行；写入哪个相由 placeBlock 捕获按格子内容决定
-        //（线格继承功率；材料格走 fillWithPhase 的接受判定）。
+        //（线格继承功率；材料格走 fillWithPhase 的接受判定）。元素物品不走这里：
+        // 它要让宿主格保持"不可替换"，否则放下时会覆盖宿主（见 BlockItemMixin 的注释）。
         if (PhaseHelper.hasPhaseProperty(item.getBlock().defaultBlockState())) {
             cir.setReturnValue(true);
         }

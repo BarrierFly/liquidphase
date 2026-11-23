@@ -29,19 +29,20 @@
 | 相枚举（方案 C，8 个材料类别） | `phase/Phase.java`（属性名 0.1.15 起为 `filling`，Java 侧沿用 Phase 命名；红石/元件不再是枚举值） |
 | 相行为总控（充入/实体化/凝固/冻结/融化/霜裂/火蔓延/冲水冲落） | `phase/PhaseHelper.java`（属性常量 `FILLING`；`washOut`/`canBeWashedOut` 为 0.2.5 充水冲落） |
 | 吸收门控唯一判定源（可替换填充相规则，0.1.17） | `PhaseHelper.canAcceptPhase` + `Phase.isReplaceableFilling()`；接受层/改写层/交互层一律委托它（防漂移，见 §3.7） |
+| 相材料格唯一判定源（0.2.6，四条组装路径共用） | `phase/PhaseAbsorption.java` 的 `cellOf`（返回 `Cell(kind, filling, element)`）+ `canAbsorbCell`（哪种格子用哪条门控）+ `absorbCell`（唯一写入源）。交互层 `BlockItemMixin`、改写层 `FillingPlacementMixin`、下落方块 `FallingBlockIntoWireMixin`、接受层 `PhaseCellReplaceMixin` 一律委托这三者，**不得再手写 wire/material/element 三分支**（见 §3.3.2） |
 | 充水冲落的种类判定（实时，0.2.5） | `PhaseExtra.isWashable`；水侧入口在 `WaterloggedPhaseCapable.placeLiquid` |
 | 相容宿主标记接口 + 桶/流体默认方法 | `phase/PhaseCapable.java`（只实现熔岩分支）+ `phase/WaterloggedPhaseCapable.java`（含水宿主走原版含水默认实现）；传送门三件套由 `mixin/PortalPhaseCapableMixin.java` 接入基接口 |
 | 瞄准与直接挖相（含整格宿主/形状表宿主的命中判定） | `phase/PhaseTargeting.java` |
 | 状态级核心 mixin（流体态/光照/随机刻/破坏保留/邻居） | `mixin/BlockStateBaseMixin.java` |
 | 自带状态注入器（1.21.1+） | `state/PhaseStateRefresher.java` + `mixin/state/*` + `state/*Duck` |
-| 桶/放置/交互 mixin | `mixin/BucketItem*Mixin.java`、`mixin/BlockItemMixin.java`（0.2.3 起统一捕获：线格功率 + 相材料格/熔岩源相，落位后写相/写表）；`mixin/PhaseCellReplaceMixin.java`（0.2.3，相材料格对相容宿主物品可替换；取代 0.2.2 的 `RedstoneWireReplaceMixin`）+ `mixin/FillingReplaceMixin`（接受层）+ `mixin/FillingPlacementMixin`（`Level.setBlock` 通用改写层）；遮蔽宿主的熔岩分支在 `mixin/SlabLiquidMixin.java` + `mixin/HostPlaceLiquidMixin.java`（0.1.13，audit §4.3）。原 `BucketUseMixin`（0.1.13）、`PlacementMixin`（0.2.3：熔岩源 getStateForPlacement 改写并入统一捕获）已删除 |
+| 桶/放置/交互 mixin | `mixin/BucketItem*Mixin.java`、`mixin/BlockItemMixin.java`（0.2.6 起：相材料格/熔岩源/真实元件方块统一走 `PhaseAbsorption.cellOf`；宿主物品落位后由 `absorbCell` 写相/写表；元件装配不要求有玩家，且认命中格与落点格）；`mixin/PhaseCellReplaceMixin.java`（相材料格对相容宿主物品可替换；取代 0.2.2 的 `RedstoneWireReplaceMixin`）+ `mixin/FillingReplaceMixin`（接受层）+ `mixin/FillingPlacementMixin`（`Level.setBlock` 通用改写层，同样委托 `PhaseAbsorption`）；遮蔽宿主的熔岩分支在 `mixin/SlabLiquidMixin.java` + `mixin/HostPlaceLiquidMixin.java`（0.1.13，audit §4.3）。原 `BucketUseMixin`（0.1.13）、`PlacementMixin`（0.2.3：熔岩源 getStateForPlacement 改写并入统一捕获）已删除 |
 | 冻结接线 | `mixin/ServerLevelMixin.java`（`tickChunk` ≤1.20.1 / `tickPrecipitation` 1.21.1+） |
 | 炼药锅 | `cauldron/CauldronBehaviors.java`、`CauldronBehaviorRegistration.java`、`CauldronHopperTransfer.java`、`ConcreteMappings.java` |
 | 发射器/漏斗 | `interact/LiquidInteractions.java`、`mixin/HopperTransferMixin.java` |
 | 方案 C 表示法（旁路表参数） | `phase/PhaseExtra.java`（kind/power/facing/delay/mode/locked/powered 压进一个 int）+ `phase/PhaseExtras.java`（关卡级读写、写入即通知）+ `docs/plan-c-elements.md`（现行口径） |
 | 旁路表存储与持久化 | `phase/PhaseStorage.java`（每个 `Level` 一张 `chunkPos -> (BlockPos -> int)` 稀疏表，内层不可变）+ `phase/PhaseStorageHolder.java` + `mixin/LevelStorageMixin.java` + `phase/PhasePersistence.java`（`world/data/liquidphase_<dimension>.dat`，30 s 自动保存 + 关服保存） |
 | 旁路表同步 | `sync/PhaseExtraSync.java`（`extra_request` / `extra_chunk` / `extra_update`）+ `sync/PhaseExtraClientSync.java`（区块加载/握手/Level 更换请求 + 标脏） |
-| 红石信号与放置 | `redstone/RedstoneBlocks.java`；`mixin/RedstoneSignalMixin.java`；红石线连接 `mixin/RedStoneWireBlockMixin`（≤1.21.11）/ `BlockStateBaseMixin.shouldRedstoneWireConnectTo`（26.3）；点粉/宿主进线格 `mixin/BlockItemMixin` + `mixin/RedstoneWireReplaceMixin`；下落方块 `mixin/FallingBlockIntoWireMixin` |
+| 红石信号与放置 | `redstone/RedstoneBlocks.java`；`mixin/RedstoneSignalMixin.java`；红石线连接 `mixin/RedStoneWireBlockMixin`（≤1.21.11）/ `BlockStateBaseMixin.shouldRedstoneWireConnectTo`（26.3）；点粉/宿主进线格 `mixin/BlockItemMixin` + `mixin/PhaseCellReplaceMixin`；下落方块 `mixin/FallingBlockIntoWireMixin` |
 | 活塞路径与弹出物品（0.2.3） | `phase/PistonPhaseOps.java`（破坏列表线程内标记 + 移动状态剥相）+ `mixin/PistonBaseBlockMixin.java`（`moveBlocks` 两处重定向）+ `phase/PhaseDrops.java`（"相 → 弹出物品"纯函数）；黑曜石相推不动在 `BlockStateBaseMixin.getPistonPushReaction` |
 | 元件相（中继器/比较器/侦测器） | `element/ElementBlocks.java`（放置/破坏/信号/计划刻/锁存/右键调档/红石线连接规则；`extraOfBlock` 让真实元件方块成为可吸收的相材料格）+ `element/ElementRenderSupport.java`（子模型 id / 朝向 / 逐列抬升 / 材料相覆盖层与图层选择）+ `mixin/ElementShapeUpdateMixin.java`（状态级 `updateShape`）+ `mixin/ElementTuningMixin.java`（右键调档，服务端 `useItemOn` RETURN）+ `mixin/RedStoneWireBlockMixin.java`（线连元件宿主） |
 | 旁路表一致性 | `mixin/LevelChunkExtraMixin.java`（方块被换成另一个方块时清条目）；`BlockStateBaseMixin` 的 onRemove/放置路径（写 `filling != none` 时清条目） |
@@ -464,8 +465,9 @@ python tools/audit_host_coverage.py "<guardian 仓库路径>" .
   `PayloadTypeRegistry` 改名为 `clientboundPlay()`）。
 - 客户端收到就置 `PhaseSyncState.serverSupportsPhases()`；`DISCONNECT`/`JOIN` 都复位。
 - 所有**会改世界状态**的客户端路径都用 `PhaseSyncState.canMutateWorld(level)` 门控
-  （`BlockItemMixin`、`PlacementMixin`、`BucketItemMixin`、`BucketItemUseMixin`、
-  `RedstoneWireReplaceMixin`、`FallingBlockIntoWireMixin`、`ClientLiquidMineMixin`、`EntityPickMixin`）。
+  （`BlockItemMixin`、`BucketItemMixin`、`BucketItemUseMixin`、
+  `PhaseCellReplaceMixin`、`FillingPlacementMixin`、`FallingBlockIntoWireMixin`、
+  `ClientLiquidMineMixin`、`EntityPickMixin`）。
   `SlabLiquidMixin`/`HostPlaceLiquidMixin` 不需要门控：它们接的是
   `FlowingFluid.spreadTo` 这条服务端专属引擎路径，客户端预测不会走到。
   服务端侧永远为真（自己的配置就是权威），所以**单人/多人/原版服务器都不影响方块状态同步**。
@@ -480,12 +482,44 @@ python tools/audit_host_coverage.py "<guardian 仓库路径>" .
   `BlockItemMixin` 在 `place` 之前拦截，`ElementBlocks.hasCavity` 通过后写
   `PhaseExtra.element(...)`；普通右键保持原版"元件放在宿主上面一格"。
 
+#### 相材料格的唯一判定源（0.2.6）
+
+**"这一格装着哪种填充"只有一个答案：`PhaseAbsorption.cellOf(BlockState)`。**
+它返回 `Cell(kind, filling, element)`，`kind` 是 `MATERIAL` / `LAVA` / `REDSTONE` / `ELEMENT`
+四选一；配套的 `canAbsorbCell`（哪种格子用哪条门控）与 `absorbCell`（怎么写进去）也各只此一份。
+
+四条组装路径一律委托这三者，**不得再手写 `wire / material / element` 三分支**：
+
+| 路径 | 注入点 | 作用 |
+| --- | --- | --- |
+| 交互层 | `BlockItemMixin`（`placeBlock` 捕获 + `place` 头部） | 玩家/发射器等 `BlockItem` 来源；宿主物品进材料格、材料/元件物品进宿主格 |
+| 改写层 | `FillingPlacementMixin`（`Level.setBlock`） | 任意来源（命令、别的 mod、世界生成）写方块 |
+| 下落方块 | `FallingBlockIntoWireMixin`（`FallingBlockEntity.tick`） | 不经过放置流水线的那条路 |
+| 接受层 | `PhaseCellReplaceMixin`（`canBeReplaced`） | 让放置管线认为材料格"可替换" |
+
+> ⚠️ **0.2.5 的结构缺陷（用户反馈的症状根因）**：上面四条路径各自写了一份
+> "红石线 / 材料相 / 真实元件方块"的三分支，于是加一种填充要改四处。中继器/比较器/侦测器
+> 是后加进来的（0.2.3），只被逐个调用点打补丁——表现就是"冰/黑曜石好了，元件的组装方式仍不全"。
+> 现在新增填充种类（或元件种类）**只需要改 `PhaseAbsorption` 一处**。
+>
+> ⚠️ **`cellOf` 的判定顺序有意义**：材料 → 红石线 → 元件 → 熔岩源。前三者都是方块形态，
+> 熔岩源是流体形态，放最后以免被"同时带流体的宿主状态"抢先判定。
+
+**元件装配与玩家无关**（0.2.6）：`getPlayer() == null` 时按"普通右键"处理（无从判断潜行），
+朝向退化为 `NORTH`；0.2.5 及以前直接 `return false`，于是发射器/命令/其它 mod 放下元件物品
+只会落到原版"真元件方块放在宿主上面一格"。**元件也认落点格**：先试命中格、再试落点格，
+与材料吸收同构（材料早就是这样，元件以前只认命中格）。
+
+回归：服务端自检 `checkAssemblyPathConsistency`——`cellOf` 逐种填充对账、四条路径
+（`place` / `setBlock`）对每种填充支持情况必须一致、`player == null` 时元件仍写出条目、
+落点手势对三种元件都生效。
+
 **关键：放置能力属于"方块放置流水线"，与玩家、手、`InteractionHand`、潜行都无关。**
 
 > ⚠️ **元件装配取宿主必须用命中方块，不能用 `context.getClickedPos()`**（0.2.2 修，0.2.0 起的实机 bug）。
 > 原版 `BlockPlaceContext` 对**不可替换**方块（楼梯/下半砖等宿主都是）把 `getClickedPos()`
 > 指到 `hitPos + 点击面`（=宿主旁边的空气格），只有可替换方块（红石线/熔岩源）才指向命中格。
-> 0.2.0 的 `BlockItemMixin.liquidphase$placeElement` 拿 `getClickedPos()` 查宿主 → 永远查到 AIR
+> 0.2.0 的 `BlockItemMixin.liquidphase$assembleElement` 拿 `getClickedPos()` 查宿主 → 永远查到 AIR
 > → 装配静默失效，落回原版把**真元件方块**放在宿主上面。自检与渲染回归都是直接调
 > `ElementBlocks.place`，绕过了玩家交互层，所以从未暴露；0.2.2 的
 > `AssemblyInteractionTest` 用 `gameMode.useItemOn`（客户端预测 + 网络包 + 服务端执行，
@@ -718,7 +752,7 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
 `ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，断言数为
-**约 510（0.2.5；实测 1.19.4/1.20.1/1.21.1 = 510、1.21.10 = 511、1.21.11 = 511、26.3 = 509，全部 0 failed）**。
+**约 519（0.2.6；实测 1.19.4/1.20.1/1.21.1 = 519、1.21.10 = 520、1.21.11 = 519、26.3 = 518，全部 0 failed）**。
 含 0.1.20 的分派识别回归、0.1.22 的组装初始状态与组合碰撞断言、0.2.0 的旁路表读写/
 红石 updatePower/元件放置空腔/dynamic part 断言，以及 0.2.4 新增的**元件 I/O 露出门控**
 （下半楼梯南/北脸：输入、输出、观察面、比较器 alternate、中继器锁存、红石线连接）
@@ -746,6 +780,9 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 **旁路表**（`PhaseStorage` 的 put/get/remove/区块替换/快照、`PhaseExtras` 关卡级读写、
   写入清 `filling`、`canAcceptExtra` 与 `canAcceptPhase` 的互斥边界）、
 **元件放置空腔判定**（下半砖/下半楼梯接受，整格方块/上半砖拒绝）、
+**组装路径一致性**（0.2.6：`PhaseAbsorption.cellOf` 逐种填充对账；`place` 与 `setBlock`
+两条路径对每种填充支持情况必须一致；`player == null` 时元件仍写出条目；落点手势对
+中继器/比较器/侦测器都生效——这几条钉住"元件不能只被逐个调用点打补丁"）、
 **右键调档**（中继器延迟循环 1→2→3→4→1、比较器模式切换、侦测器/空格不可调）、
 **充水冲落**（红石相/元件被水冲落并清掉条目、材料相与空格不冲落）、
 **blockstate 渲染资源**（楼梯宿主可见 + 动态 part；整格宿主/透明宿主都有动态 part；
@@ -828,7 +865,7 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
 | 红石相输出 | 指向相邻红石线时 -1；指向灯/活塞时满功率；被宿主覆盖的面不输出 |
 | 红石相信号延迟 | 开关/拆线后**同一 tick** 就更新（不走计划刻） |
 | 瞄准红石外壳挖掘 | 掉红石粉、原地留宿主；瞄准宿主露出部分则正常破坏并留下对应功率红石线 |
-| 右键放元件 | 手持中继器/比较器/侦测器，**普通右键**宿主 → 元件贴在宿主表面；**潜行右键**仍是原版放在宿主上面一格 |
+| 右键放元件 | 手持中继器/比较器/侦测器，**普通右键**宿主 → 元件贴在宿主表面；**潜行右键**仍是原版放在宿主上面一格；点**旁边**的方块让元件"落进"宿主格也能装配；不要求有玩家（发射器/命令/其它 mod 同样装配） |
 | 元件方块作相材料格 | 宿主放进/写进/落进中继器·比较器·侦测器方块所在格 → 吸收成元件相，继承朝向/延迟/模式/锁定/供电 |
 | 元件放置前提 | 整格方块/上半砖拒绝；已有填充相或旁路条目的格子拒绝 |
 | 破坏元件 | 左键命中元件：清条目 + 掉落对应物品，宿主保留；破坏宿主时元件随宿主消失、不额外掉落 |
@@ -908,7 +945,7 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    > 并进取值域则 1.21.11 至少 81.3 万状态（V=84）。现行实现把参数放进旁路表，
    > `filling` 固定 8 值，总状态 176,563。
    > 新增元件种类时只加 `PhaseExtra.Kind` 与子模型，**不要动 `filling` 取值域**。
-4. 行为层已做服务端自检（0.2.5：六版本实测 512/512/512/513/512/511 passed，全部 0 failed）+ 启动冒烟 + 6 版本编译；
+4. 行为层已做服务端自检（0.2.6：六版本实测 519/519/519/520/519/518 passed，全部 0 failed）+ 启动冒烟 + 6 版本编译；
    **渲染层与剔除面已在真实客户端（1.21.11 `runClient`）取证修复**：
    带相状态图层为 CUTOUT（半透明宿主保持 TRANSLUCENT）、内缩覆盖层/外扩外壳的
    quad 进入不可剔除列表、几何坐标在宿主外侧；

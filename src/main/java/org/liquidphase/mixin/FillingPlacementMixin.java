@@ -1,10 +1,9 @@
 package org.liquidphase.mixin;
 
+import java.util.function.Function;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
-import org.liquidphase.phase.Phase;
 import org.liquidphase.phase.PhaseAbsorption;
 import org.liquidphase.phase.PhaseCapable;
 import org.liquidphase.phase.PhaseHelper;
@@ -14,21 +13,24 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * 填充相放置的**改写层**（audit v2 用户实测缺口，0.1.16 修）：任何来源
- * （{@code Level.setBlock} 是所有方块写入的唯一汇聚点——玩家放置、发射器、命令、
- * 下落方块、任意 mod）向相容宿主格写入填充相材料方块时，改写为"宿主 + 对应填充相"，
- * 而不是用材料覆盖宿主。0.1.17 起接受条件就是 {@code PhaseHelper.canAcceptPhase}
- * （可替换填充相规则）：无相（含含水态）或含熔岩相的宿主格会被改写吸收；
- * 冰/霜冰/黑曜石/红石相不可替换，材料照原版覆盖。
+ * 相材料放置的**改写层**：任何来源（{@code Level.setBlock} 是所有方块写入的唯一汇聚点——
+ * 玩家放置、发射器、命令、下落方块、任意 mod）向已有相容宿主格写入相材料方块
+ * （冰/霜冰/黑曜石/红石线/真实中继器·比较器·侦测器）时，改写为"宿主 + 对应填充相"，
+ * 而不是用材料覆盖宿主。
  * <p>
- * 材料口径：冰/霜冰/黑曜石（{@code PhaseAbsorption.phaseOfBlock}）与红石线
- * （写入宿主格 = 重新放置红石粉：初始功率 0）。水/熔岩**不在**材料口径——
- * 它们走流体容器路径（{@code LiquidBlockContainer.placeLiquid}，含水/熔岩相由那里处理）。
+ * <b>0.2.6：判定与写入统走 {@link PhaseAbsorption#cellOf} /
+ * {@link PhaseAbsorption#canAbsorbCell} / {@link PhaseAbsorption#absorbCell}。</b>
+ * 以前这里对红石线与元件各写一份分支，于是"新增一种填充相"必须在四个 mixin 各补一遍，
+ * 漏掉一处就少一条组装路径——用户反馈的"冰/黑曜石好了但中继器/比较器/侦测器填充不全"
+ * 正是这个结构问题的表现。
+ * <p>
+ * 水/熔岩**不在**材料口径：它们走流体容器路径（{@code LiquidBlockContainer.placeLiquid}，
+ * 熔岩相由那里处理；{@code Level.setBlock(熔岩源)} 是"破坏并铺流体"的原版语义，不改写）。
  * 改写后的目标仍是宿主状态（非材料），再次进入本注入点不会递归。
  * <p>
  * 红石相的初始功率与重算口径（0.1.22）：改写层写入线状态属于"重新放置红石粉"，
  * 初始功率 0；宿主落进线格属于"吸收已存在的线"，初始功率沿用原线
- * （{@code BlockItemMixin.liquidphase$redstonePhase} / {@code FallingBlockIntoWireMixin}）。
+ * （{@code BlockItemMixin} / {@code FallingBlockIntoWireMixin}）。
  * 两条路径落地后都由 {@code BlockStateBaseMixin.liquidphase$onPlace} 立即按邻居重算。
  * <p>
  * 版本差异：≤1.21.11 的 {@code Level} 声明 3 参 {@code setBlock(pos, state, flags)}
@@ -46,30 +48,9 @@ public abstract class FillingPlacementMixin {
         if (!org.liquidphase.sync.PhaseSyncState.canMutateWorld(level)) {
             return;
         }
-        BlockState converted = liquidphase$convert(level, pos, newState);
-        if (converted != null) {
-            cir.setReturnValue(level.setBlock(pos, converted, flags, limit));
-            return;
-        }
-        // 红石线写进已有的相容宿主格：该格原本没有线（重新放置口径），初始功率 0；
-        // 落地后由 onPlace 立即按邻居重算。方块状态不变，只写旁路表。
-        if (newState.is(Blocks.REDSTONE_WIRE)) {
-            BlockState current = level.getBlockState(pos);
-            if (current.getBlock() instanceof PhaseCapable && PhaseHelper.canAcceptExtra(level, pos, current)) {
-                org.liquidphase.redstone.RedstoneBlocks.setRedstonePhase(level, pos, current);
-                level.updateNeighborsAt(pos, current.getBlock());
-                cir.setReturnValue(true);
-                return;
-            }
-        }
-        // 真实元件方块写进已有的相容宿主格（0.2.3 相材料格口径）：改写为元件条目。
-        int element = org.liquidphase.element.ElementBlocks.extraOfBlock(newState);
-        if (!org.liquidphase.phase.PhaseExtra.isEmpty(element)) {
-            BlockState current = level.getBlockState(pos);
-            if (current.getBlock() instanceof PhaseCapable && PhaseHelper.canAcceptExtra(level, pos, current)
-                && org.liquidphase.element.ElementBlocks.absorbBlock(level, pos, current, element)) {
-                cir.setReturnValue(true);
-            }
+        Boolean handled = liquidphase$rewrite(level, pos, newState, state -> level.setBlock(pos, state, flags, limit));
+        if (handled != null) {
+            cir.setReturnValue(handled);
         }
     }
      *///?} else {
@@ -81,49 +62,48 @@ public abstract class FillingPlacementMixin {
         if (!org.liquidphase.sync.PhaseSyncState.canMutateWorld(level)) {
             return;
         }
-        BlockState converted = liquidphase$convert(level, pos, newState);
-        if (converted != null) {
-            cir.setReturnValue(level.setBlock(pos, converted, flags));
-            return;
-        }
-        // 红石线写进已有的相容宿主格：该格原本没有线（重新放置口径），初始功率 0；
-        // 落地后由 onPlace 立即按邻居重算。方块状态不变，只写旁路表。
-        if (newState.is(Blocks.REDSTONE_WIRE)) {
-            BlockState current = level.getBlockState(pos);
-            if (current.getBlock() instanceof PhaseCapable && PhaseHelper.canAcceptExtra(level, pos, current)) {
-                org.liquidphase.redstone.RedstoneBlocks.setRedstonePhase(level, pos, current);
-                level.updateNeighborsAt(pos, current.getBlock());
-                cir.setReturnValue(true);
-                return;
-            }
-        }
-        // 真实元件方块（中继器/比较器/侦测器）写进已有的相容宿主格（0.2.3 相材料格口径）：
-        // 不覆盖宿主，改写为元件条目并继承该方块的全部参数。
-        int element = org.liquidphase.element.ElementBlocks.extraOfBlock(newState);
-        if (!org.liquidphase.phase.PhaseExtra.isEmpty(element)) {
-            BlockState current = level.getBlockState(pos);
-            if (current.getBlock() instanceof PhaseCapable && PhaseHelper.canAcceptExtra(level, pos, current)
-                && org.liquidphase.element.ElementBlocks.absorbBlock(level, pos, current, element)) {
-                cir.setReturnValue(true);
-            }
+        Boolean handled = liquidphase$rewrite(level, pos, newState, state -> level.setBlock(pos, state, flags));
+        if (handled != null) {
+            cir.setReturnValue(handled);
         }
     }
     //?}
 
-    /** {@return 改写后的"宿主 + 填充相"状态；非填充相材料或目标不是可接受宿主时返回 null} */
-    private static BlockState liquidphase$convert(Level level, BlockPos pos, BlockState newState) {
-        if (newState.is(Blocks.REDSTONE_WIRE)) {
-            return null; // 红石相不占状态，在调用点直接写旁路表。
-        }
-        Phase filling = PhaseAbsorption.phaseOfBlock(newState);
-        if (filling == null) {
+    /**
+     * 共用的改写主体（两个版本的注入体只差在"怎么写回状态"）。
+     * <ol>
+     *   <li>其它方块（含石头、水、熔岩源本身）→ {@code null}（走原版覆盖）；</li>
+     *   <li>材料相写进宿主格 → 用 {@code writeState} 写成"宿主 + 该填充相"；</li>
+     *   <li>红石线 / 真实元件方块写进宿主格 → 只写旁路表，方块状态不变，返回 {@code true}。</li>
+     * </ol>
+     * 三种都问同一个 {@link PhaseAbsorption#cellOf}：不再出现"某条路径只认某几种填充"。
+     *
+     * @return {@code null} = 不接管；否则是本次 {@code setBlock} 的返回值
+     */
+    private static Boolean liquidphase$rewrite(Level level, BlockPos pos, BlockState newState,
+                                               Function<BlockState, Boolean> writeState) {
+        PhaseAbsorption.Cell cell = PhaseAbsorption.cellOf(newState);
+        if (cell == null || cell.isLava()) {
+            // 熔岩源不是"填充相材料"：原版 setBlock(熔岩) 是"破坏并铺流体"的语义，不改写。
             return null;
         }
         BlockState current = level.getBlockState(pos);
-        if (!(current.getBlock() instanceof PhaseCapable)
-            || !PhaseHelper.canAcceptPhase(current, level, pos, filling)) {
+        if (!(current.getBlock() instanceof PhaseCapable)) {
             return null;
         }
-        return PhaseHelper.withPhase(current, filling);
+        if (!PhaseAbsorption.canAbsorbCell(level, pos, current, cell)) {
+            return null;
+        }
+        if (cell.isMaterial()) {
+            // 改写为"宿主 + 填充相"：一次 setBlock 到位（目标不是材料格，不会递归）。
+            return writeState.apply(PhaseHelper.withPhase(current, cell.filling()));
+        }
+        // 红石线按"新放置"口径（初始 0，落地由 onPlace 按邻居重算；来料状态自带的 POWER
+        // 不作为初始状态，见 AGENTS §3.3）；元件方块继承它自己的状态。两条都只写旁路表。
+        if (!PhaseAbsorption.absorbCell(level, pos, current, cell, -1)) {
+            return null;
+        }
+        level.updateNeighborsAt(pos, current.getBlock());
+        return true;
     }
 }

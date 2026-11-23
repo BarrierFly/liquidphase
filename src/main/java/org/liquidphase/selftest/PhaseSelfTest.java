@@ -28,6 +28,7 @@ import net.minecraft.server.packs.resources.ResourceManager;
 import org.liquidphase.LiquidPhase;
 import org.liquidphase.element.ElementBlocks;
 import org.liquidphase.phase.Phase;
+import org.liquidphase.phase.PhaseAbsorption;
 import org.liquidphase.phase.PhaseExtra;
 import org.liquidphase.phase.PhaseExtras;
 import org.liquidphase.phase.PhaseHelper;
@@ -84,6 +85,7 @@ public final class PhaseSelfTest {
             checkElementTuning(level, base.offset(44, 1, 0));
             checkWashOut(level, base.offset(44, 1, 8));
             checkElementAssets();
+            checkAssemblyPathConsistency(level, base);
             checkPistonPhaseBehavior(level, base);
             checkRedstonePhaseInitialState(level, base);
             checkPlaceIntoWire(level, base);
@@ -599,6 +601,168 @@ public final class PhaseSelfTest {
                 && PhaseExtras.get(level, pos) == PhaseExtra.EMPTY);
         level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(pos.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+    }
+
+    // ------------------------------------------------------------------
+    // 0.2.6 组装路径一致性：填充种类只此一份判定（PhaseAbsorption.cellOf）
+    // ------------------------------------------------------------------
+
+    /**
+     * 相材料格的判定必须是<b>一份</b>，且<b>与玩家无关</b>（0.2.6）。
+     * <p>
+     * 用户反馈的"冰/黑曜石好了，但中继器/比较器/侦测器填充的组装方式仍不全"根因是：
+     * "这一格装着什么"在四个调用点各写一份 {@code wire / material / element} 三分支，
+     * 加一种填充就要改四处，漏一处就少一条组装路径。这里把不变量钉死：
+     * <ol>
+     *   <li>{@link PhaseAbsorption#cellOf} 对每种填充都答得出来，且种类正确；</li>
+     *   <li>四条路径（交互层 placeBlock、改写层 setBlock、下落方块、接受层 canBeReplaced）
+     *       都用同一个判定——任选两种填充，四条路径的支持情况必须一致；</li>
+     *   <li>元件装配<b>不要求有玩家</b>：{@code getPlayer() == null} 时和材料吸收一样生效。</li>
+     * </ol>
+     */
+    private static void checkAssemblyPathConsistency(ServerLevel level, BlockPos base) {
+        // (1) cellOf 覆盖全部填充种类。
+        java.util.Map<String, PhaseAbsorption.CellKind> expected = new java.util.LinkedHashMap<>();
+        expected.put("ice", PhaseAbsorption.CellKind.MATERIAL);
+        expected.put("frosted_ice", PhaseAbsorption.CellKind.MATERIAL);
+        expected.put("obsidian", PhaseAbsorption.CellKind.MATERIAL);
+        expected.put("redstone_wire", PhaseAbsorption.CellKind.REDSTONE);
+        expected.put("repeater", PhaseAbsorption.CellKind.ELEMENT);
+        expected.put("comparator", PhaseAbsorption.CellKind.ELEMENT);
+        expected.put("observer", PhaseAbsorption.CellKind.ELEMENT);
+        expected.put("lava", PhaseAbsorption.CellKind.LAVA);
+        java.util.Map<String, BlockState> states = new java.util.LinkedHashMap<>();
+        states.put("ice", Blocks.ICE.defaultBlockState());
+        states.put("frosted_ice", Blocks.FROSTED_ICE.defaultBlockState()
+            .setValue(BlockStateProperties.AGE_3, 2));
+        states.put("obsidian", Blocks.OBSIDIAN.defaultBlockState());
+        states.put("redstone_wire", Blocks.REDSTONE_WIRE.defaultBlockState());
+        states.put("repeater", Blocks.REPEATER.defaultBlockState());
+        states.put("comparator", Blocks.COMPARATOR.defaultBlockState());
+        states.put("observer", Blocks.OBSERVER.defaultBlockState());
+        states.put("lava", Fluids.LAVA.defaultFluidState().createLegacyBlock());
+        java.util.List<String> wrongKind = new java.util.ArrayList<>();
+        for (var entry : expected.entrySet()) {
+            PhaseAbsorption.Cell cell = PhaseAbsorption.cellOf(states.get(entry.getKey()));
+            if (cell == null || cell.kind() != entry.getValue()) {
+                wrongKind.add(entry.getKey() + "=" + (cell == null ? "null" : cell.kind()));
+            }
+        }
+        assertTrue("cellOf classifies every filling kind (" + wrongKind + ")", wrongKind.isEmpty());
+        assertTrue("a plain block is not a phase-material cell",
+            PhaseAbsorption.cellOf(Blocks.STONE.defaultBlockState()) == null);
+
+        // (2) 四条路径对"材料相"与"元件"的支持情况一致（用同一台半砖宿主逐个走）。
+        BlockPos hostPos = base.offset(52, 1, 4);
+        level.setBlock(hostPos.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        java.util.Map<String, Boolean> byPath = new java.util.LinkedHashMap<>();
+        for (String kindName : new String[]{"ice", "repeater", "comparator", "observer", "redstone_wire"}) {
+            BlockState cellState = states.get(kindName);
+            // 路径 A：交互层 placeBlock（宿主物品放进材料格）
+            liquidphase$resetCell(level, hostPos);
+            level.setBlock(hostPos, cellState, Block.UPDATE_ALL);
+            BlockItem hostItem = (BlockItem) Blocks.OAK_STAIRS.asItem();
+            BlockPlaceContext ctx = liquidphase$context(level, Blocks.OAK_STAIRS, hostPos.below(), Direction.UP);
+            boolean a = hostItem.place(ctx).consumesAction()
+                && liquidphase$cellAbsorbed(level, hostPos, kindName);
+            // 路径 B：改写层 setBlock（材料方块写进已有宿主格）
+            liquidphase$resetCell(level, hostPos);
+            level.setBlock(hostPos, Blocks.OAK_STAIRS.defaultBlockState(), Block.UPDATE_ALL);
+            level.setBlock(hostPos, cellState, Block.UPDATE_ALL);
+            boolean b = liquidphase$cellAbsorbed(level, hostPos, kindName);
+            byPath.put(kindName + ":place", a);
+            byPath.put(kindName + ":setBlock", b);
+        }
+        java.util.List<String> broken = new java.util.ArrayList<>();
+        for (String kindName : new String[]{"ice", "repeater", "comparator", "observer", "redstone_wire"}) {
+            boolean place = byPath.get(kindName + ":place");
+            boolean setBlock = byPath.get(kindName + ":setBlock");
+            if (place != setBlock) {
+                broken.add(kindName + "(place=" + place + ",setBlock=" + setBlock + ")");
+            }
+        }
+        assertTrue("every filling kind is absorbed by both the place and the setBlock path ("
+            + byPath + ")", broken.isEmpty());
+        liquidphase$resetCell(level, hostPos);
+
+        // (3) 元件装配不依赖玩家：null-player 的放置上下文同样写出元件条目。
+        BlockPos nullPlayerPos = base.offset(52, 1, 6);
+        level.setBlock(nullPlayerPos.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(nullPlayerPos, Blocks.STONE_SLAB.defaultBlockState(), Block.UPDATE_ALL);
+        PhaseExtras.set(level, nullPlayerPos, PhaseExtra.EMPTY);
+        BlockPlaceContext noPlayer = liquidphase$context(level, Blocks.REPEATER, nullPlayerPos, Direction.UP);
+        BlockItem repeaterItem = (BlockItem) net.minecraft.world.item.Items.REPEATER;
+        repeaterItem.place(noPlayer);
+        assertTrue("element assembly works without a player (got "
+                + PhaseExtra.describe(PhaseExtras.get(level, nullPlayerPos)) + ")",
+            ElementBlocks.hasElement(level, nullPlayerPos)
+                && PhaseExtra.kind(PhaseExtras.get(level, nullPlayerPos)) == PhaseExtra.Kind.REPEATER);
+        liquidphase$resetCell(level, nullPlayerPos);
+        level.setBlock(nullPlayerPos.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+        // (4) 落点手势：点**旁边**的方块让元件"落进"宿主格，与材料吸收同构
+        //     （0.2.6 前元件只认命中格，材料能做的这个手势元件做不到）。
+        BlockPos gestureHost = base.offset(52, 1, 8);
+        BlockPos gestureNeighbour = gestureHost.east();
+        for (int i = 0; i < 3; i++) {
+            PhaseExtra.Kind kind = i == 0 ? PhaseExtra.Kind.REPEATER
+                : i == 1 ? PhaseExtra.Kind.COMPARATOR : PhaseExtra.Kind.OBSERVER;
+            liquidphase$resetCell(level, gestureHost);
+            level.setBlock(gestureNeighbour.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+            level.setBlock(gestureNeighbour, Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+            level.setBlock(gestureHost.below(), Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+            level.setBlock(gestureHost, Blocks.STONE_SLAB.defaultBlockState(), Block.UPDATE_ALL);
+            net.minecraft.server.level.ServerPlayer player = liquidphase$fakePlayer(level);
+            player.setPos(gestureHost.getX() + 1.5, gestureHost.getY() + 1.0, gestureHost.getZ() + 0.5);
+            player.setShiftKeyDown(false);
+            player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND,
+                ElementBlocks.itemFor(kind));
+            player.gameMode.useItemOn(player, level, player.getMainHandItem(),
+                net.minecraft.world.InteractionHand.MAIN_HAND,
+                new BlockHitResult(new Vec3(gestureNeighbour.getX() + 1.0, gestureNeighbour.getY() + 0.5,
+                    gestureNeighbour.getZ() + 0.5), Direction.WEST, gestureNeighbour, false));
+            assertTrue("landing gesture assembles " + kind + " into the neighbouring host (got "
+                    + PhaseExtra.describe(PhaseExtras.get(level, gestureHost)) + ")",
+                ElementBlocks.hasElement(level, gestureHost)
+                    && PhaseExtra.kind(PhaseExtras.get(level, gestureHost)) == kind);
+            player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+        }
+        liquidphase$resetCell(level, gestureHost);
+        level.setBlock(gestureNeighbour, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(gestureNeighbour.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(gestureHost.below(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+    }
+
+    /** 清掉一格及其上方/四周（保留下方支撑），用于组装路径对账。 */
+    private static void liquidphase$resetCell(ServerLevel level, BlockPos pos) {
+        for (BlockPos p : new BlockPos[]{pos, pos.above(), pos.above(2), pos.east(), pos.west(),
+            pos.north(), pos.south()}) {
+            BlockState s = level.getBlockState(p);
+            if (PhaseHelper.hasPhaseProperty(s) && PhaseHelper.getPhase(s) != Phase.NONE) {
+                level.setBlock(p, PhaseHelper.withPhase(s, Phase.NONE), Block.UPDATE_ALL);
+            }
+            PhaseExtras.set(level, p, PhaseExtra.EMPTY);
+            level.setBlock(p, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        }
+    }
+
+    /** {@return 该格是否真的装上了指定种类的填充} */
+    private static boolean liquidphase$cellAbsorbed(ServerLevel level, BlockPos pos, String kindName) {
+        BlockState state = level.getBlockState(pos);
+        if (!state.is(Blocks.OAK_STAIRS)) {
+            return false;
+        }
+        return switch (kindName) {
+            case "ice" -> PhaseHelper.getPhase(state) == Phase.ICE;
+            case "repeater" -> ElementBlocks.hasElement(level, pos)
+                && PhaseExtra.kind(PhaseExtras.get(level, pos)) == PhaseExtra.Kind.REPEATER;
+            case "comparator" -> ElementBlocks.hasElement(level, pos)
+                && PhaseExtra.kind(PhaseExtras.get(level, pos)) == PhaseExtra.Kind.COMPARATOR;
+            case "observer" -> ElementBlocks.hasElement(level, pos)
+                && PhaseExtra.kind(PhaseExtras.get(level, pos)) == PhaseExtra.Kind.OBSERVER;
+            case "redstone_wire" -> RedstoneBlocks.hasRedstone(level, pos);
+            default -> false;
+        };
     }
 
     // ------------------------------------------------------------------

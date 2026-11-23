@@ -117,17 +117,32 @@ for ver, jar in jars():
             always_true += always_true_conditions(data)
 
         # 0.2.3 起：线格放行推广为"相材料格放行"（PhaseCellReplaceMixin），placeBlock 捕获
-        # 推广为"线格 + 相材料格"（liquidphase$captureCellPhase）。更老的 dist 包沿用旧探针，
+        # 推广为"相材料格"（liquidphase$captureCell）。0.2.6 起捕获改名为 captureCell，
+        # 并统一由 PhaseAbsorption.cellOf 判定；保留 0.2.3 的旧探针名以复核历史包。
         # 这样本脚本可以同时对 dist 里的历史包做复核（旧包没有新 mixin 属正常）。
         vmod = json.loads(z.read('fabric.mod.json'))
         vstr = str(vmod['version'])
         vnum = tuple(int(x) for x in re.match(r'(\d+)\.(\d+)\.(\d+)', vstr).groups())
-        if vnum >= (0, 2, 3):
+        if vnum >= (0, 2, 6):
+            replace_mixin = z.read('org/liquidphase/mixin/PhaseCellReplaceMixin.class')
+            block_item = z.read('org/liquidphase/mixin/BlockItemMixin.class')
+            piston_base = z.read('org/liquidphase/mixin/PistonBaseBlockMixin.class')
+            has_replace_mixin = b'liquidphase$phaseCellIsReplaceableForHost' in replace_mixin
+            has_phase_write = (b'liquidphase$captureCell' in block_item
+                               or b'liquidphase$captureCellPhase' in block_item)
+            # 0.2.6：单一判定源 + 无玩家/落点格子装配必须在包里。
+            has_unified_cell = (b'PhaseAbsorption' in block_item
+                                and b'liquidphase$assembleElement' in block_item)
+            has_piston_hooks = (b'liquidphase$markDestroyListSetBlock' in piston_base
+                                or b'liquidphase$destroyListAffect' in piston_base)
+            has_piston_strip = b'liquidphase$stripCarriedPhase' in piston_base
+        elif vnum >= (0, 2, 3):
             replace_mixin = z.read('org/liquidphase/mixin/PhaseCellReplaceMixin.class')
             block_item = z.read('org/liquidphase/mixin/BlockItemMixin.class')
             piston_base = z.read('org/liquidphase/mixin/PistonBaseBlockMixin.class')
             has_replace_mixin = b'liquidphase$phaseCellIsReplaceableForHost' in replace_mixin
             has_phase_write = b'liquidphase$captureCellPhase' in block_item
+            has_unified_cell = True
             # 活塞：破坏列表标记（≤1.21.1 走 setBlock 重定向，1.21.10+ 走 affect 重定向）+ 移动状态剥相。
             has_piston_hooks = (b'liquidphase$markDestroyListSetBlock' in piston_base
                                 or b'liquidphase$destroyListAffect' in piston_base)
@@ -137,6 +152,7 @@ for ver, jar in jars():
             block_item = z.read('org/liquidphase/mixin/BlockItemMixin.class')
             has_replace_mixin = b'liquidphase$wireIsReplaceableForHost' in replace_mixin
             has_phase_write = b'liquidphase$captureWirePower' in block_item
+            has_unified_cell = True
             has_piston_hooks = has_piston_strip = True
         removed_wire_use = 'org/liquidphase/mixin/RedstoneWireUseMixin.class' not in names
         removed_wire_ctx = 'org/liquidphase/redstone/WirePlaceContext.class' not in names
@@ -277,7 +293,7 @@ for ver, jar in jars():
         else:
             missing_blockstates.append('bundled phase-blocks.ids missing')
 
-        line_ok = (bad == 0 and has_replace_mixin and has_phase_write
+        line_ok = (bad == 0 and has_replace_mixin and has_phase_write and has_unified_cell
                    and has_piston_hooks and has_piston_strip
                    and removed_wire_use and removed_wire_ctx
                    and not missing_markers and not missing_dynamic and not missing_blockstates
@@ -285,10 +301,10 @@ for ver, jar in jars():
                    and always_true == 0)
         ok = ok and line_ok
         print('%-8s ver=%-8s blockstates=%-5d bad_conds=%-3d always_true=%-4d replace_mixin=%s '
-              'phase_write=%s piston=%s/%s render_sync=%s cullface=%s shell=%s elements=%s '
+              'phase_write=%s unified_cell=%s piston=%s/%s render_sync=%s cullface=%s shell=%s elements=%s '
               'missing_dynamic=%s unrendered_ids=%s -> %s'
               % (ver, mod['version'], len(blockstates), bad, always_true, has_replace_mixin,
-                 has_phase_write, has_piston_hooks, has_piston_strip,
+                 has_phase_write, has_unified_cell, has_piston_hooks, has_piston_strip,
                  'ok' if not missing_markers else missing_markers,
                  cullface_models or 'none', shell_gaps or 'ok', element_gaps or 'ok',
                  missing_dynamic or 'none', missing_blockstates or 'none',

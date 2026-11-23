@@ -35,12 +35,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * 方案 C 起：
  * <ul>
  *   <li>红石相不再占状态，放置/吸收只写旁路表（{@link PhaseExtras}）；</li>
- *   <li>元件相（中继器/比较器/侦测器）用**潜行右键宿主**放置——普通右键保留原版
- *       "放在宿主上面一格"的语义，不改玩家习惯；</li>
- *   <li>相材料吸收（冰/霜冰/黑曜石 ↔ 宿主）不变；</li>
- *   <li>0.2.3：placeBlock 捕获从"线格功率"推广为"相材料格"（含熔岩源），
- *       宿主放进任何相材料格都经原版放置流水线吸收该相（替代原 PlacementMixin 与落点拦截）。</li>
+ *   <li>元件相（中继器/比较器/侦测器）用**普通右键**放置——潜行右键保留原版
+ *       "放在宿主上面一格"的语义；</li>
+ *   <li>相材料吸收（冰/霜冰/黑曜石/熔岩源/红石线/真实元件方块 ↔ 宿主）走同一条
+ *       {@link PhaseAbsorption#cellOf} 判定 + {@link PhaseAbsorption#absorbCell} 写入。</li>
  * </ul>
+ * <p>
+ * <b>0.2.6 修正</b>：以前"落点格是相材料格"的三分支（线/材料/元件）在这里与
+ * {@code FillingPlacementMixin}/{@code FallingBlockIntoWireMixin}/{@code PhaseCellReplaceMixin}
+ * 各写一份，元件只是逐个调用点被打补丁；现在统走 {@link PhaseAbsorption}。
  */
 @Mixin(BlockItem.class)
 public abstract class BlockItemMixin {
@@ -48,63 +51,49 @@ public abstract class BlockItemMixin {
     @Shadow
     public abstract Block getBlock();
 
+    /** 放置前捕获的落点格内容（null = 本次落点格不是相材料格）。 */
+    private static final ThreadLocal<PhaseAbsorption.Cell> LIQUIDPHASE$CELL = new ThreadLocal<>();
+
     /** 放置前捕获的红石线功率（-1 = 本次落点格不是红石线）。 */
     private static final ThreadLocal<Integer> LIQUIDPHASE$WIRE_POWER =
         ThreadLocal.withInitial(() -> -1);
 
-    /** 放置前捕获的相材料格对应的填充相（null = 落点格不是相材料本体格）。 */
-    private static final ThreadLocal<Phase> LIQUIDPHASE$CELL_PHASE = new ThreadLocal<>();
-
-    /** 放置前捕获的真实元件方块对应条目（EMPTY = 落点格不是元件方块）。 */
-    private static final ThreadLocal<Integer> LIQUIDPHASE$CELL_ELEMENT =
-        ThreadLocal.withInitial(() -> PhaseExtra.EMPTY);
-
     /**
-     * 落点格是"相材料所在格"（红石线 / 冰 / 霜冰 / 黑曜石 / 熔岩源）时，把要吸收的相记下来；
-     * 真正写入在 {@link #liquidphase$afterPlaceBlock} 的 RETURN 注入里（那时宿主方块已经换好）。
+     * 落点格是"相材料所在格"（冰/霜冰/黑曜石 / 红石线 / 真实元件方块 / 熔岩源）时，
+     * 把这格的内容记下来；真正写入在 {@link #liquidphase$afterPlaceBlock} 的 RETURN 注入里
+     * （那时宿主方块已经换好）。
      * <p>
-     * 落点格能取到这些格子，前提是 {@link RedstoneWireReplaceMixin} 把相材料格对相容宿主物品
-     * 放行成"可替换"（红石线/冰/霜冰/黑曜石），熔岩源/水源本来就是原版可替换格。
-     * 0.2.3 起这一个捕获机制同时服务线格与相材料格（原 PlacementMixin 的 getStateForPlacement
-     * 改写与 (b) 落点吸收分支已删除，统一走这里）。
+     * 落点格能取到这些格子，前提是 {@link PhaseCellReplaceMixin} 把相材料格对相容宿主物品
+     * 放行成"可替换"；熔岩源/水源本来就是原版可替换格。
      */
     @ModifyVariable(method = "placeBlock", at = @At("HEAD"), argsOnly = true)
-    private BlockState liquidphase$captureCellPhase(BlockState state, BlockPlaceContext context) {
+    private BlockState liquidphase$captureCell(BlockState state, BlockPlaceContext context) {
+        LIQUIDPHASE$CELL.remove();
         LIQUIDPHASE$WIRE_POWER.set(-1);
-        LIQUIDPHASE$CELL_PHASE.remove();
-        LIQUIDPHASE$CELL_ELEMENT.set(PhaseExtra.EMPTY);
         if (state == null || context == null || !PhaseHelper.hasPhaseProperty(state)) {
             return state;
         }
         BlockPos pos = context.getClickedPos();
         BlockState target = context.getLevel().getBlockState(pos);
-        if (target.is(Blocks.REDSTONE_WIRE)) {
-            LIQUIDPHASE$WIRE_POWER.set(target.hasProperty(BlockStateProperties.POWER)
-                ? target.getValue(BlockStateProperties.POWER) : 0);
-            return state;
-        }
-        // 相材料格（冰/霜冰/黑曜石/熔岩源/真实元件方块；替代原 PlacementMixin 的改写）。
-        Phase material = PhaseAbsorption.phaseOfCell(target);
-        if (material != null) {
-            LIQUIDPHASE$CELL_PHASE.set(material);
-            return state;
-        }
-        int element = ElementBlocks.extraOfBlock(target);
-        if (!PhaseExtra.isEmpty(element)) {
-            LIQUIDPHASE$CELL_ELEMENT.set(element);
+        PhaseAbsorption.Cell cell = PhaseAbsorption.cellOf(target);
+        if (cell != null) {
+            LIQUIDPHASE$CELL.set(cell);
+            if (cell.isRedstone() && target.hasProperty(BlockStateProperties.POWER)) {
+                // 吸收已存在的线：功率沿用原线（与"新放置"的 0 区分）。
+                LIQUIDPHASE$WIRE_POWER.set(target.getValue(BlockStateProperties.POWER));
+            }
         }
         return state;
     }
 
     @Inject(method = "placeBlock", at = @At("RETURN"))
-    private void liquidphase$afterPlaceBlock(BlockPlaceContext context, BlockState state, CallbackInfoReturnable<Boolean> cir) {
-        Phase cellPhase = LIQUIDPHASE$CELL_PHASE.get();
-        int cellElement = LIQUIDPHASE$CELL_ELEMENT.get();
+    private void liquidphase$afterPlaceBlock(BlockPlaceContext context, BlockState state,
+                                             CallbackInfoReturnable<Boolean> cir) {
+        PhaseAbsorption.Cell cell = LIQUIDPHASE$CELL.get();
         int power = LIQUIDPHASE$WIRE_POWER.get();
+        LIQUIDPHASE$CELL.remove();
         LIQUIDPHASE$WIRE_POWER.set(-1);
-        LIQUIDPHASE$CELL_PHASE.remove();
-        LIQUIDPHASE$CELL_ELEMENT.set(PhaseExtra.EMPTY);
-        if (!cir.getReturnValue() || (cellPhase == null && power < 0 && PhaseExtra.isEmpty(cellElement))) {
+        if (!cir.getReturnValue() || cell == null) {
             return;
         }
         Level level = context.getLevel();
@@ -113,13 +102,7 @@ public abstract class BlockItemMixin {
         if (!(placed.getBlock() instanceof PhaseCapable) || !PhaseHelper.hasPhaseProperty(placed)) {
             return;
         }
-        if (power >= 0) {
-            RedstoneBlocks.setRedstonePhase(level, pos, power);
-        } else if (cellPhase != null) {
-            PhaseHelper.fillWithPhase(level, pos, placed, cellPhase);
-        } else {
-            ElementBlocks.absorbBlock(level, pos, placed, cellElement);
-        }
+        PhaseAbsorption.absorbCell(level, pos, placed, cell, cell.isRedstone() ? power : -1);
     }
 
     @Inject(method = "place", at = @At("HEAD"), cancellable = true)
@@ -130,54 +113,74 @@ public abstract class BlockItemMixin {
             return;
         }
 
-        // (e) 元件放置：潜行右键宿主上表面 → 写入元件相（普通右键保留"放在宿主上面"）。
-        if (liquidphase$placeElement(level, context)) {
-            cir.setReturnValue(liquidphase$success(level));
-            return;
-        }
-
         BlockHitResult hit = ((UseOnContextInvoker) context).liquidphase$getHitResult();
         if (hit.getType() != net.minecraft.world.phys.HitResult.Type.BLOCK) {
             return;
         }
         BlockPos hitPos = hit.getBlockPos();
+        BlockPos landedPos = context.getClickedPos();
+
+        // (e) 元件装配：普通右键宿主 → 写入元件相；潜行右键 → 原版"放在宿主上面一格"。
+        // 与材料/红石粉同构：先看命中格，再看落点格（点旁边的方块让元件"落进"宿主格）。
+        // 0.2.5 及以前只认命中格，且要求有玩家；这两处都是"元件比材料少一条组装路径"的来源。
+        if (liquidphase$assembleElement(level, context, hitPos)
+            || (!landedPos.equals(hitPos) && liquidphase$assembleElement(level, context, landedPos))) {
+            cir.setReturnValue(liquidphase$success(level));
+            return;
+        }
+
         if (liquidphase$absorbInto(level, context, hitPos)) {
             cir.setReturnValue(liquidphase$success(level));
             return;
         }
-        BlockPos landedPos = context.getClickedPos();
         if (!landedPos.equals(hitPos) && liquidphase$absorbInto(level, context, landedPos)) {
             cir.setReturnValue(liquidphase$success(level));
         }
     }
 
     /**
-     * 右键宿主：按手持物品装配中继器/比较器/侦测器（0.2.3 起与红石粉等材料相同，
-     * **普通右键**即装配；潜行右键走原版"放在宿主上面一格"，保留需要真实元件方块的情况）。
+     * 右键宿主：按手持物品装配中继器/比较器/侦测器（**普通右键**；潜行右键走原版
+     * "放在宿主上面一格"，保留需要真实元件方块的情况）。
+     * <p>
+     * 这条路径与红石粉/材料物品的落点吸收<b>同源</b>：宿主判定问
+     * {@link ElementBlocks#hasCavity}（内部就是 {@link PhaseHelper#canAcceptExtra}），
+     * 写入问 {@link ElementBlocks#place}。
+     * <p>
+     * <b>0.2.6 修正的两处不对称</b>（都是"元件比材料/红石粉少一条组装路径"）：
+     * <ol>
+     *   <li><b>不要求有玩家</b>：{@code getPlayer() == null} 时无法判断潜行，
+     *       按"普通右键"处理（与原版 {@code BlockItem.place} 对无玩家来源的语义一致）。
+     *       0.2.5 及以前这里直接 {@code player == null → return false}，于是发射器/命令/
+     *       其它 mod 放下元件物品时只会落到原版"真元件方块放在宿主上面一格"；</li>
+     *   <li><b>也认落点格</b>：由调用方先试命中格、再试落点格，与
+     *       {@code liquidphase$absorbInto} 的材料吸收同构——点旁边的方块让元件"落进"
+     *       宿主格也能装配（以前只认命中格，材料能做的这个手势元件做不到）。</li>
+     * </ol>
      */
-    private boolean liquidphase$placeElement(Level level, BlockPlaceContext context) {
+    private boolean liquidphase$assembleElement(Level level, BlockPlaceContext context, BlockPos pos) {
         Player player = context.getPlayer();
-        if (player == null || player.isShiftKeyDown()) {
+        if (player != null && player.isShiftKeyDown()) {
             return false;
         }
         PhaseExtra.Kind kind = ElementBlocks.kindOfItem(context.getItemInHand());
         if (kind == PhaseExtra.Kind.NONE) {
             return false;
         }
-        // 目标必须取**命中方块**（右键的宿主）。不能用 context.getClickedPos()：
-        // 原版 BlockPlaceContext 对不可替换方块（楼梯/下半砖等宿主都是）返回
-        // hitPos + 点击面（=宿主旁边的空气格），拿它查宿主永远是 AIR，装配静默失效、
-        // 落回原版把真元件方块放在宿主上面（0.2.1 真实点击回归抓到）。
-        BlockPos pos = ((UseOnContextInvoker) context).liquidphase$getHitResult().getBlockPos();
         BlockState target = level.getBlockState(pos);
         if (!(target.getBlock() instanceof PhaseCapable) || !ElementBlocks.hasCavity(level, pos, target)) {
             return false;
         }
-        Direction facing = context.getHorizontalDirection().getOpposite();
-        if (kind == PhaseExtra.Kind.OBSERVER) {
-            // 侦测器的 FACING 是观察面：与 ObserverBlock#getStateForPlacement 一致，
-            // 取 getNearestLookingDirection（含上/下），不再退化为水平。
+        // 朝向：中继器/比较器取水平朝向的对面；侦测器取 getNearestLookingDirection（含上/下），
+        // 与原版 ObserverBlock#getStateForPlacement 的双 getOpposite 抵消结果一致。
+        // 无玩家时（命令/发射器）getNearestLookingDirection 会 NPE（原版 Entity 空指针），
+        // 此时退化为 NORTH——这是唯一可用的确定值，且不会崩。
+        Direction facing;
+        if (player == null) {
+            facing = Direction.NORTH;
+        } else if (kind == PhaseExtra.Kind.OBSERVER) {
             facing = context.getNearestLookingDirection();
+        } else {
+            facing = context.getHorizontalDirection().getOpposite();
         }
         if (!ElementBlocks.place(level, pos, target, kind, facing)) {
             return false;
@@ -215,9 +218,9 @@ public abstract class BlockItemMixin {
             return true;
         }
 
-        // (b) 相容宿主 → 放进相材料本体所在格（吸收该格的相）：0.2.3 起改走
-        // RedstoneWireReplaceMixin 的"相材料格可替换"放行 + placeBlock 捕获（见上面捕获说明），
-        // 这里不再拦截——拦截会绕过原版放置流水线（音效/统计/ getStateForPlacement）。
+        // (b) 相容宿主 → 放进相材料本体所在格（吸收该格的相）：走 {@link PhaseCellReplaceMixin}
+        // 的"相材料格可替换"放行 + placeBlock 捕获（见上面捕获说明），这里不再拦截——
+        // 拦截会绕过原版放置流水线（音效/统计/ getStateForPlacement）。
         return false;
     }
 

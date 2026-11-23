@@ -81,6 +81,7 @@
 
 - **普通右键**宿主方块，手持中继器/比较器/侦测器 → 写入对应元件条目
   （**潜行**右键保留原版"放在宿主上面一格"）；写入时清掉宿主的水/熔岩相。
+  点**旁边**的方块让元件"落进"宿主格同样可以装配；不要求有玩家（发射器/命令/其它 mod 都行）。
 - 真实元件方块也是"相材料格"：宿主放进/`setBlock` 写进/落进中继器·比较器·侦测器所在格
   → 吸收成元件相，参数从该方块状态继承（`ElementBlocks.extraOfBlock`）。
   （朝向取玩家水平朝向 / 侦测器取 `getNearestLookingDirection()`，与原版
@@ -98,12 +99,33 @@
 - 活塞路径（0.2.3）：黑曜石填充相一律推不动；相不随活塞移动——推动覆盖/破坏列表摧毁弹出物品，
   粘性拉动/剩余清格实体化留在原位（详见 README"活塞与相"）。
 
-## 3.1 吸收（0.2.3 统一）
+## 3.1 吸收（0.2.3 统一，0.2.6 收敛为单一判定源）
 
-宿主放进**任何相材料格**（红石线 / 冰 / 霜冰 / 黑曜石 / 熔岩源）都走同一条机制：
+宿主放进**任何相材料格**（红石线 / 冰 / 霜冰 / 黑曜石 / 熔岩源 / 真实元件方块）都走同一条机制：
 `PhaseCellReplaceMixin` 让该格在放置管线里算可替换，`BlockItemMixin` 的 placeBlock 捕获
 按格子内容写相（线格继承原线功率、材料格走 `canAcceptPhase`）。原 `PlacementMixin`
 （熔岩源 `getStateForPlacement` 改写）与 place 头部落点拦截已删除。
+
+**0.2.6 起"这一格装着哪种填充"只有一个答案**：`PhaseAbsorption.cellOf(state)` 返回
+`Cell(kind, filling, element)`（`MATERIAL` / `LAVA` / `REDSTONE` / `ELEMENT`），
+`canAbsorbCell` 决定用哪条门控，`absorbCell` 是唯一写入源。交互层
+（`BlockItemMixin`）、`Level.setBlock` 改写层（`FillingPlacementMixin`）、下落方块
+（`FallingBlockIntoWireMixin`）、接受层（`PhaseCellReplaceMixin`）**全部委托这三者**。
+
+> ⚠️ 这就是用户反馈"冰/黑曜石好了，中继器/比较器/侦测器的组装方式仍不全"的根因：
+> 以前四条路径各自写了一份 `wire / material / element` 三分支，元件（0.2.3 后加）只被逐点
+> 打补丁。**不要**在新代码里再手写这套三分支；新增填充/元件种类只改 `PhaseAbsorption` 一处。
+>
+> ⚠️ 判定顺序：材料 → 红石线 → 元件 → 熔岩源。熔岩源是流体形态，放最后以免被同时带流体的宿主抢先。
+
+**元件装配（0.2.6）**：不要求有玩家（`player == null` 时按普通右键，朝向退化为 `NORTH`），
+并且**认落点格**（先试命中格、再试落点格，与材料吸收同构）。
+
+⚠️ 两种"元件进宿主格"是不同的事，别混：
+- **元件物品**（手持中继器右键宿主）→ 装配，走 `BlockItemMixin#place` 头部的拦截
+  （`ElementBlocks.place`：剥掉宿主的材料相/含水后写旁路表，不换方块）；
+- **真实元件方块**（`Level.setBlock(REPEATER)` 落进已有宿主格）→ 相材料吸收，
+  走 `FillingPlacementMixin` 的改写层（`ElementBlocks.absorbBlock`，同样不换方块）。
 
 ## 4. 渲染
 
@@ -156,9 +178,11 @@
 ## 6. 验收
 
 - 6 个版本编译通过；
-- 服务端自检全过（0.2.5 实测：1.19.4/1.20.1/1.21.1 **510**、1.21.10 **511**、26.3 **509**、
-  1.21.11 **511**，均 0 failed；含旁路表读写、元件 I/O 露出门控、右键调档、充水冲落、
-  红石线连接、元件资源形状/贴图、材料相覆盖层不再写进 blockstate 的断言）；
+- 服务端自检全过（0.2.6 实测：1.19.4/1.20.1/1.21.1 **519**、1.21.10 **520**、
+  1.21.11 **519**、26.3 **518**，均 0 failed；含旁路表读写、元件 I/O 露出门控、右键调档、充水冲落、
+  红石线连接、元件资源形状/贴图、材料相覆盖层不再写进 blockstate、
+  **组装路径一致性**（`cellOf` 逐种填充对账 / `place` 与 `setBlock` 支持一致 / 无玩家也能装配 /
+  落点手势对三种元件都生效）的断言）；
 - `python tools/validate_blockstates.py` / `check_mixin_targets.py` / `verify_jars.py` /
   `audit_host_coverage.py` 全绿；
 - 1.21.11 客户端 gametest（栅栏红石相 + 元件几何 quad 断言 + 下半楼梯逐像素落差 +

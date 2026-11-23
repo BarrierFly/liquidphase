@@ -111,11 +111,6 @@ public final class ElementBlocks {
         return PhaseExtra.EMPTY;
     }
 
-    /** {@return 该状态是否是真实元件方块（可被宿主吸收的相材料格）} */
-    public static boolean isElementBlock(BlockState state) {
-        return !PhaseExtra.isEmpty(extraOfBlock(state));
-    }
-
     /** 吸收真实元件方块到宿主格：清材料相/含水，再写入继承来的条目。 */
     public static boolean absorbBlock(Level level, BlockPos pos, BlockState host, int extra) {
         if (PhaseExtra.isEmpty(extra)) {
