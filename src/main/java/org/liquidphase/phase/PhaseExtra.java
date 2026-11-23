@@ -152,6 +152,18 @@ public final class PhaseExtra {
         return (extra & ~(1 << MODE_SHIFT)) | ((subtractMode ? 1 : 0) << MODE_SHIFT);
     }
 
+    /**
+     * {@return 该条目能否被"水冲落"（0.2.5）}
+     * <p>
+     * 口径是**实时按条目种类判断**，不写死红石/中继器/比较器三选一：
+     * 目前 {@code REDSTONE} 与全部元件都算可冲落（对齐原版"水冲掉红石粉/红石火把"的语义），
+     * 未来新增可冲落的条目种类只需在这里放行，水的判定/冲落处理会自动跟着走。
+     */
+    public static boolean isWashable(int extra) {
+        Kind kind = kind(extra);
+        return kind == Kind.REDSTONE || kind.isElement();
+    }
+
     /** 元件在延时结束后应有的输出（侦测器 2 tick 脉冲、中继器/比较器同步）。 */
     public static int delayTicks(int extra) {
         return delay(extra) + 1;

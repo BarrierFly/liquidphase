@@ -93,6 +93,7 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
                 buildScene(server, bright, true);
                 buildScene(server, dark, false);
                 buildElementScene(server, bright);
+                buildOverlayScene(server, bright);
             });
             // 侦测器是 2 tick 开、2 tick 关的脉冲：必须在脉冲窗口内读（中继器 2 tick 后也亮了）。
             context.waitTicks(3);
@@ -113,6 +114,12 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
                 }
             }
             for (String line : context.computeOnClient(client -> inspectElements(client, bright))) {
+                LiquidPhase.LOGGER.info("[gametest] {}", line);
+                if (line.contains("FAIL")) {
+                    failures.add(line);
+                }
+            }
+            for (String line : context.computeOnClient(client -> inspectOverlay(client, bright))) {
                 LiquidPhase.LOGGER.info("[gametest] {}", line);
                 if (line.contains("FAIL")) {
                     failures.add(line);
@@ -152,6 +159,9 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
             // 下半楼梯上的中继器：杆/红条横跨台阶，用于人工复核逐像素落差。
             shot(context, sp, bright.offset(36, 0, 23), 2.2, 1.4, 3.0, 0.5, 0.8, 0.5,
                 "element_stair");
+            // 透明度分离：冰（半透明相）落在下半砖上、黑曜石（不透明相）落在玻璃板上。
+            shot(context, sp, bright.offset(36, 0, 30), 2.0, 1.4, 2.6, 0.5, 0.6, 1.0,
+                "overlay_translucency");
 
             if (!failures.isEmpty()) {
                 throw new AssertionError("fence redstone phase rendering broken:\n  "
@@ -345,8 +355,104 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
             Blocks.STONE.defaultBlockState());
     }
 
-    private static List<String> readBackElements(MinecraftServer server, BlockPos origin) {
+    /**
+     * 透明度分离场景（0.2.5）：一列两种材料相——冰（半透明贴图 alpha=190）落在不透明的下半砖上，
+     * 黑曜石（不透明）落在半透明玻璃板上。覆盖层由动态模型逐 quad 选图层，
+     * 所以"一相有透明度、一相不透明"应当各自正确显示。
+     */
+    private static void buildOverlayScene(MinecraftServer server, BlockPos origin) {
         ServerLevel level = server.getLevel(Level.OVERWORLD);
+        if (level == null) {
+            return;
+        }
+        BlockPos floor = origin.offset(36, -1, 30);
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 3; dz++) {
+                level.setBlockAndUpdate(floor.offset(dx, 0, dz), Blocks.SMOOTH_STONE.defaultBlockState());
+            }
+        }
+        level.setBlockAndUpdate(origin.offset(36, 0, 30),
+            org.liquidphase.phase.PhaseHelper.withPhase(Blocks.SMOOTH_STONE_SLAB.defaultBlockState(),
+                org.liquidphase.phase.Phase.ICE));
+        level.setBlockAndUpdate(origin.offset(36, 0, 31),
+            org.liquidphase.phase.PhaseHelper.withPhase(Blocks.GLASS_PANE.defaultBlockState(),
+                org.liquidphase.phase.Phase.OBSIDIAN));
+    }
+
+    /**
+     * 断言覆盖层几何真的由动态模型发出，并且按相选对了图层。
+     * <p>
+     * 冰的贴图是半透明的（alpha=190），走 CUTOUT 会被画成不透明死白；黑曜石是不透明贴图，
+     * 走 TRANSLUCENT 会被拖进排序层。0.2.4 及以前覆盖层是静态 blockstate part，
+     * 整块状态只有一个图层，做不到这一点。
+     */
+    private static List<String> inspectOverlay(Minecraft mc, BlockPos origin) {
+        List<String> out = new ArrayList<>();
+        BlockModelShaper shaper = mc.getBlockRenderer().getBlockModelShaper();
+        TextureAtlas atlas = (TextureAtlas) mc.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS);
+        SpriteFinder spriteFinder = atlas instanceof FabricSpriteAtlasTexture fabricAtlas
+            ? fabricAtlas.spriteFinder() : null;
+        if (spriteFinder == null) {
+            out.add("overlay FAIL no sprite finder");
+            return out;
+        }
+        MutableMesh mesh = Renderer.get().mutableMesh();
+        String[][] cases = {
+            {"30", "ice", "TRANSLUCENT"},
+            {"31", "obsidian", "CUTOUT"},
+        };
+        for (String[] c : cases) {
+            BlockPos pos = origin.offset(36, 0, Integer.parseInt(c[0]));
+            BlockState state = mc.level.getBlockState(pos);
+            BlockStateModel model = shaper.getBlockModel(state);
+            int[] overlayQuads = {0};
+            double[] minY = {Double.MAX_VALUE};
+            double[] maxY = {-Double.MAX_VALUE};
+            java.util.Set<String> layers = new java.util.HashSet<>();
+            mesh.clear();
+            ((FabricBlockStateModel) model).emitQuads(mesh.emitter(), mc.level, pos, state,
+                RandomSource.create(), direction -> false);
+            mesh.forEachMutable(quad -> {
+                TextureAtlasSprite sprite = spriteFinder.find(quad);
+                String name = sprite == null ? "" : sprite.contents().name().toString();
+                if (!name.contains(c[1])) {
+                    return;
+                }
+                overlayQuads[0]++;
+                //? if 26.3 {
+                /*if (quad.chunkLayer() != null) {
+                    layers.add(quad.chunkLayer().name());
+                }
+                 *///?} else {
+                if (quad.renderLayer() != null) {
+                    layers.add(quad.renderLayer().name());
+                }
+                //?}
+                for (int v = 0; v < 4; v++) {
+                    minY[0] = Math.min(minY[0], quad.y(v));
+                    maxY[0] = Math.max(maxY[0], quad.y(v));
+                }
+            });
+            out.add("overlay %s filling=%s quads=%d layers=%s y=[%.4f,%.4f]"
+                .formatted(c[1], state.getValue(org.liquidphase.phase.PhaseHelper.FILLING),
+                    overlayQuads[0], layers, minY[0], maxY[0]));
+            if (overlayQuads[0] == 0) {
+                out.add("overlay %s FAIL no overlay quad emitted".formatted(c[1]));
+                continue;
+            }
+            if (!layers.contains(c[2])) {
+                out.add("overlay %s FAIL wrong chunk layer (expected %s, got %s)"
+                    .formatted(c[1], c[2], layers));
+            }
+            if (minY[0] < -SHELL_SLACK || maxY[0] > 1 + SHELL_SLACK) {
+                out.add("overlay %s FAIL overlay escapes the block (y=[%.4f,%.4f])"
+                    .formatted(c[1], minY[0], maxY[0]));
+            }
+        }
+        return out;
+    }
+
+    private static List<String> readBackElements(MinecraftServer server, BlockPos origin) {        ServerLevel level = server.getLevel(Level.OVERWORLD);
         List<String> out = new ArrayList<>();
         if (level == null) {
             return out;

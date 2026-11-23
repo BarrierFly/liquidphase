@@ -2,20 +2,26 @@
 """生成"相覆盖"blockstate JSON（规划 §3.6 渲染方案 (a)，决策点 D11）。
 
 对每个相容方块 id：从 Minecraft 客户端 jar 提取原版 blockstate JSON，
-把 variants 转换为等价的 multipart（每个变体一条 when 条件），并追加：
+把 variants 转换为等价的 multipart（每个变体一条 when 条件），并追加**一条无条件**
+动态 part ``liquidphase:block/dynamic``。
 
-- 固体相覆盖层（obsidian / ice / frosted_0..3）：**全部宿主**统一用内缩 1/64（0.25px）
-  的立方体叠加层（0.1.18 起，整格替换已退役）。内缩覆盖层**不带 cullface**：它的面不在方块边界上，
-  原版 cullface 会拿"邻居是否盖住整面"去判断，对台阶/楼梯这类部分覆盖的邻居会错误剔掉
-  不该剔的面（0.1.9 的实机 bug）。
-- 动态几何：追加**一条无条件 part** ``liquidphase:block/dynamic``（方案 C）。红石外壳
-  （``gen_redstone_assets.py`` 生成的 16 份 ``redstone_phase_N`` 模型）与元件相由该模型
-  在渲染期按坐标查旁路表后发射，不再写 ``when{filling: redstone_N}`` 条件。
+0.2.5 起 blockstate 里**只有**宿主 part + 这一条动态 part：
+
+- 材料相覆盖层（obsidian / ice / frosted_0..3，内缩 0.25px 的立方体叠加层）不再写进
+  blockstate，改由动态模型按状态发射。原因：静态 part 的渲染图层是**整块状态**决定的
+  （``ItemBlockRenderTypes.getChunkRenderType``），而冰贴图 alpha=190、黑曜石不透明——
+  一刀切会把半透明冰画成死白，或把玻璃宿主上的黑曜石拖进排序层。挪进动态模型后
+  每个 quad 各自选图层，宿主几何保持原图层。
+- 红石外壳（``gen_redstone_assets.py`` 生成的 16 份 ``redstone_phase_N`` 模型）、元件相
+  与材料相覆盖层都由该模型在渲染期按坐标/状态发射，不再写任何 ``when{filling: ...}``。
+- 相覆盖层与外壳都**不带 cullface**：它们的面不在方块边界上，原版 cullface 会拿
+  "邻居是否盖住整面"去判断，对台阶/楼梯这类部分覆盖的邻居会错误剔掉不该剔的面
+  （0.1.9 的实机 bug）。
 
 熔岩相不覆盖——由原版流体渲染直接绘制。
 
 整格模型宿主（树叶 / 铜格栅 / 红树根 / 白杨树叶等原版模型本身就是 0..16 完整立方体）
-同样用这份内缩覆盖层、宿主 part 照常渲染（0.1.18 的核心修正）。曾经的做法是屏蔽宿主
+同样用内缩覆盖层、宿主 part 照常渲染（0.1.18 的核心修正）。曾经的做法是屏蔽宿主
 part、换成整格 phase_*_full——结果"含冰/黑曜石时树叶整个消失"，而熔岩相走原版流体
 渲染、宿主照常可见，同一个方块两种相观感不同；且 phase_*_full 与 0..16 的宿主模型
 完全共面会 z-fighting。内缩后宿主稳定在外层：不透明树叶遮住相、贴图缝隙里露出相，
@@ -40,6 +46,10 @@ from pathlib import Path
 
 # 相覆盖模型：键 = filling 取值，值 = 模型 id。熔岩相（lava）不需要覆盖层。
 # 0.1.18 起全部宿主统一内缩版；phase_*_full 已退役（模型资源仅作旧包兼容保留）。
+#
+# 0.2.5 起这份清单**不再用来写 blockstate part**（只有下面的自检/模型存在性校验
+# 还会用到它）：材料相覆盖层改由动态模型按状态发射，从而可以逐 quad 选渲染图层。
+# 模型文件本身仍是必需的子资源（`liquidphase:block/phase_*`）。
 OVERLAYS = [
     ("obsidian", "liquidphase:block/phase_obsidian"),
     ("ice", "liquidphase:block/phase_ice"),
@@ -242,30 +252,28 @@ def convert(state_json, geometry):
     elif parts and not any(full_flags):
         mode = "inset"
 
-    # 0.1.18 起三类宿主（整格 / 混合 / 非整格）的产物完全一致：宿主 part 一律常驻，
-    # 相统一用**内缩覆盖层**。曾经的做法是"宿主 part 限制在宿主可见的相 + 整格相
-    # 材质替换（phase_*_full）"——含固相时宿主整个消失，与熔岩相（流体渲染、宿主
-    # 照常可见）表现不一致；且 phase_*_full 与 0..16 的宿主模型完全共面会 z-fighting。
-    # 内缩后宿主稳定在外层，双台阶与半砖的相外观一致。
-    overlays = [(value, model, {"filling": value}) for value, model in OVERLAYS]
+    # 0.1.18 起三类宿主（整格 / 混合 / 非整格）的产物完全一致：宿主 part 一律常驻。
+    # 0.2.5 起材料相覆盖层**也不再写进 blockstate**：它由动态模型按状态发射，
+    # 这样每个 quad 可以各自按材质透明度选渲染图层（冰 alpha=190 必须 TRANSLUCENT，
+    # 黑曜石不透明走 CUTOUT），宿主几何保持原图层——"一相有透明度、一相不透明"才正常。
+    # 静态 part 的唯一后果是整块状态只能有一个图层（SOLID→CUTOUT 一刀切），
+    # 半透明相被画成死白、玻璃宿主上的不透明相被拖进排序层。
 
     # 资源包兼容片段（0.1.17）：烘焙 JSON 之外，另出一份"纯相部件"的片段
     # （assets/liquidphase/phase_parts/<id>.json）。第三方包整体覆盖宿主
     # blockstate 时，客户端在加载点把片段合并进获胜定义（PhasePackMergeCore），
     # 使包只生效于宿主 part。
     #
-    # 0.1.18 起**所有宿主都不再门控**：宿主 part 一律保持渲染，相只作为内缩叠加层，
+    # 0.1.18 起**所有宿主都不再门控**：宿主 part 一律保持渲染，相只作为叠加层，
     # 因此片段不再产出 gates；键位保留为空列表（Java 侧对旧片段/旧包的 gate
     # 匹配继续兼容）。
     # 方案 C（0.2.0）起：不再有 16 条 `when{filling: redstone_N}` 的 part。
-    # 红石外壳与元件相由**按坐标发射**的动态模型提供，这里只追加一条**无条件** part：
+    # 0.2.5 起：材料相覆盖层也退出静态 part。片段只剩一条**无条件**动态部件，
+    # 保证第三方包覆盖宿主 blockstate 时相照常显示。
     #   - ≤1.21.1：`liquidphase:block/dynamic` 被自定义 UnbakedModel 接管，emitBlockQuads 里发几何；
     #   - 1.21.10+：该 part 是空模型，几何由包在 BlockStateModel 外层的动态模型发射。
-    fragment_parts = [{"when": when, "apply": {"model": model}} for value, model, when in overlays]
-    fragment_parts.append({"apply": {"model": DYNAMIC_MODEL}})
+    fragment_parts = [{"apply": {"model": DYNAMIC_MODEL}}]
 
-    for value, model, when in overlays:
-        parts.append({"when": when, "apply": {"model": model}})
     parts.append({"apply": {"model": DYNAMIC_MODEL}})
 
     fragment = {"parts": fragment_parts, "gates": []}

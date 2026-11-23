@@ -6,6 +6,7 @@ import net.minecraft.sounds.SoundEvent;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.block.SimpleWaterloggedBlock;
 import net.minecraft.world.level.block.state.BlockState;
@@ -19,9 +20,11 @@ import net.minecraft.world.level.material.Fluids;
  * <p>
  * 在 {@link PhaseCapable} 的熔岩分支之外补上原版含水语义：
  * <ul>
- *   <li>有相（{@code filling != none}）时拒绝水；</li>
- *   <li>无相时水走 {@code SimpleWaterloggedBlock} 的默认实现；</li>
- *   <li>红石/元件条目不影响水的判定（它们不占状态）。</li>
+ *   <li>有材料相（{@code filling != none}）时拒绝水；</li>
+ *   <li>无材料相时水走 {@code SimpleWaterloggedBlock} 的默认实现；</li>
+ *   <li>红石/元件条目（0.2.5 起）：<b>可冲落</b>——水会先把它冲掉（弹出对应物品），
+ *       然后正常充水，对齐原版"水冲掉红石粉/红石火把"的语义。判定走
+ *       {@link PhaseExtra#isWashable}，是实时的（以后新增可冲落种类不用改这里）。</li>
  * </ul>
  * 没有 {@code WATERLOGGED} 属性的宿主（传送门三件套）只实现 {@link PhaseCapable}，
  * 永远不会走到这里——这是 0.1.13 barrier 崩溃的根因防线。
@@ -37,10 +40,11 @@ public interface WaterloggedPhaseCapable extends PhaseCapable, SimpleWaterlogged
         if (!state.hasProperty(BlockStateProperties.WATERLOGGED)) {
             return false;
         }
-        if (PhaseHelper.getPhase(state) != Phase.NONE
-            || !PhaseExtra.isEmpty(PhaseExtras.get(level, pos))) {
+        if (PhaseHelper.getPhase(state) != Phase.NONE) {
             return false;
         }
+        // 0.2.5：可冲落的条目（红石相/元件）不阻止充水——真正冲落在 placeLiquid 里做，
+        // 探测阶段保持"未改变世界"（流体引擎会先 canPlaceLiquid 再 placeLiquid）。
         return SimpleWaterloggedBlock.super.canPlaceLiquid(level, pos, state, fluid);
     }
      *///?} elif 1.21.1 {
@@ -53,8 +57,7 @@ public interface WaterloggedPhaseCapable extends PhaseCapable, SimpleWaterlogged
         if (!state.hasProperty(BlockStateProperties.WATERLOGGED)) {
             return false;
         }
-        if (PhaseHelper.getPhase(state) != Phase.NONE
-            || !PhaseExtra.isEmpty(PhaseExtras.get(level, pos))) {
+        if (PhaseHelper.getPhase(state) != Phase.NONE) {
             return false;
         }
         return SimpleWaterloggedBlock.super.canPlaceLiquid(user, level, pos, state, fluid);
@@ -68,8 +71,7 @@ public interface WaterloggedPhaseCapable extends PhaseCapable, SimpleWaterlogged
         if (!state.hasProperty(BlockStateProperties.WATERLOGGED)) {
             return false;
         }
-        if (PhaseHelper.getPhase(state) != Phase.NONE
-            || !PhaseExtra.isEmpty(PhaseExtras.get(level, pos))) {
+        if (PhaseHelper.getPhase(state) != Phase.NONE) {
             return false;
         }
         return SimpleWaterloggedBlock.super.canPlaceLiquid(user, level, pos, state, fluid);
@@ -84,9 +86,13 @@ public interface WaterloggedPhaseCapable extends PhaseCapable, SimpleWaterlogged
         if (!state.hasProperty(BlockStateProperties.WATERLOGGED)) {
             return false;
         }
-        if (PhaseHelper.getPhase(state) != Phase.NONE
-            || !PhaseExtra.isEmpty(PhaseExtras.get(level, pos))) {
+        if (PhaseHelper.getPhase(state) != Phase.NONE) {
             return false;
+        }
+        // 0.2.5：水冲落可冲落的条目（红石相/元件），再照常充水。
+        // 放在这里而不是 canPlaceLiquid 里，是因为探测阶段应当无副作用。
+        if (level instanceof Level actualLevel && PhaseHelper.washOut(actualLevel, pos)) {
+            state = actualLevel.getBlockState(pos);
         }
         return SimpleWaterloggedBlock.super.placeLiquid(level, pos, state, fluidState);
     }

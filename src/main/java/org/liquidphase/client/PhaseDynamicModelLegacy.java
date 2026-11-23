@@ -67,7 +67,7 @@ public final class PhaseDynamicModelLegacy {
     }
 
     private static List<ResourceLocation> buildSubModelIds() {
-        List<ResourceLocation> ids = new ArrayList<>(48);
+        List<ResourceLocation> ids = new ArrayList<>(64);
         for (int power = 0; power < 16; power++) {
             ids.add(rl("block/redstone_phase_" + power));
         }
@@ -84,6 +84,11 @@ public final class PhaseDynamicModelLegacy {
         for (String suffix : new String[]{"", "_south", "_east", "_west", "_up", "_down"}) {
             ids.add(rl("block/element_observer" + suffix));
             ids.add(rl("block/element_observer" + suffix + "_on"));
+        }
+        // 材料相覆盖层（0.2.5）：黑曜石 + 冰 + 霜冰 4 档裂纹。
+        for (String overlay : new String[]{"phase_obsidian", "phase_ice",
+            "phase_frosted_0", "phase_frosted_1", "phase_frosted_2", "phase_frosted_3"}) {
+            ids.add(rl("block/" + overlay));
         }
         return ids;
     }
@@ -132,6 +137,8 @@ public final class PhaseDynamicModelLegacy {
         @Override
         public void emitBlockQuads(BlockAndTintGetter view, BlockState state, BlockPos pos,
                                    Supplier<RandomSource> random, RenderContext context) {
+            // 材料相覆盖层（0.2.5）：先发它，逐 quad 选图层（冰→TRANSLUCENT、黑曜石→CUTOUT）。
+            emitOverlay(state, context);
             int extra = PhaseExtras.get(view, pos);
             if (!ElementRenderSupport.hasGeometry(extra)) {
                 return;
@@ -163,6 +170,47 @@ public final class PhaseDynamicModelLegacy {
         @Override
         public void emitItemQuads(net.minecraft.world.item.ItemStack stack, Supplier<RandomSource> random,
                                   RenderContext context) {
+        }
+
+        // 材料相覆盖层（0.2.5）：把已烘焙的 phase_* 子模型的静态面按材质发出去，并逐 quad 选图层。
+        // 这里不用 emitBlockQuads：覆盖层是纯静态几何（不含 tint/AO 依赖），直接取 getQuads
+        // 逐面向 emitter 发射更简单，也避免把 null 世界传进去（子模型若走了需要
+        // BlockAndTintGetter 的路径会 NPE）。
+        // ≤1.21.1 的 FRAPI 通过 RenderMaterial 的 BlendMode 决定图层（Indigo 的
+        // BlockRenderInfo.effectiveRenderLayer 按 quad 取值，再按图层取独立缓冲）。
+        // 所以每个 quad 调一次 material(...) 即可——半透明冰与不透明宿主因此能各自正确显示。
+        private void emitOverlay(BlockState state, RenderContext context) {
+            String overlayId = ElementRenderSupport.overlayModelId(state);
+            if (overlayId == null) {
+                return;
+            }
+            BakedModel part = this.parts.get(rl(overlayId.substring("liquidphase:".length())));
+            if (part == null) {
+                return;
+            }
+            net.fabricmc.fabric.api.renderer.v1.material.RenderMaterial material =
+                overlayMaterial(ElementRenderSupport.overlayLayer(state));
+            net.fabricmc.fabric.api.renderer.v1.mesh.QuadEmitter emitter = context.getEmitter();
+            emitStatic(part, null, null, material, emitter);
+            for (Direction face : Direction.values()) {
+                emitStatic(part, state, face, material, emitter);
+            }
+        }
+
+        // 把 part 在某个方向上的静态面逐面翻制进 emitter，并打上材质。
+        // 1.19.4–1.21.1 的 BakedQuad 顶点打包在 int[] 里（getVertices）。
+        // fromVanilla(int[], int) 全版本都有（第二参 = 顶点数），材质再单独用 material(...)
+        // 打上去——1.19.4 没有 fromVanilla(int[], material, face) 这个重载。
+        private static void emitStatic(BakedModel part, BlockState state, Direction face,
+                                       net.fabricmc.fabric.api.renderer.v1.material.RenderMaterial material,
+                                       net.fabricmc.fabric.api.renderer.v1.mesh.QuadEmitter emitter) {
+            // 覆盖层子模型只有一条 element、没有变体/随机，用固定种子即可（结果与种子无关）。
+            for (BakedQuad quad : part.getQuads(state, face, RandomSource.create(42L))) {
+                emitter.fromVanilla(quad.getVertices(), 4);
+                emitter.material(material);
+                emitter.nominalFace(face);
+                emitter.emit();
+            }
         }
 
         @Override
@@ -208,6 +256,32 @@ public final class PhaseDynamicModelLegacy {
 
     // 1/64 方块：足够跨过像素边界取样，又不会落进相邻像素列。
     private static final float INWARD = 1.0F / 64.0F;
+
+    // 覆盖层用的两种渲染材质（0.2.5）：CUTOUT（不透明：黑曜石）与 TRANSLUCENT（半透明：冰/霜冰）。
+    // 懒加载并缓存：渲染器要到渲染初始化之后才可用，不能在类初始化时调用。
+    // 材质本身是全局只读对象，缓存安全。
+    private static net.fabricmc.fabric.api.renderer.v1.material.RenderMaterial overlayCutout;
+    private static net.fabricmc.fabric.api.renderer.v1.material.RenderMaterial overlayTranslucent;
+
+    private static net.fabricmc.fabric.api.renderer.v1.material.RenderMaterial overlayMaterial(
+            ElementRenderSupport.OverlayLayer layer) {
+        if (layer == ElementRenderSupport.OverlayLayer.TRANSLUCENT) {
+            if (overlayTranslucent == null) {
+                overlayTranslucent = net.fabricmc.fabric.api.renderer.v1.RendererAccess.INSTANCE.getRenderer()
+                    .materialFinder()
+                    .blendMode(net.fabricmc.fabric.api.renderer.v1.material.BlendMode.TRANSLUCENT)
+                    .find();
+            }
+            return overlayTranslucent;
+        }
+        if (overlayCutout == null) {
+            overlayCutout = net.fabricmc.fabric.api.renderer.v1.RendererAccess.INSTANCE.getRenderer()
+                .materialFinder()
+                .blendMode(net.fabricmc.fabric.api.renderer.v1.material.BlendMode.CUTOUT)
+                .find();
+        }
+        return overlayCutout;
+    }
 
     // 旋转并按列抬升一个元件小面（只用于中继器/比较器；侦测器已按朝向预烘焙）。
     // 子模型已经按 1/16 像素列切好，所以每个小面只取一个列高度、整面刚性平移

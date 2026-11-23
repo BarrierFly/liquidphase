@@ -5,6 +5,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
@@ -180,6 +181,42 @@ public final class PhaseHelper {
             probe = probe.setValue(BlockStateProperties.WATERLOGGED, false);
         }
         return probe;
+    }
+
+    /**
+     * {@return 充水时"冲落"该格的红石/元件条目（0.2.5）}
+     * <p>
+     * 语义对齐原版：水会把红石粉、红石火把这类附着件冲掉，然后占住那一格。这里的处理是
+     * 先按 {@link PhaseExtra#isWashable} 判定条目是否可冲落，可冲落则
+     * <b>弹出对应物品并清掉条目</b>（红石相掉红石粉、元件掉对应元件物品，
+     * 口径与活塞路径共用 {@link PhaseDrops#droppedItem}），然后调用方再正常充水。
+     * <p>
+     * 判定是实时的（读条目种类），所以以后新增"可冲落"的条目种类不用改这里。
+     *
+     * @return 是否真的冲落了东西（= 调用方可以继续充水）
+     */
+    public static boolean washOut(Level level, BlockPos pos) {
+        int extra = PhaseExtras.get(level, pos);
+        if (!PhaseExtra.isWashable(extra)) {
+            return false;
+        }
+        ItemStack drop = PhaseDrops.droppedItem(getPhase(level.getBlockState(pos)), extra);
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+        if (level instanceof ServerLevel serverLevel) {
+            if (!drop.isEmpty()) {
+                Block.popResource(serverLevel, pos, drop);
+            }
+            // 元件被冲走后按"元件消失"处理：通知前方面重算，否则输出面会挂着一个已经不存在的信号。
+            net.minecraft.core.Direction output = PhaseExtra.facing(extra).getOpposite();
+            serverLevel.updateNeighborsAt(pos, level.getBlockState(pos).getBlock());
+            serverLevel.updateNeighborsAt(pos.relative(output), level.getBlockState(pos).getBlock());
+        }
+        return true;
+    }
+
+    /** {@return 该格能否被水冲落（只看条目；材料相/水/熔岩不走这条路径）} */
+    public static boolean canBeWashedOut(BlockGetter level, BlockPos pos) {
+        return PhaseExtra.isWashable(PhaseExtras.get(level, pos));
     }
 
     /**

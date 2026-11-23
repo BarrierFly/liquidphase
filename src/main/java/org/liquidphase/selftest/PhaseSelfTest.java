@@ -81,6 +81,8 @@ public final class PhaseSelfTest {
             checkElementPlacementByPlayer(level, base);
             checkElementBlockAbsorption(level, base);
             checkElementSignalGating(level, base.offset(24, 1, 6));
+            checkElementTuning(level, base.offset(44, 1, 0));
+            checkWashOut(level, base.offset(44, 1, 8));
             checkElementAssets();
             checkPistonPhaseBehavior(level, base);
             checkRedstonePhaseInitialState(level, base);
@@ -856,9 +858,139 @@ public final class PhaseSelfTest {
         }
     }
 
+    /**
+     * 右键调档（0.2.5）：中继器延迟循环、比较器模式切换，并各自校验"无元件/不能建造时不动作"。
+     */
+    private static void checkElementTuning(ServerLevel level, BlockPos origin) {
+        BlockState slab = Blocks.SMOOTH_STONE_SLAB.defaultBlockState();
+        net.minecraft.server.level.ServerPlayer player = liquidphase$fakePlayer(level);
+        // 走真实玩家手势（gameMode.useItemOn）：这样才覆盖 ElementTuningMixin 的注入链路，
+        // 直接调 ElementBlocks.tryTune 会绕过交互层（0.2.2 的教训）。
+        // (1) 中继器：1→2→3→4→1
+        BlockPos repeaterPos = origin.offset(0, 0, 0);
+        level.setBlockAndUpdate(repeaterPos, slab);
+        assertTrue("repeater can be placed for tuning test",
+            ElementBlocks.place(level, repeaterPos, slab, PhaseExtra.Kind.REPEATER, Direction.NORTH));
+        java.util.List<Integer> delays = new java.util.ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            delays.add(PhaseExtra.delayTicks(PhaseExtras.get(level, repeaterPos)));
+            assertTrue("right-clicking a repeater host cycles its delay (round " + i + ")",
+                liquidphase$tuneGesture(level, player, repeaterPos));
+        }
+        assertTrue("repeater delay cycles 1..4 then wraps (got " + delays + ")",
+            delays.equals(java.util.Arrays.asList(1, 2, 3, 4, 1)));
+
+        // (2) 比较器：compare ↔ subtract
+        BlockPos comparatorPos = origin.offset(1, 0, 0);
+        level.setBlockAndUpdate(comparatorPos, slab);
+        assertTrue("comparator can be placed for tuning test",
+            ElementBlocks.place(level, comparatorPos, slab, PhaseExtra.Kind.COMPARATOR, Direction.NORTH));
+        assertTrue("comparator starts in compare mode",
+            !PhaseExtra.subtractMode(PhaseExtras.get(level, comparatorPos)));
+        assertTrue("right-clicking a comparator host toggles its mode",
+            liquidphase$tuneGesture(level, player, comparatorPos));
+        assertTrue("comparator switched to subtract mode",
+            PhaseExtra.subtractMode(PhaseExtras.get(level, comparatorPos)));
+        assertTrue("right-clicking a comparator host toggles back",
+            liquidphase$tuneGesture(level, player, comparatorPos));
+        assertTrue("comparator switched back to compare mode",
+            !PhaseExtra.subtractMode(PhaseExtras.get(level, comparatorPos)));
+
+        // (3) 反向：侦测器不可调（手势不该改动任何条目字段）；没有条目的格子也不可调。
+        BlockPos observerPos = origin.offset(2, 0, 0);
+        level.setBlockAndUpdate(observerPos, slab);
+        ElementBlocks.place(level, observerPos, slab, PhaseExtra.Kind.OBSERVER, Direction.NORTH);
+        int observerBefore = PhaseExtras.get(level, observerPos);
+        assertTrue("observer is not tunable", !ElementBlocks.tunable(observerBefore));
+        liquidphase$tuneGesture(level, player, observerPos);
+        assertTrue("right-clicking an observer host changes nothing",
+            PhaseExtras.get(level, observerPos) == observerBefore);
+        BlockPos plainPos = origin.offset(3, 0, 0);
+        level.setBlockAndUpdate(plainPos, slab);
+        assertTrue("a cell without an element is not tunable",
+            !ElementBlocks.canTune(level, plainPos) && !liquidphase$tuneGesture(level, player, plainPos));
+
+        // (4) 不抢点击：手持方块右键仍然是放置（不能变成调档）。
+        BlockPos placePos = origin.offset(4, 0, 0);
+        level.setBlockAndUpdate(placePos, slab);
+        ElementBlocks.place(level, placePos, slab, PhaseExtra.Kind.REPEATER, Direction.NORTH);
+        int delayBefore = PhaseExtra.delayTicks(PhaseExtras.get(level, placePos));
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, new ItemStack(Blocks.OAK_PLANKS));
+        liquidphase$rawUseOn(level, player, placePos);
+        assertTrue("a block in hand still places instead of tuning",
+            PhaseExtra.delayTicks(PhaseExtras.get(level, placePos)) == delayBefore);
+
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+        for (BlockPos pos : new BlockPos[]{repeaterPos, comparatorPos, observerPos, plainPos, placePos}) {
+            PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+            level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        }
+    }
+
+    /** 空手右键一次 {@code pos}（真实玩家链路），返回该格的旁路条目是否发生变化。 */
+    private static boolean liquidphase$tuneGesture(ServerLevel level,
+                                                  net.minecraft.server.level.ServerPlayer player,
+                                                  BlockPos pos) {
+        int before = PhaseExtras.get(level, pos);
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+        liquidphase$rawUseOn(level, player, pos);
+        return PhaseExtras.get(level, pos) != before;
+    }
+
+    /** 真实玩家右键一次 {@code pos} 的顶面（客户端预测 + 服务端执行同链）。 */
+    private static void liquidphase$rawUseOn(ServerLevel level,
+                                            net.minecraft.server.level.ServerPlayer player,
+                                            BlockPos pos) {
+        Vec3 hitVec = new Vec3(pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5);
+        BlockHitResult hit = new BlockHitResult(hitVec, Direction.UP, pos, false);
+        player.gameMode.useItemOn(player, level, player.getMainHandItem(),
+            net.minecraft.world.InteractionHand.MAIN_HAND, hit);
+    }
+
+    /**
+     * 充水冲落（0.2.5）：可冲落的条目（红石相/元件）在充水时被冲掉并让位给水；
+     * 只读判定 {@link PhaseHelper#canBeWashedOut} 与动作 {@link PhaseHelper#washOut} 一致。
+     */
+    private static void checkWashOut(ServerLevel level, BlockPos origin) {
+        BlockState slab = Blocks.SMOOTH_STONE_SLAB.defaultBlockState();
+        // 红石相
+        BlockPos redstonePos = origin.offset(0, 0, 0);
+        level.setBlockAndUpdate(redstonePos, slab);
+        org.liquidphase.redstone.RedstoneBlocks.setRedstonePhase(level, redstonePos, 0);
+        assertTrue("redstone entry is reported washable",
+            PhaseHelper.canBeWashedOut(level, redstonePos));
+        assertTrue("washing a redstone entry succeeds", PhaseHelper.washOut(level, redstonePos));
+        assertTrue("redstone entry is gone after washing",
+            PhaseExtra.isEmpty(PhaseExtras.get(level, redstonePos)));
+
+        // 元件（中继器）
+        BlockPos elementPos = origin.offset(1, 0, 0);
+        level.setBlockAndUpdate(elementPos, slab);
+        ElementBlocks.place(level, elementPos, slab, PhaseExtra.Kind.REPEATER, Direction.NORTH);
+        assertTrue("element entry is reported washable",
+            PhaseHelper.canBeWashedOut(level, elementPos));
+        assertTrue("washing an element entry succeeds", PhaseHelper.washOut(level, elementPos));
+        assertTrue("element entry is gone after washing",
+            PhaseExtra.isEmpty(PhaseExtras.get(level, elementPos)));
+
+        // 反向：材料相不可冲落；空条目不冲落。
+        BlockPos icePos = origin.offset(2, 0, 0);
+        level.setBlockAndUpdate(icePos, PhaseHelper.withPhase(slab, Phase.ICE));
+        assertTrue("a material (ice) filling is not washable",
+            !PhaseHelper.canBeWashedOut(level, icePos) && !PhaseHelper.washOut(level, icePos));
+        BlockPos emptyPos = origin.offset(3, 0, 0);
+        level.setBlockAndUpdate(emptyPos, slab);
+        assertTrue("an empty cell is not washable",
+            !PhaseHelper.canBeWashedOut(level, emptyPos) && !PhaseHelper.washOut(level, emptyPos));
+
+        for (BlockPos pos : new BlockPos[]{redstonePos, elementPos, icePos, emptyPos}) {
+            PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+            level.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
+        }
+    }
+
     /** 元件子模型/贴图的产物断言：只含要求的部位，且侦测器没有整面。 */
-    private static void checkElementAssets() {
-        String repeater = liquidphase$resource(
+    private static void checkElementAssets() {        String repeater = liquidphase$resource(
             "/assets/liquidphase/models/block/element_repeater_1tick_on.json");
         assertTrue("element repeater model exists", repeater != null);
         if (repeater != null) {
@@ -1705,28 +1837,24 @@ public final class PhaseSelfTest {
                     && !pane.contains("liquidphase:block/redstone_phase_"));
         }
 
-        // ---- regression for the 0.1.11 bugs ----
-        // 整格宿主的相用**内缩**覆盖层（0.1.18 起）：宿主模型是 0..16 整格，
-        // 若相也用 0..16 会与之共面 z-fighting，含相时树叶与相随机互相遮挡。
-        // 内缩后树叶稳定在外层、相从贴图缝隙透出，与含熔岩的观感一致。
-        String poplar = liquidphase$resource("/assets/minecraft/blockstates/orange_poplar_leaves.json");
-        if (poplar != null) {
-            assertTrue("full-cube host (orange poplar leaves) uses the inset overlay, not the full one",
-                poplar.contains("liquidphase:block/phase_ice")
-                    && !poplar.contains("phase_ice_full"));
-            assertTrue("full-cube host keeps its own model visible (no phase gating on the host part)",
-                poplar.contains("minecraft:block/orange_poplar_leaves")
-                    && hostPartsCarryNoPhaseCondition(poplar));
+        // 0.2.5 起，材料相覆盖层（黑曜石/冰/霜冰）也不再写进 blockstate：它由动态模型
+        // 按状态发射，从而可以**逐 quad** 选渲染图层（冰 alpha=190 必须 TRANSLUCENT、
+        // 黑曜石不透明走 CUTOUT），宿主几何保持原图层。静态 part 只能整块状态一个图层，
+        // 会把半透明冰画成死白、把玻璃宿主上的黑曜石拖进排序层。
+        // 所以这里改为反向断言：任何 blockstate 都**不该**再引用静态覆盖层模型。
+        java.util.List<String> staticOverlay = new java.util.ArrayList<>();
+        for (String id : new String[]{"oak_stairs", "oak_leaves", "glass_pane", "stone_slab",
+            "orange_poplar_leaves"}) {
+            String json = liquidphase$blockState("minecraft:" + id);
+            if (json != null && (json.contains("liquidphase:block/phase_obsidian")
+                || json.contains("liquidphase:block/phase_ice")
+                || json.contains("liquidphase:block/phase_frosted_"))) {
+                staticOverlay.add(id);
+            }
         }
-        // 树叶同样：宿主 part 无条件、相用内缩覆盖层。
-        assertTrue("leaves host part is unconditional and the overlay is inset",
-            leaves != null
-                && leaves.contains("\"model\":\"minecraft:block/oak_leaves\"")
-                && !leaves.contains("phase_ice_full"));
-        // 反向：部分覆盖的宿主必须留在内缩路径（整格替换会把它的空隙吃掉）。
-        String stairsRes = liquidphase$resource("/assets/minecraft/blockstates/oak_stairs.json");
-        assertTrue("partial host (oak stairs) keeps the inset overlay",
-            stairsRes != null && !stairsRes.contains("phase_ice_full"));
+        assertTrue("no blockstate references a static material-phase overlay any more "
+            + "(overlays are emitted by the dynamic model so each quad picks its own layer; "
+            + "broken: " + staticOverlay + ")", staticOverlay.isEmpty());
         // (a) The inset phase overlay / outer shell must NOT carry cullface: vanilla cullface
         // compares "does the neighbour cover the block-boundary face" and misfires against
         // partial neighbours (slabs/stairs), eating faces the overlay does cover.
@@ -2610,16 +2738,23 @@ public final class PhaseSelfTest {
             }
             clearFluidTicks(level, pos);
 
-            // 水作为写入材料：互斥不变——只有空宿主接受水，任何含相宿主拒绝（0.1.17 决策）。
+            // 水作为写入材料：材料相互斥不变——只有空宿主接受水，含材料相的宿主拒绝（0.1.17 决策）。
+            // 0.2.5 起**可冲落的条目**（红石相/元件）是例外：水会先冲掉条目（弹出物品），
+            // 然后正常含水，对齐原版"水冲掉红石粉/红石火把"。
             liquidphase$setCurrent(level, pos, currentState, currentName);
+            boolean washableEntry = PhaseExtra.isWashable(PhaseExtras.get(level, pos));
             boolean waterAccepted = ((net.minecraft.world.level.block.LiquidBlockContainer) hostBlock)
                 .placeLiquid(level, pos, level.getBlockState(pos), Fluids.WATER.getSource(false));
-            assertTrue("water stays on the container path and only enters empty hosts for "
-                    + currentName,
-                waterAccepted == currentName.equals("empty"));
+            assertTrue("water stays on the container path; it enters empty hosts and washes out "
+                    + "washable entries (redstone/element) only, for " + currentName,
+                waterAccepted == (currentName.equals("empty") || washableEntry));
             if (waterAccepted) {
-                assertTrue("water waterlogs the empty host", level.getBlockState(pos)
+                assertTrue("water waterlogs the host after filling/washing it", level.getBlockState(pos)
                     .getValue(BlockStateProperties.WATERLOGGED));
+                if (washableEntry) {
+                    assertTrue("a washed-out entry is really gone for " + currentName,
+                        PhaseExtra.isEmpty(PhaseExtras.get(level, pos)));
+                }
             }
             PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
             level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
@@ -2739,8 +2874,8 @@ public final class PhaseSelfTest {
             slabJson.contains("\"type\":\"double\"") && !slabJson.contains("\"type\":\"double\",\"filling\""));
         assertTrue("merged slab keeps the bottom/top variants ungated",
             slabJson.contains("\"type\":\"bottom\"") && !slabJson.contains("\"type\":\"bottom\",\"filling\""));
-        assertTrue("merged slab appends the inset overlays and the dynamic part",
-            slabJson.contains("liquidphase:block/phase_ice")
+        assertTrue("merged slab appends the dynamic part and no static material-phase overlay",
+            !slabJson.contains("liquidphase:block/phase_ice")
                 && !slabJson.contains("phase_ice_full")
                 && liquidphase$hasUnconditionalDynamicPart(slabJson)
                 && !slabJson.contains("liquidphase:block/redstone_phase_"));
@@ -2760,8 +2895,8 @@ public final class PhaseSelfTest {
             !stairsJson.contains("\"filling\":\"none|lava|"));
         assertTrue("inset host keeps its variant keys after variants→multipart conversion",
             stairsJson.contains("\"facing\":\"east\"") && stairsJson.contains("\"half\":\"bottom\""));
-        assertTrue("inset overlays and dynamic part are appended",
-            stairsJson.contains("liquidphase:block/phase_obsidian")
+        assertTrue("merged host appends the dynamic part only (overlays come from the dynamic model)",
+            !stairsJson.contains("liquidphase:block/phase_obsidian")
                 && liquidphase$hasUnconditionalDynamicPart(stairsJson)
                 && !stairsJson.contains("liquidphase:block/redstone_phase_"));
 
@@ -2783,9 +2918,9 @@ public final class PhaseSelfTest {
                 && leavesJson.contains("\"distance\":\"3\",\"persistent\":\"true\"")
                 && !leavesJson.contains("\"persistent\":\"false\",\"filling\"")
                 && !leavesJson.contains("\"persistent\":\"true\",\"filling\""));
-        assertTrue("full-cube host uses the inset phase material and the dynamic part "
-                + "(no z-fighting with its 0..16 model)",
-            leavesJson.contains("liquidphase:block/phase_ice")
+        assertTrue("full-cube host appends the dynamic part only "
+                + "(overlay layer is per-quad, no z-fighting with its 0..16 model)",
+            !leavesJson.contains("liquidphase:block/phase_ice")
                 && !leavesJson.contains("phase_ice_full")
                 && liquidphase$hasUnconditionalDynamicPart(leavesJson)
                 && !leavesJson.contains("liquidphase:block/redstone_phase_"));
@@ -2841,12 +2976,13 @@ public final class PhaseSelfTest {
     }
 
     /**
-     * 台阶的相渲染（0.1.18 起统一）：所有变体都用**内缩覆盖层**，宿主 part 一律保持渲染。
+     * 台阶的相渲染（0.1.18 起统一内缩；0.2.5 起覆盖层改由动态模型发射）。
      * <p>
      * 0.1.13–0.1.17 按变体拆分（type=double 换 phase_*_full 并屏蔽宿主）。问题有两个：
      * 屏蔽宿主让双台阶含固相变成"一整块冰/黑曜石"，与含熔岩（流体渲染、宿主照常可见）不一致；
      * phase_*_full 与 double 变体的整块模型共面，会 z-fighting。
-     * 现在双台阶与半砖外观一致，宿主始终可见。
+     * 0.2.5 起材料相覆盖层由动态模型按状态发射（逐 quad 选图层），blockstate 里连静态
+     * 覆盖层 part 也不再有——所以这里只断言"宿主变体全部常驻、没有静态覆盖层"。
      */
     private static void checkSlabVariantRendering() {
         String slab = liquidphase$resource("/assets/minecraft/blockstates/stone_slab.json");
@@ -2854,7 +2990,7 @@ public final class PhaseSelfTest {
         if (slab == null) {
             return;
         }
-        assertTrue("double slab uses the inset phase material (not the full one)",
+        assertTrue("double slab uses no full-cube phase material",
             !slab.contains("phase_ice_full") && !slab.contains("phase_obsidian_full"));
         // 三个阶段变体（bottom/double/top）都保持宿主 part 常驻，不带相条件。
         assertTrue("every slab variant keeps its host part ungated",
@@ -2864,10 +3000,10 @@ public final class PhaseSelfTest {
                 && !slab.contains("\"type\":\"double\",\"filling\"")
                 && !slab.contains("\"type\":\"bottom\",\"filling\"")
                 && !slab.contains("\"type\":\"top\",\"filling\""));
-        // 内缩覆盖层：条件只有 filling，不再按变体拆分（也没有 "!double" 取反）。
-        assertTrue("the inset overlay is unconditional on slab variant (only filling gates it)",
-            slab.contains("{\"when\":{\"filling\":\"obsidian\"}")
-                && !slab.contains("!double"));
+        // 0.2.5：静态覆盖层 part（按 filling 门控）已退役，覆盖层由动态模型发射。
+        assertTrue("no static material-phase overlay part is generated any more",
+            !slab.contains("{\"when\":{\"filling\":\"obsidian\"}")
+                && !slab.contains("liquidphase:block/phase_obsidian"));
         // 反向：部分覆盖宿主（楼梯）不应突然获得整格层（现有断言已在 checkRedstoneRenderParts 覆盖）。
     }
 

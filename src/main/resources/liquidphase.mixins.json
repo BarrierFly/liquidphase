@@ -26,6 +26,7 @@
     "LevelStorageMixin",
     "LevelChunkExtraMixin",
     "ElementShapeUpdateMixin",
+    "ElementTuningMixin",
     "PhaseRenderShapeMixin",
     "PistonBaseBlockMixin",
     "PistonBaseBlockInvoker",

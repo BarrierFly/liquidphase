@@ -26,7 +26,6 @@ import org.liquidphase.phase.PhaseExtra;
 import org.liquidphase.phase.PhaseExtras;
 import org.liquidphase.phase.PhaseHelper;
 import org.liquidphase.redstone.RedstoneBlocks;
-
 /**
  * 元件相（中继器 / 比较器 / 侦测器）的逻辑。
  * <p>
@@ -141,7 +140,9 @@ public final class ElementBlocks {
         if (shape == null || shape.isEmpty()) {
             return 0.0;
         }
-        double top = shape.max(Direction.Axis.Y, localX, localZ);
+        // VoxelShape.max(Y, a, b) 的坐标参数顺序是 (z, x)，不是 (x, z)（0.2.5 修，见
+        // ElementRenderSupport.columnTop 的注释）；单点查询同样必须换序。
+        double top = shape.max(Direction.Axis.Y, localZ, localX);
         if (top == Double.NEGATIVE_INFINITY) {
             return 0.0;
         }
@@ -165,7 +166,10 @@ public final class ElementBlocks {
         }
         for (int i = 0; i < 16; i++) {
             for (int j = 0; j < 16; j++) {
-                double top = shape.max(Direction.Axis.Y, (i + 0.5) / 16.0, (j + 0.5) / 16.0);
+                // (z, x) 顺序，同 ElementRenderSupport.columnTop（0.2.5 修）。
+                // 这里 16×16 对称采样，换序不改变"是否存在空腔列"的结论，
+                // 但保持与采样口径一致，避免以后改成非对称采样时再次踩坑。
+                double top = shape.max(Direction.Axis.Y, (j + 0.5) / 16.0, (i + 0.5) / 16.0);
                 if (top == Double.NEGATIVE_INFINITY || top < MIN_CAVITY) {
                     return true;
                 }
@@ -557,6 +561,78 @@ public final class ElementBlocks {
     /** 随机源占位（比较器/中继器计划刻不需要随机数）。 */
     public static RandomSource unusedRandom(ServerLevel level) {
         return level.getRandom();
+    }
+
+    // ------------------------------------------------------------------
+    // 右键调档（0.2.5）
+    // ------------------------------------------------------------------
+
+    /**
+     * {@return 该条目是否支持"右键调档"}（中继器调延迟、比较器切换模式）
+     */
+    public static boolean tunable(int extra) {
+        PhaseExtra.Kind kind = PhaseExtra.kind(extra);
+        return kind == PhaseExtra.Kind.REPEATER || kind == PhaseExtra.Kind.COMPARATOR;
+    }
+
+    /** {@return 该格是否有可调档的元件（中继器/比较器）} */
+    public static boolean canTune(BlockGetter level, BlockPos pos) {
+        return tunable(PhaseExtras.get(level, pos));
+    }
+
+    /**
+     * 交互层入口（0.2.5）：右键可调档元件的宿主 → 调一档。
+     * <p>
+     * 只在"物品自身没有消费这次点击"时才应该被调用（见
+     * {@code ElementTuningMixin}）：原版里中继器/比较器的 {@code useWithoutItem}
+     * 就是这么被调到的，所以手持方块右键仍然是放置，手持元件仍然是装配。
+     *
+     * @return 是否处理了这次交互（{@code true} = 调用方应返回成功）
+     */
+    public static boolean tryTune(Level level, BlockPos pos, BlockState host, Player player) {
+        int extra = PhaseExtras.get(level, pos);
+        return cycleSetting(level, pos, host, extra, player);
+    }
+
+    /**
+     * 右键调一档（0.2.5）：镜像原版 {@code RepeaterBlock#useWithoutItem} 与
+     * {@code ComparatorBlock#useWithoutItem} 的语义。
+     * <ul>
+     *   <li>中继器：{@code DELAY} 循环 1→2→3→4→1；</li>
+     *   <li>比较器：{@code MODE} 在 compare/subtract 之间切换，播 {@code COMPARATOR_CLICK}，
+     *       并立即刷新输出（原版 {@code refreshOutputState}）。</li>
+     * </ul>
+     * 两者都先看 {@code abilities.mayBuild}（与原版一致：不能建造的玩家点了没反应）。
+     *
+     * @return 是否真的调了（{@code false} = 该格没有可调元件/玩家不能建造）
+     */
+    public static boolean cycleSetting(Level level, BlockPos pos, BlockState host, int extra, Player player) {
+        if (!tunable(extra) || player == null || !player.getAbilities().mayBuild) {
+            return false;
+        }
+        PhaseExtra.Kind kind = PhaseExtra.kind(extra);
+        if (kind == PhaseExtra.Kind.REPEATER) {
+            PhaseExtras.set(level, pos, PhaseExtra.withDelay(extra, (PhaseExtra.delay(extra) + 1) & 0x3));
+            return true;
+        }
+        boolean subtract = !PhaseExtra.subtractMode(extra);
+        PhaseExtras.set(level, pos, PhaseExtra.withMode(extra, subtract));
+        level.playSound(null, pos, SoundEvents.COMPARATOR_CLICK, SoundSource.BLOCKS,
+            0.3F, subtract ? 0.55F : 0.5F);
+        if (level instanceof ServerLevel serverLevel) {
+            // 镜像原版 refreshOutputState：切换模式后立即按新算式刷新输出。
+            int current = PhaseExtras.get(serverLevel, pos);
+            int output = comparatorOutput(serverLevel, pos, host, current);
+            if (output != PhaseExtra.power(current) || PhaseExtra.subtractMode(current)) {
+                boolean turnOn = shouldTurnOn(serverLevel, pos, host, current);
+                int updated = PhaseExtra.withPower(PhaseExtra.withPowered(current, turnOn), output);
+                if (updated != current) {
+                    PhaseExtras.set(serverLevel, pos, updated);
+                }
+                notifyOutput(serverLevel, pos, host, current);
+            }
+        }
+        return true;
     }
 
     public static int comparatorOutputForTest(ServerLevel level, BlockPos pos, BlockState host, int extra) {

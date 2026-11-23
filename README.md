@@ -15,6 +15,7 @@
 | 0.2.2 | 同上 | 修复：**潜行右键宿主放中继器/比较器/侦测器从未生效**——装配取宿主用了 `getClickedPos()`，而原版对不可替换方块把它指向宿主旁的空气格（真实点击回归 `AssemblyInteractionTest` 抓到） |
 | 0.2.3 | 同上 | **元件装配改为普通右键**（潜行右键回归原版"放在宿主上面一格"）；**真实元件方块是相材料格**（宿主放进/写进/落进元件方块格 → 吸收成元件相并继承朝向/延迟/模式/锁定/供电）；**清含水**：往含水宿主写红石/元件条目时水被清掉（一格只表达一个被含相）；**装配门控合一**：元件与红石相共用同一条可写入判定（熔岩相宿主可以贴元件），写条目清熔岩相；**吸收统一**：宿主放进任何相材料格（线/冰/霜冰/黑曜石/熔岩源）都走"可替换 + placeBlock 捕获"一条路径（删 `PlacementMixin` 与落点拦截）；**活塞**：黑曜石填充相一律推不动，相一律不随活塞移动——推动覆盖/破坏列表摧毁时弹出物品（固相掉对应物品、冰/霜冰无物品即消失、熔岩相按液体物品开关掉熔岩物品或消失、红石相掉红石粉、元件掉物品），粘性拉动/剩余清格时任意填充相实体化留在原位 |
 | 0.2.4 | 同上 | **元件按规划重做渲染与 I/O**：中继器/比较器只渲染杆和红条（逐 1/16 像素列搭在宿主顶面，无 2px 底板/锁存条）；侦测器只渲染 16×16 五官/输出口（六朝向预烘焙、固定在方块内、画在宿主相应表面外侧一层）；输入/输出/比较器侧向输入/中继器锁存/侦测器观察面都按宿主相应面是否露出判定；红石线可连到元件宿主；中继器短脉冲按原版 tick 语义；侦测器允许上下朝向 |
+| 0.2.5 | 同上 | **坐标换算修正**：元件逐列抬升取宿主顶面高度时，`VoxelShape.max(axis, a, b)` 的坐标参数实际是 (z, x)，此前按 (x, z) 传，导致 x/z 不对称宿主（栅栏柱、台阶、楼梯、墙）上的杆/红条错位；**两相透明度分开**：材料相覆盖层改由动态模型发射，每个 quad 各自选图层（冰/霜冰→TRANSLUCENT、黑曜石→CUTOUT），不再一刀切整块状态，半透明冰不再被画成死白、玻璃宿主上的黑曜石不再被拖进排序层；**右键调档**：宿主没有使用键交互时，右键可调所含中继器延迟（1→2→3→4→1）/比较器模式（比较↔减法）；**充水冲落**：水把可冲落的填充相（红石相/元件，判定为实时类型判断）冲落成对应物品后正常充水 |
 
 ---
 
@@ -28,6 +29,14 @@
   
   > 台阶/蜡烛/营火/干化恶魂等自己覆写了 `placeLiquid` 的宿主由专门 mixin 接管熔岩分支：
   > 熔岩桶右键、相邻熔岩按形状灌入、放置吸收都可用。见 `docs/host-coverage-audit.md` §4.3。
+- **充水冲落**（0.2.5）：水会冲掉宿主里的**可冲落填充相**——红石相掉红石粉、元件掉对应元件物品
+  ——然后照常含水，对齐原版"水冲掉红石粉/红石火把"。是否可冲落是按条目种类**实时判断**的
+  （`PhaseExtra.isWashable`），以后新增可冲落种类不用改水的判定。材料相（冰/霜冰/黑曜石/熔岩）
+  不受影响：仍按"水不能直接替换材料相"的既有规则处理。
+- **右键调档**（0.2.5）：宿主自己没有使用键交互时，右键它就能调所含元件档位——
+  中继器延迟 1→2→3→4→1、比较器在比较/减法之间切换。宿主自带使用键交互的（箱子、告示牌、
+  活板门、光源方块……）保持原版行为；手持方块右键仍是放置、手持元件右键仍是装配。
+  **潜行右键**不受影响。
 - **凝固**：含熔岩方块旁边出现水 → 相变为**含黑曜石**，伴随嘶声粒子。
 - **含冰 / 含霜冰**：雨天低温下"含水的方块"会冻结成含冰相（原版只会冻水源方块，本 mod 把判定扩展到宿主）；
   冰相在光照足够时融化回水相；下界/水蒸发维度融化时直接消失。
@@ -46,6 +55,8 @@
   墙悬挂告示牌、脚手架、`sculk_shrieker`、`big_dripleaf`。
 - **直接挖相**：准星指向相露出的部分时，挖掘速度与掉落按相材质计算（黑曜石需钻石镐；冰/霜冰不精准采集则化水，霜冰无物品）。
 - **所有宿主的相都是"内缩叠加层"**：宿主模型始终照常渲染，相材质是一层比方块小 0.25px 的立方体。
+  覆盖层由动态模型按状态发射，**每个面各自选渲染图层**（0.2.5）：冰/霜冰走半透明层、
+  黑曜石走 cutout 层，所以"一相有透明度、一相不透明"能同时正确显示。
 - **红石相 / 元件相**：红石相在宿主表面显示一层按功率着色的红石外壳；**普通右键**宿主
   （不再需要潜行；潜行右键保留原版"放在宿主上面一格"），手持中继器 / 比较器 / 侦测器
   可把元件贴到宿主表面。真实元件方块本身也是"相材料格"：把宿主放进元件所在格、
@@ -115,6 +126,9 @@
    → 元件贴到宿主表面。**潜行右键**仍是原版"把元件放在宿主上面一格"（需要真实元件方块时用它）。
    左键元件先拆元件并掉落对应物品，宿主保留；元件只能放在顶面有空腔的宿主上
    （整格方块、上半砖放不下）。
+   装好之后再**普通右键**（宿主本身没有使用键交互时）可以调档：
+   中继器延迟 1→2→3→4→1、比较器在比较/减法之间切换。
+   给含红石相/元件的宿主**充水**时，水会把它们冲落成对应物品（红石粉/元件物品）后正常含水。
 8. 拿空桶**左键**水锅/熔岩锅 → 整锅拆空、掉落"水"/"熔岩"物品；**锅本身保留**。
    只有满锅才能取（水锅必须是 3 级）；右键对着锅不再取水。
 
@@ -207,7 +221,7 @@
   （`Unsupported class file major version 69`），这不是本 mod 的问题。用 JDK 25 时请把 loader
   升到较新版本，或改用 JDK 17/21 启动。
 
-### 已知限制（0.2.4）
+### 已知限制（0.2.5）
 
 1. **旧存档不兼容**：`filling` 的取值域已变更（8 个材料类别），旧状态无法映射。
 2. **元件只能放在有顶面空腔的宿主**：下半砖/下半楼梯等可以（足迹内存在 `top < 1` 的列），
@@ -218,6 +232,8 @@
 4. **中继器 `locked` 只做逻辑锁定**，不显示原版的锁形。
 5. **1.19.4–1.21.11 所有相宿主方块（所有状态）都走 CUTOUT**：红石外壳是透明底贴图，
    因此失去原版 SOLID 的 mipmap（视觉/性能取舍）；26.3 由贴图透明度自动推导。
+   材料相覆盖层**不受这条影响**：它由动态模型逐 quad 选图层（冰/霜冰 TRANSLUCENT、
+   黑曜石 CUTOUT），所以半透明相与不透明相能各自正确显示。
 6. **含固相的传送门会被整格碰撞堵住**：下界门/末地门/末地折跃门都是相容宿主，
    冰/霜冰/黑曜石相按通用规则给整格碰撞。
 7. **Sodium/光影**：渲染走 Fabric Rendering API（Indigo），未承诺 Sodium 兼容。
@@ -232,6 +248,9 @@
     与宿主露出的侧脸重叠（被遮住的部分本来就不可见）。
 12. **元件 I/O 的"露出"是整面判定**：`Block.isFaceFull` 为 false 即视为露出（与红石相
     同一口径）；部分被宿主覆盖的面仍可作为输入/输出面。
+13. **右键调档只对"没有使用键交互"的宿主生效**：箱子/告示牌/活板门/光源方块等自带交互的
+    宿主右键仍是原版行为（要给这些宿主调档，请先拆下元件再装回去）。
+    调档只作用于中继器和比较器；侦测器没有可调参数。
 
 ## English
 
@@ -248,6 +267,7 @@ One block = solid phase (the block itself) + at most one contained phase.
 | 0.2.2 | same | Fix: **sneak-placing repeaters/comparators/observers into hosts never fired** — assembly looked the host up via `getClickedPos()`, which vanilla points at the air cell next to a non-replaceable host (caught by the new real-click regression `AssemblyInteractionTest`) |
 | 0.2.3 | same | **Element assembly is now a plain right-click** (sneak-click restores vanilla "place on top of the host"); **real element blocks are phase-material cells** (host placed into / setBlock'd into / falling into a repeater-comparator-observer cell absorbs it with facing/delay/mode/locked/powered); **water clearing**: writing a redstone/element entry onto a waterlogged host removes the water (one contained phase per cell); **unified assembly gate**: elements share the same acceptability check as dust (lava-filled hosts accept elements), writing an entry clears a lava phase; **unified absorption**: placing a host into any phase-material cell (wire/ice/frosted ice/obsidian/lava source) goes through one replaceable-cell + placeBlock-capture path (`PlacementMixin` and the place-time intercept removed); **pistons**: obsidian-filled hosts are always unpushable, phases never travel with pistons — pushed-over/destroyed cells pop the phase as an item (obsidian drops obsidian, ice/frosted ice vanish, lava drops its liquid item with feature 3 on or vanishes, redstone pops dust, elements drop their item), sticky-pull/clearing materializes any filling in place |
 | 0.2.4 | same | **Elements re-done per the spec (rendering + I/O)**: repeaters/comparators draw only rods and the red bar (per 1/16-pixel column on the host top; no 2px base or lock bar); observers draw only the 16×16 face/port cutouts (six facings pre-baked, fixed in the block, drawn on the outer layer of the host surface); input/output, comparator side inputs, repeater locking and the observer detection face are gated by host-face exposure; redstone wire connects to element hosts; repeater short pulses follow vanilla tick semantics; observers allow up/down facings |
+| 0.2.5 | same | **Coordinate fix**: lifting rods/bars onto the host surface sampled `VoxelShape.max(axis, a, b)` with `(x, z)`, but its two coordinates are actually `(z, x)`, so on x/z-asymmetric hosts (fence posts, slabs, stairs, walls) the element geometry was misplaced; **per-phase transparency**: the material-phase overlay is now emitted by the dynamic model, each quad picking its own layer (ice/frosted ice → TRANSLUCENT, obsidian → CUTOUT) instead of one layer for the whole state, so translucent ice is no longer drawn opaque-white and obsidian on a translucent host is no longer dragged into the sorted layer; **right-click tuning**: hosts without their own use-key interaction cycle the contained repeater's delay (1→2→3→4→1) or the comparator's mode (compare↔subtract) on right-click; **water flushing**: water flushes a washable filling (redstone/element, judged live by entry kind) into its item and then waterlogs normally |
 
 ### Feature 1 — more logged blocks (required on both sides)
 
@@ -277,6 +297,14 @@ One block = solid phase (the block itself) + at most one contained phase.
   value; their parameters live in the side table (see "Plan C"). Writing an entry clears the host's water/lava phase
   (water clearing, one contained phase per cell); elements share the same acceptability check as dust (lava-filled
   hosts accept elements; ice/frosted ice/obsidian phases cannot be overwritten).
+  **Water flushing (0.2.5)**: water flushes a **washable** filling — the redstone phase drops redstone dust and an element
+  drops its item — and then waterlogs the cell, matching vanilla "water washes away dust/torches". Washability is judged
+  **live by entry kind** (`PhaseExtra.isWashable`), so future washable kinds need no change here. Material fillings
+  (ice/frosted ice/obsidian/lava) are unaffected.
+  **Right-click tuning (0.2.5)**: when the host has no use-key interaction of its own, right-clicking it cycles the
+  contained repeater's delay (1→2→3→4→1) or the comparator's mode (compare↔subtract). Hosts that consume the click
+  (chests, signs, trapdoors, light blocks…) keep vanilla behaviour; a block in hand still places and an element in hand
+  still assembles. Sneak right-click is unaffected.
   **Rendering narrowed to the spec**: repeaters/comparators draw only the rods (redstone torches, including the lit
   glow) and the red bar, seated per 1/16-pixel column on the host top (stepped on stairs; no 2px smooth-stone base or
   lock bar). Observers draw only the 16×16 "face" and "output port" cutout planes (six facings pre-baked, fixed in the
@@ -407,7 +435,7 @@ Dependency floors follow each version's real minimum (`fabricloader` 0.15.0 / 0.
 `statement` remain required. Note: loader 0.15.x/0.16.x bundle an old Mixin that cannot read JDK 25 class
 files (`Unsupported class file major version 69`) — use a newer loader or JDK 17/21 in that case.
 
-### Known limitations (0.2.4)
+### Known limitations (0.2.5)
 
 1. **Old worlds are incompatible**: the `filling` value domain changed (8 material classes); old states cannot be mapped.
 2. **Elements only fit hosts with top-face cavity**: bottom slabs / bottom stairs work (some column has `top < 1`);
@@ -419,6 +447,8 @@ files (`Unsupported class file major version 69`) — use a newer loader or JDK 
 4. **Repeater `locked` only implements the logical lock**, without the vanilla lock-bar visual.
 5. **On 1.19.4–1.21.11 every state of every phase host uses CUTOUT**: the redstone shell is a cutout texture, so
    vanilla SOLID mipmaps are lost (a visual/performance trade-off); 26.3 derives the layer from texture transparency.
+   Material-phase overlays are **not affected**: the dynamic model picks their layer per quad (ice/frosted ice
+   TRANSLUCENT, obsidian CUTOUT), so translucent and opaque phases display correctly side by side.
 6. **Portals containing a solid phase are blocked by full-cube collision**: nether portals / end portals / end gateways are
    phase-capable hosts, and ice/frosted ice/obsidian apply the usual full-cube collision.
 7. **Sodium / shaders**: rendering uses the Fabric Rendering API (Indigo); Sodium compatibility is not promised.
@@ -434,6 +464,9 @@ files (`Unsupported class file major version 69`) — use a newer loader or JDK 
     the planes may overlap the host's exposed side (the covered part is invisible by definition).
 12. **Element I/O exposure is face-level**: `Block.isFaceFull == false` counts as exposed (the same rule as the
     redstone phase); a partially covered face can still act as an input/output face.
+13. **Right-click tuning only applies to hosts without a use-key interaction**: chests/signs/trapdoors/light blocks
+    keep their vanilla click (remove and re-attach the element to retune those). Only repeaters and comparators are
+    tunable; observers have no parameter.
 
 ### Licence
 

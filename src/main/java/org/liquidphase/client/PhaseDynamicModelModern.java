@@ -16,6 +16,7 @@ import net.fabricmc.fabric.api.client.renderer.v1.model.FabricBlockStateModelPar
 import net.minecraft.client.renderer.block.BlockAndTintGetter;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
+import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.client.renderer.block.dispatch.Variant;
 import net.minecraft.client.resources.model.sprite.Material;
 *///?} else {
@@ -26,11 +27,13 @@ import net.fabricmc.fabric.api.renderer.v1.model.FabricBlockStateModel;
 import net.minecraft.client.renderer.block.model.BlockModelPart;
 import net.minecraft.client.renderer.block.model.BlockStateModel;
 import net.minecraft.client.renderer.block.model.Variant;
+import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.world.level.BlockAndTintGetter;
 //?}
 import net.minecraft.client.resources.model.ModelBaker;
 import net.minecraft.client.resources.model.ResolvableModel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.shapes.CollisionContext;
@@ -52,7 +55,7 @@ import org.liquidphase.phase.PhaseHelper;
  */
 public final class PhaseDynamicModelModern {
 
-    /** 全部子模型（相对 {@code liquidphase:} 的路径）：16 外壳 + 16 中继器 + 4 比较器 + 12 侦测器。 */
+    /** 全部子模型（相对 {@code liquidphase:} 的路径）：16 外壳 + 16 中继器 + 4 比较器 + 12 侦测器 + 6 材料相。 */
     private static final String[] SUB_PATHS = buildSubPaths();
 
     private static final ModelBaker.SharedOperationKey<Map<String, Object>> PARTS_KEY =
@@ -63,7 +66,9 @@ public final class PhaseDynamicModelModern {
 
     private static String[] buildSubPaths() {
         String[] facings = {"", "_south", "_east", "_west", "_up", "_down"};
-        String[] ids = new String[16 + 16 + 4 + facings.length * 2];
+        String[] overlays = {"phase_obsidian", "phase_ice",
+            "phase_frosted_0", "phase_frosted_1", "phase_frosted_2", "phase_frosted_3"};
+        String[] ids = new String[16 + 16 + 4 + facings.length * 2 + overlays.length];
         int i = 0;
         for (int power = 0; power < 16; power++) {
             ids[i++] = "block/redstone_phase_" + power;
@@ -81,6 +86,10 @@ public final class PhaseDynamicModelModern {
         for (String suffix : facings) {
             ids[i++] = "block/element_observer" + suffix;
             ids[i++] = "block/element_observer" + suffix + "_on";
+        }
+        // 材料相覆盖层（0.2.5）：由动态模型发射，逐 quad 选图层。
+        for (String overlay : overlays) {
+            ids[i++] = "block/" + overlay;
         }
         return ids;
     }
@@ -176,6 +185,8 @@ public final class PhaseDynamicModelModern {
         public void emitQuads(QuadEmitter emitter, BlockAndTintGetter view, BlockPos pos, BlockState state,
                               RandomSource random, Predicate<net.minecraft.core.Direction> cullTest) {
             ((FabricBlockStateModel) this.base).emitQuads(emitter, view, pos, state, random, cullTest);
+            // 材料相覆盖层（0.2.5）：逐 quad 选图层（冰/霜冰→TRANSLUCENT、黑曜石→CUTOUT）。
+            emitOverlay(emitter, state);
             int extra = PhaseExtras.get(view, pos);
             if (!ElementRenderSupport.hasGeometry(extra)) {
                 return;
@@ -215,17 +226,65 @@ public final class PhaseDynamicModelModern {
             }
         }
 
+        /**
+         * 材料相覆盖层（0.2.5）：把 {@code phase_*} 子模型发进 emitter，并按材质透明度逐 quad 选图层。
+         * <p>
+         * 用 {@code pushTransform} 逐 quad 覆盖图层：{@code 1.21.10/1.21.11} 是
+         * {@code renderLayer(ChunkSectionLayer)}，{@code 26.3} 改名为 {@code chunkLayer}。
+         * 两者都作用在单个 quad 上，所以同一格里"不透明宿主 + 半透明冰"能各自正确显示
+         * （静态 blockstate part 只能整块状态一个图层，这就是 0.2.4 及以前冰变死白、
+         * 玻璃宿主上的黑曜石被拖进排序层的原因）。
+         * <p>
+         * 覆盖层子模型只有一条 element、没有变体，直接用 {@code emitQuads} 发，
+         * 不需要世界与坐标（它也不带 tint/cullface）。
+         */
+        private void emitOverlay(QuadEmitter emitter, BlockState state) {
+            String overlayId = ElementRenderSupport.overlayModelId(state);
+            if (overlayId == null) {
+                return;
+            }
+            Object part = this.parts.get(ElementRenderSupport.stripNamespace(overlayId));
+            if (part == null) {
+                return;
+            }
+            ElementRenderSupport.OverlayLayer layer = ElementRenderSupport.overlayLayer(state);
+            ChunkSectionLayer chunkLayer = layer == ElementRenderSupport.OverlayLayer.TRANSLUCENT
+                ? ChunkSectionLayer.TRANSLUCENT : ChunkSectionLayer.CUTOUT;
+            //? if 26.3 {
+            /*emitter.pushTransform(quad -> {
+                quad.chunkLayer(chunkLayer);
+                return true;
+            });
+            try {
+                ((FabricBlockStateModelPart) part).emitQuads(emitter, direction -> false);
+            } finally {
+                emitter.popTransform();
+            }
+             *///?} else {
+            emitter.pushTransform(quad -> {
+                quad.renderLayer(chunkLayer);
+                return true;
+            });
+            try {
+                ((FabricBlockModelPart) part).emitQuads(emitter, direction -> false);
+            } finally {
+                emitter.popTransform();
+            }
+            //?}
+        }
+
         @Override
         public Object createGeometryKey(BlockAndTintGetter view, BlockPos pos, BlockState state, RandomSource random) {
             int extra = PhaseExtras.get(view, pos);
-            if (!ElementRenderSupport.hasGeometry(extra)) {
+            String overlay = ElementRenderSupport.overlayModelId(state);
+            if (!ElementRenderSupport.hasGeometry(extra) && overlay == null) {
                 return null;
             }
             // 只有中继器/比较器依赖宿主形状；侦测器固定在方块内，形状变化不应导致重画。
             VoxelShape shape = ElementRenderSupport.terrainLift(extra)
                 ? state.getCollisionShape(view, pos, CollisionContext.empty()) : null;
             return new ElementRenderSupport.GeometryKey(extra, pos.asLong(),
-                shape == null ? 0 : System.identityHashCode(shape));
+                shape == null ? 0 : System.identityHashCode(shape), overlay);
         }
     }
 
