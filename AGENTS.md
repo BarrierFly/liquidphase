@@ -44,7 +44,7 @@
 | 旁路表同步 | `sync/PhaseExtraSync.java`（`extra_request` / `extra_chunk` / `extra_update`）+ `sync/PhaseExtraClientSync.java`（区块加载/握手/Level 更换请求 + 标脏） |
 | 红石信号与放置 | `redstone/RedstoneBlocks.java`；`mixin/RedstoneSignalMixin.java`；红石线连接 `mixin/RedStoneWireBlockMixin`（≤1.21.11）/ `BlockStateBaseMixin.shouldRedstoneWireConnectTo`（26.3）；点粉/宿主进线格 `mixin/BlockItemMixin` + `mixin/PhaseCellReplaceMixin`；下落方块 `mixin/FallingBlockIntoWireMixin` |
 | 活塞路径与弹出物品（0.2.3） | `phase/PistonPhaseOps.java`（破坏列表线程内标记 + 移动状态剥相）+ `mixin/PistonBaseBlockMixin.java`（`moveBlocks` 两处重定向）+ `phase/PhaseDrops.java`（"相 → 弹出物品"纯函数）；黑曜石相推不动在 `BlockStateBaseMixin.getPistonPushReaction` |
-| 元件相（中继器/比较器/侦测器） | `element/ElementBlocks.java`（放置/破坏/信号/计划刻/锁存/右键调档/红石线连接规则；`extraOfBlock` 让真实元件方块成为可吸收的相材料格）+ `element/ElementRenderSupport.java`（子模型 id / 朝向 / 逐列抬升 / 材料相覆盖层与图层选择）+ `mixin/ElementShapeUpdateMixin.java`（状态级 `updateShape`）+ `mixin/ElementTuningMixin.java`（右键调档，服务端 `useItemOn` RETURN）+ `mixin/RedStoneWireBlockMixin.java`（线连元件宿主） |
+| 元件相（中继器/比较器/侦测器） | `element/ElementBlocks.java`（放置/破坏/信号/计划刻/锁存/右键调档/红石线连接规则；`extraOfBlock` 让真实元件方块成为可吸收的相材料格）+ `element/ElementRenderSupport.java`（子模型 id / 朝向 / 逐列抬升 / 材料相覆盖层与图层选择）+ `mixin/ElementShapeUpdateMixin.java`（状态级 `updateShape`）+ `mixin/ElementTuningMixin.java`（右键调档，服务端 `useItemOn` RETURN）+ `mixin/RedStoneWireBlockMixin.java`（线连元件宿主）；一致性审计见 `docs/element-consistency-audit.md` |
 | 旁路表一致性 | `mixin/LevelChunkExtraMixin.java`（方块被换成另一个方块时清条目）；`BlockStateBaseMixin` 的 onRemove/放置路径（写 `filling != none` 时清条目） |
 | 动态渲染（两代 API） | `client/PhaseDynamicModelLegacy.java`（≤1.21.1，接管 `liquidphase:block/dynamic`）/ `client/PhaseDynamicModelModern.java`（1.21.10+，包装宿主 `BlockStateModel`） |
 | 资源包兼容合并（§3.7，0.1.17） | `client/PhasePackMerge.java`（ResourceManager 代理 + 栈顶合并）+ `client/PhasePackMergeCore.java`（纯 Gson 合并核心）+ `mixin/client/PhaseLoaderMixin.java`（≤1.21.1 挂 `ModelManager.loadBlockStates`，1.21.10+ 挂 `BlockStateModelLoader.loadBlockStates`）+ 片段 `assets/liquidphase/phase_parts/<id>.json`（生成器产出） |
@@ -639,6 +639,33 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 > 必须按 6 朝向预烘焙，否则区块网格会按旧朝向背面剔除（直发网格正常、实机不可见，
 > 0.2.4 实机排查过）。
 
+#### 3.3.3 元件相与原版独立方块的一致性（0.2.6 审计，未修）
+
+`docs/element-consistency-audit.md` 逐函数对照了原版 `DiodeBlock` / `RepeaterBlock` /
+`ComparatorBlock` / `ObserverBlock` / `SignalGetter` / `RedStoneWireBlock` / `Level.setBlock`，
+结论是**旁路表方案与原版独立方块之间仍有多条功能差异**，按根因归类：
+
+| 根因 | 症状 | 修法方向 |
+| --- | --- | --- |
+| **A. 写表只发 `updateNeighborsAt`** | 比较器相收不到 `updateNeighbourForOutputSignal`（容器内容变化不刷新）；观察者相观测不到红石相/元件相的只写表变化；并排放置不立即重算 `locked`；红线连接态不刷新 | 在 `PhaseExtras` 加"按 `Level.setBlock` 三条通道通知"的唯一出口（`updateNeighborsAt` + `updateNeighbourShapes` + `updateNeighbourForOutputSignal`），并在 `Level.updateNeighbourForOutputSignal` 上挂桥接，把相邻比较器相的 2 tick 重排接上 |
+| **B. 元件 tick 与宿主 tick 共用 `(pos, block)` 槽位** | 珊瑚/大垂滴叶/钟乳石尖/横向避雷针/干尸壳/探测铁轨等"自身会排刻且能放元件"的宿主上，侦测器脉冲被劫持、中继器延迟被压缩或宿主 tick 被推迟 | 改用**专用哨兵方块类型**做 tick key，`ServerLevel.tickBlock` HEAD 识别后直接跑元件 tick；`hasScheduledTick`/`willTickThisTick` 守卫同步改 |
+| **C. 吸收真实元件方块不补初始结算** | `extraOfBlock` 把比较器 `power` 写 0 → 吸收后输出恒 0；有输入的中继器不点亮；正在脉冲的侦测器永远亮着 | `absorbBlock` 末尾按 `place` 的口径补 `refreshLock` / `scheduleTick(1)` / 侦测器复位 |
+| **D. 无计划刻优先级** | 二极管链/环路的同 tick 结算顺序与原版不同（缺 `HIGH/VERY_HIGH/EXTREMELY_HIGH` 与 `shouldPrioritize`） | 补 `shouldPrioritize` 并按原版档位传 `scheduleTick(..., priority)` |
+| **E. 连接规则** | 比较器宿主只在轴向两面连接（原版任意面）；线不会向上爬到元件宿主 | `connectsOnFace` 对比较器放宽为任意非 null 方向；`getConnectingSide` 补 `canConnectUp` 分支（26.3 在 `shouldRedstoneWireConnectTo` 注入） |
+| **F. `isSignalSource()` 为 false** | 元件宿主格允许刷怪、铁轨朝向不更新、第三方 mod 判定不同 | 无坐标做不到；写进 README 已知限制 |
+| **G. 挖掘语义** | 拆元件按宿主硬度（原版中继器/比较器 `instabreak`）、不看瞄准、创造仍掉落 | 至少补 `!player.isCreative()`；瞄准/硬度是产品决策 |
+| **H. `hasCavity` 的空形状与无表面列** | 80 个宿主在 `CollisionContext.empty()` 下碰撞为空（告示牌 36、珊瑚 30、铁轨 4、传送门 3、多面体 3、垂滴叶茎等 4）却被放行，元件整根留在 y=0；细柱宿主上 `-∞ → 0` 把杆拆成两截 | `hasCavity` 对空形状退回 `getShape` 或拒绝；`columnTop` 用哨兵表示"该列没有表面"、不参与抬升 |
+| **K. 比较器模拟量绕过 I/O 门控** | 输入面被完全盖住时仍读容器/炼药锅/唱片机模拟量 | 把 `exposed` 判定提到 `comparatorInput` 最外层 |
+| **L. 客户端也写表** | `onUpdateShape` 的 `refreshLock` 没有 `!isClientSide` 守卫 | 包一层服务端判定，客户端 `locked` 只由网络包驱动 |
+
+> ⚠️ 这些都是"元件作为填充相"与原版独立方块的差异，**不是**红石相/材料相的问题；
+> 修的时候不要改 `filling` 取值域，也不要重新引入"元件参数进状态"的方案（见 §7 第 3 条）。
+
+> ⚠️ 复现时注意两条容易搞错的点：①**开箱本身不触发** `updateNeighbourForOutputSignal`，
+> 触发的是容器**内容量**变化（玩家存取、漏斗进出、唱片机换碟、讲台翻页、展示框转动）；
+> ②**脚手架/树叶/整格方块放不上元件**（顶面是完整 16×16 且到顶，`hasCavity` 会拒），
+> 所以"树叶上中继器延迟变成 1 tick"这种说法是错的——B 的影响面是 §8.1/§8.2 那批宿主。
+
 ### 3.7 资源包兼容合并（0.1.17）
 
 第三方包覆盖宿主 blockstate 时，客户端把片段（`assets/liquidphase/phase_parts/<id>.json`，
@@ -1034,3 +1061,22 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
      部分被覆盖的面仍可输入/输出。
    - **右键调档只对没有使用键交互的宿主生效**（0.2.5）：箱子/告示牌/活板门/光源方块等
      保持原版交互；只有中继器与比较器可调，侦测器没有参数。
+
+10. **元件相与原版独立方块的功能差异（0.2.6 审计，未修）**：逐条清单与修法见
+    [`docs/element-consistency-audit.md`](docs/element-consistency-audit.md)，
+    根因归纳入 AGENTS §3.3.3。要点（都会与原版行为不一致）：
+    - 比较器相**收不到容器内容变化通知**（`updateNeighbourForOutputSignal` 只认 `Blocks.COMPARATOR`）；
+    - 观察者相**观测不到**红石相 / 元件相的只写表变化；
+    - 并排放置的二极管**不会**立即锁定旁边的中继器；装配/拆除后红石线连接态不刷新；
+    - 元件计划刻与宿主自身的 tick **共用 `(pos, Block)` 槽位**（珊瑚/大垂滴叶/钟乳石尖/
+      横向避雷针/干尸壳/探测铁轨等宿主上会互相吞刻）；
+    - 吸收真实元件方块**不补初始结算**（比较器输出恒 0、中继器不点亮、侦测器永远亮）；
+    - 计划刻**没有优先级**，也没有 `shouldPrioritize`；
+    - 红石线对比较器宿主**只在轴向两面连接**，且**不会向上爬**到元件宿主；
+    - **80 个宿主**在 `CollisionContext.empty()` 下碰撞为空（告示牌 36、珊瑚 30、铁轨 4、
+      传送门 3、多面体 3、垂滴叶茎等 4），元件仍能放上去并整根留在 y=0；
+    - 细柱宿主（铁链、朝上的避雷针、钟乳石尖、蜡烛、海泡菜）上，杆/红条被 `-∞ → 0`
+      拆成两截；
+    - 拆元件按宿主硬度、不看瞄准、创造模式也掉物品；
+    - 比较器的模拟量输入**不遵守**"输入面被完全盖住就不输入"的门控；
+    - 元件宿主的 `isSignalSource()` 为 false（格内刷怪判定、铁轨朝向更新与第三方 mod 不同）。
