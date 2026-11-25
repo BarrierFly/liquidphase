@@ -158,7 +158,12 @@ public final class ElementBlocks {
         }
         // 比较器：把原方块实体的输出信号带进条目（读在写状态之前——写状态会删掉方块实体）。
         if (PhaseExtra.kind(extra) == PhaseExtra.Kind.COMPARATOR) {
-            if (level.getBlockEntity(pos) instanceof net.minecraft.world.level.block.entity.ComparatorBlockEntity entity) {
+            // 端到端路径上比较器的方块实体在写条目之前就被 setBlock 删掉了，所以这里先读暂存值
+            // （LevelChunkExtraMixin 在 setBlockState HEAD 记下的 OutputSignal），再退回读方块实体。
+            int captured = org.liquidphase.phase.ElementSignals.take(pos);
+            if (captured != Integer.MIN_VALUE) {
+                extra = PhaseExtra.withPower(extra, captured);
+            } else if (level.getBlockEntity(pos) instanceof net.minecraft.world.level.block.entity.ComparatorBlockEntity entity) {
                 extra = PhaseExtra.withPower(extra, entity.getOutputSignal());
             }
         }

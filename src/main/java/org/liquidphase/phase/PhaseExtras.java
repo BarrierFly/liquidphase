@@ -125,6 +125,9 @@ public final class PhaseExtras {
         if (previous == extra) {
             return previous;
         }
+        // 任何一次真实的表写入都会消费掉这一格的比较器暂存值：要么被 absorbBlock 先取走，
+        // 要么说明这条路径不打算继承它，避免后续写入读到过期值。
+        org.liquidphase.phase.ElementSignals.discard(pos);
         fireChanged(level, pos, previous, extra, notify);
         return previous;
     }

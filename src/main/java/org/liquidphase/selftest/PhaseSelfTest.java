@@ -525,15 +525,7 @@ public final class PhaseSelfTest {
         level.setBlock(pos, Blocks.OAK_STAIRS.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(pos.east(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
         PhaseExtras.set(level, pos, PhaseExtra.redstone(0));
-        LiquidPhase.LOGGER.info("[selftest] updatePower scene: state={} east={} eastSignal={} exposedEast={} target={} power={}",
-            level.getBlockState(pos), level.getBlockState(pos.east()),
-            level.getSignal(pos.east(), Direction.EAST),
-            RedstoneBlocks.exposed(level.getBlockState(pos), Direction.EAST),
-            RedstoneBlocks.computeTargetPowerForTest(level, pos),
-            RedstoneBlocks.getPower(level, pos));
-        boolean changed = RedstoneBlocks.updatePower(level, pos, level.getBlockState(pos));
-        LiquidPhase.LOGGER.info("[selftest] updatePower result: changed={} power={}", changed,
-            RedstoneBlocks.getPower(level, pos));
+        // 写表本身就会按原版 onPlace 口径立即重算一次，所以这里只断言结果。
         assertTrue("updatePower computes 15 from a neighbouring source",
             RedstoneBlocks.getPower(level, pos) == 15);
         assertTrue("updatePower does not write once settled",
@@ -3303,8 +3295,6 @@ public final class PhaseSelfTest {
             !PhaseExtra.locked(PhaseExtras.get(level, lockPos)));
         PhaseExtras.set(level, sidePos, PhaseExtra.withPowered(PhaseExtras.get(level, sidePos), true));
         int afterLock = PhaseExtras.get(level, lockPos);
-        LiquidPhase.LOGGER.info("[selftest] A3 lock state: before={} after={}", PhaseExtra.describe(beforeLock),
-            PhaseExtra.describe(afterLock));
         assertTrue("A3: a powered side diode immediately recomputes LOCKED",
             PhaseExtra.locked(afterLock));
         PhaseExtras.set(level, lockPos, PhaseExtra.EMPTY);
@@ -3400,15 +3390,11 @@ public final class PhaseSelfTest {
         PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
 
         // 端到端：先在方块实体上写输出，再**直接**调 absorbBlock（此时方块实体还在）。
-        // 注意：不能用"写 slab 覆盖 comparator"的方式造场景——那会先被 setBlock 改写层
-        // 吸收掉（方块实体消失），这里改为先放真实 comparator、再手工吸收。
         level.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
         level.setBlockAndUpdate(pos, Blocks.COMPARATOR.defaultBlockState()
             .setValue(net.minecraft.world.level.block.ComparatorBlock.FACING, Direction.EAST));
         if (level.getBlockEntity(pos) instanceof net.minecraft.world.level.block.entity.ComparatorBlockEntity entity) {
             entity.setOutputSignal(9);
-            LiquidPhase.LOGGER.info("[selftest] C: wrote comparator output {} on {}",
-                entity.getOutputSignal(), pos);
         } else {
             LiquidPhase.LOGGER.warn("[selftest] C: no comparator block entity at {} (state={})",
                 pos, level.getBlockState(pos));
@@ -3417,12 +3403,27 @@ public final class PhaseSelfTest {
             .setValue(net.minecraft.world.level.block.ComparatorBlock.FACING, Direction.EAST));
         ElementBlocks.absorbBlock(level, pos, slab, inherited);
         int absorbed = PhaseExtras.get(level, pos);
-        LiquidPhase.LOGGER.info("[selftest] C: absorbed={}", PhaseExtra.describe(absorbed));
         assertTrue("C: absorbing a comparator inherits its block-entity output signal (got "
                 + PhaseExtra.describe(absorbed) + ")",
             PhaseExtra.kind(absorbed) == PhaseExtra.Kind.COMPARATOR
                 && PhaseExtra.power(absorbed) == 9);
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+        level.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
 
+        // 端到端（真实放置路径）：宿主物品放进**正在输出**的比较器所在格 → 吸收后输出必须保留。
+        level.setBlockAndUpdate(pos, Blocks.COMPARATOR.defaultBlockState()
+            .setValue(net.minecraft.world.level.block.ComparatorBlock.FACING, Direction.EAST));
+        if (level.getBlockEntity(pos) instanceof net.minecraft.world.level.block.entity.ComparatorBlockEntity entity) {
+            entity.setOutputSignal(11);
+        }
+        liquidphase$placeBlockInto(level, Blocks.OAK_STAIRS, pos, Direction.UP);
+        int throughPlacement = PhaseExtras.get(level, pos);
+        assertTrue("C: placing a host into a live comparator cell keeps its output signal (got "
+                + PhaseExtra.describe(throughPlacement) + ")",
+            PhaseExtra.kind(throughPlacement) == PhaseExtra.Kind.COMPARATOR
+                && PhaseExtra.power(throughPlacement) == 11);
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+        level.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
         // 中继器：延迟/朝向/锁定/供电原样继承。
         BlockPos repeaterPos = origin.offset(2, 0, 0);
         level.setBlockAndUpdate(repeaterPos.below(), Blocks.STONE.defaultBlockState());

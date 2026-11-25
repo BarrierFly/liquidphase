@@ -787,7 +787,7 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
 `ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，断言数为
-**约 561（0.2.7；实测 1.19.4/1.20.1/1.21.1 = 561、1.21.10 = 562、1.21.11 = 561、26.3 = 560，全部 0 failed）**。
+**约 562（0.2.7；实测 1.19.4/1.20.1/1.21.1 = 562、1.21.10 = 563、1.21.11 = 562、26.3 = 561，全部 0 failed）**。
 含 0.1.20 的分派识别回归、0.1.22 的组装初始状态与组合碰撞断言、0.2.0 的旁路表读写/
 红石 updatePower/元件放置空腔/dynamic part 断言，0.2.4 新增的**元件 I/O 露出门控**
 （下半楼梯南/北脸：输入、输出、观察面、比较器 alternate、中继器锁存、红石线连接）
@@ -795,7 +795,7 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 五官/输出口两平面且位于正确边界外侧），以及 0.2.7 新增的**元件一致性回归**：
 `checkElementNotifications`（A：容器变化→比较器相排刻、红石相功率→观察者、并排二极管→锁存、
 装配/拆除→线连接态）、`checkElementTickChannel`（B：tick key 是原版元件方块、不与宿主共槽）、
-`checkElementAbsorptionInherit`（C：原样继承含比较器 OutputSignal）、`checkElementPriority`
+**`checkElementAbsorptionInherit`（C：原样继承含比较器 OutputSignal，覆盖"宿主放进正在输出的比较器格"端到端路径）**、`checkElementPriority`
 （D：`shouldPrioritize` + 三档优先级）、`checkElementWireConnections`（E：比较器任意面、
 红石相向上爬、元件不爬）、`checkElementMiningSemantics`（G 硬度/瞄准/创造 + J 掉落）、
 `checkElementComparatorAnalogGating`（K）、`checkElementClientLockMirror`（L）。
@@ -988,7 +988,7 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    > 并进取值域则 1.21.11 至少 81.3 万状态（V=84）。现行实现把参数放进旁路表，
    > `filling` 固定 8 值，总状态 176,563。
    > 新增元件种类时只加 `PhaseExtra.Kind` 与子模型，**不要动 `filling` 取值域**。
-4. 行为层已做服务端自检（0.2.6：六版本实测 519/519/519/520/519/518 passed，全部 0 failed）+ 启动冒烟 + 6 版本编译；
+4. 行为层已做服务端自检（0.2.7：六版本实测 562/562/562/563/562/561 passed，全部 0 failed）+ 启动冒烟 + 6 版本编译；
    **渲染层与剔除面已在真实客户端（1.21.11 `runClient`）取证修复**：
    带相状态图层为 CUTOUT（半透明宿主保持 TRANSLUCENT）、内缩覆盖层/外扩外壳的
    quad 进入不可剔除列表、几何坐标在宿主外侧；

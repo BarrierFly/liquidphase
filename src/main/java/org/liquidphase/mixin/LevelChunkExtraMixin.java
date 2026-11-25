@@ -71,6 +71,13 @@ public abstract class LevelChunkExtraMixin {
             return;
         }
         BlockState previous = self.getBlockState(pos);
+        if (previous.getBlock() != state.getBlock()
+            && previous.getBlock() instanceof net.minecraft.world.level.block.ComparatorBlock
+            && self.getLevel().getBlockEntity(pos)
+                instanceof net.minecraft.world.level.block.entity.ComparatorBlockEntity entity) {
+            // 比较器即将被替换：趁方块实体还在，把 OutputSignal 记下来给吸收路径用（根因 C）。
+            org.liquidphase.phase.ElementSignals.capture(pos, entity.getOutputSignal());
+        }
         if (previous.getBlock() == state.getBlock()) {
             return;
         }
