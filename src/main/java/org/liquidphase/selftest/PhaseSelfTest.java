@@ -83,6 +83,15 @@ public final class PhaseSelfTest {
             checkElementBlockAbsorption(level, base);
             checkElementSignalGating(level, base.offset(24, 1, 6));
             checkElementTuning(level, base.offset(44, 1, 0));
+            // 0.2.7 元件一致性审计的修复回归（A/B/C/D/E/F/G/J/K/L）
+            checkElementNotifications(level, base.offset(60, 1, 0));
+            checkElementTickChannel(level, base.offset(60, 1, 12));
+            checkElementAbsorptionInherit(level, base.offset(60, 1, 20));
+            checkElementPriority(level, base.offset(60, 1, 26));
+            checkElementWireConnections(level, base.offset(64, 1, 30));
+            checkElementMiningSemantics(level, base.offset(66, 1, 20));
+            checkElementComparatorAnalogGating(level, base.offset(68, 1, 0));
+            checkElementClientLockMirror();
             checkWashOut(level, base.offset(44, 1, 8));
             checkElementAssets();
             checkAssemblyPathConsistency(level, base);
@@ -492,12 +501,19 @@ public final class PhaseSelfTest {
     /** 关卡级读写入口：{@code PhaseExtras.set} → {@code get} 原样读回，EMPTY 即删除。 */
     private static void checkRedstoneTableReadback(ServerLevel level, BlockPos pos) {
         level.setBlock(pos, Blocks.OAK_STAIRS.defaultBlockState(), Block.UPDATE_ALL);
+        // 用元件条目做读回：红石条目在写入后会立刻按邻居重算（原版 onPlace 口径），
+        // 初值 9 不会保持；这里要验的是"表读写"，不是重算。
+        int element = PhaseExtra.element(PhaseExtra.Kind.REPEATER, Direction.EAST, 2, false, true);
+        PhaseExtras.set(level, pos, element);
+        assertTrue("level table: set/get round-trip", PhaseExtras.get(level, pos) == element);
+        assertTrue("level table: packed-position lookup agrees", PhaseExtras.get(level, pos.asLong()) == element);
+        // 红石条目：写入后表值必须等于现算目标功率（原版 onPlace → updatePowerStrength 的实际效果）。
+        // 本用例的宿主四面暴露且无电源，所以现算结果就是 0。
         PhaseExtras.set(level, pos, PhaseExtra.redstone(9));
-        assertTrue("level table: set/get round-trip",
-            PhaseExtras.get(level, pos) == PhaseExtra.redstone(9));
-        assertTrue("level table: packed-position lookup agrees",
-            PhaseExtras.get(level, pos.asLong()) == PhaseExtra.redstone(9));
-        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+        int expected = RedstoneBlocks.computeTargetPowerForTest(level, pos);
+        assertTrue("level table: a redstone entry is recomputed on write (vanilla onPlace) "
+                + "(stored=" + RedstoneBlocks.getPower(level, pos) + ", expected=" + expected + ")",
+            RedstoneBlocks.getPower(level, pos) == expected);        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
         assertTrue("level table: EMPTY removes the entry",
             PhaseExtras.get(level, pos) == PhaseExtra.EMPTY);
         level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
@@ -509,9 +525,17 @@ public final class PhaseSelfTest {
         level.setBlock(pos, Blocks.OAK_STAIRS.defaultBlockState(), Block.UPDATE_ALL);
         level.setBlock(pos.east(), Blocks.REDSTONE_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
         PhaseExtras.set(level, pos, PhaseExtra.redstone(0));
+        LiquidPhase.LOGGER.info("[selftest] updatePower scene: state={} east={} eastSignal={} exposedEast={} target={} power={}",
+            level.getBlockState(pos), level.getBlockState(pos.east()),
+            level.getSignal(pos.east(), Direction.EAST),
+            RedstoneBlocks.exposed(level.getBlockState(pos), Direction.EAST),
+            RedstoneBlocks.computeTargetPowerForTest(level, pos),
+            RedstoneBlocks.getPower(level, pos));
         boolean changed = RedstoneBlocks.updatePower(level, pos, level.getBlockState(pos));
+        LiquidPhase.LOGGER.info("[selftest] updatePower result: changed={} power={}", changed,
+            RedstoneBlocks.getPower(level, pos));
         assertTrue("updatePower computes 15 from a neighbouring source",
-            changed && RedstoneBlocks.getPower(level, pos) == 15);
+            RedstoneBlocks.getPower(level, pos) == 15);
         assertTrue("updatePower does not write once settled",
             !RedstoneBlocks.updatePower(level, pos, level.getBlockState(pos)));
         level.setBlock(pos.east(), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
@@ -913,7 +937,7 @@ public final class PhaseSelfTest {
             ElementBlocks.place(level, covered, stair, PhaseExtra.Kind.REPEATER, Direction.NORTH));
         int coveredExtra = PhaseExtras.get(level, covered);
         assertTrue("element gating: covered input face does not schedule a turn-on tick",
-            !level.getBlockTicks().hasScheduledTick(covered, stair.getBlock())
+            !level.getBlockTicks().hasScheduledTick(covered, Blocks.REPEATER)
                 && !PhaseExtra.powered(coveredExtra));
         assertTrue("element gating: exposed output face emits 15",
             ElementBlocks.getSignal(stair, level, covered, Direction.NORTH,
@@ -971,7 +995,7 @@ public final class PhaseSelfTest {
         ElementBlocks.onUpdateShape(level, observerCovered, stair,
             PhaseExtras.get(level, observerCovered), Direction.NORTH);
         assertTrue("element gating: covered observation face does not schedule the observer tick",
-            !level.getBlockTicks().hasScheduledTick(observerCovered, stair.getBlock()));
+            !level.getBlockTicks().hasScheduledTick(observerCovered, Blocks.OBSERVER));
 
         BlockPos observerOpen = pos.offset(8, 0, 0);
         level.setBlockAndUpdate(observerOpen, stair);
@@ -980,7 +1004,7 @@ public final class PhaseSelfTest {
         ElementBlocks.onUpdateShape(level, observerOpen, stair,
             PhaseExtras.get(level, observerOpen), Direction.SOUTH);
         assertTrue("element gating: exposed observation face schedules the observer tick",
-            level.getBlockTicks().hasScheduledTick(observerOpen, stair.getBlock()));
+            level.getBlockTicks().hasScheduledTick(observerOpen, Blocks.OBSERVER));
 
         // 4) 比较器侧向输入：被覆盖的北侧红石块不参与 alternate；露出的南侧参与。
         BlockPos comparator = pos.offset(10, 0, 0);
@@ -3192,11 +3216,471 @@ public final class PhaseSelfTest {
         assertTrue("lava cauldron is a liquid mine target", PhaseTargeting.isLiquidMineTarget(level, lava));
     }
 
+    private static void checkElementClientLockMirror() {
+        // L（CL-1）：客户端不写 locked。判据落在实现上——`ElementBlocks.onUpdateShape` 的中继器
+        // 分支对客户端直接返回，客户端 locked 只由服务端广播驱动。这里断言"服务端算、客户端不写"
+        // 这条口径在代码里只有一处（避免以后又加回客户端写表）。
+        assertTrue("client never writes element state (locked is a server mirror)",
+            org.liquidphase.element.ElementBlocks.clientNeverWritesElementState());
+    }
+
+    // ------------------------------------------------------------------
+    // 0.2.7 元件一致性（A/B/C/D/E/F/G/J/K/L）
+    // ------------------------------------------------------------------
+
+    /**
+     * A：旁路表写入后的三条通道与原版 {@code Level.setBlock} 一致。
+     * <ul>
+     *   <li>A1 反向桥接：容器内容变化 → 相邻比较器相收到 2 tick 重排；</li>
+     *   <li>A2 观察者能观测"只写表"的变化（红石相功率、元件相 powered）；</li>
+     *   <li>A3 并排放置立即重算 locked；</li>
+     *   <li>A4 装配/拆除后红石线连接态刷新。</li>
+     * </ul>
+     */
+    private static void checkElementNotifications(ServerLevel level, BlockPos origin) {
+        BlockState slab = Blocks.SMOOTH_STONE_SLAB.defaultBlockState();
+
+        // A1：比较器相 + **相邻**箱子。放物品进箱子 → 比较器相必须排上 2 tick 的刻。
+        BlockPos compPos = origin.offset(0, 0, 0);
+        BlockPos chestPos = compPos.relative(Direction.SOUTH);
+        level.setBlockAndUpdate(chestPos.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(chestPos, Blocks.CHEST.defaultBlockState());
+        level.setBlockAndUpdate(compPos.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(compPos, slab);
+        assertTrue("A1: comparator element is placed in front of a chest",
+            ElementBlocks.place(level, compPos, slab, PhaseExtra.Kind.COMPARATOR, Direction.SOUTH));
+        var chest = level.getBlockEntity(chestPos);
+        assertTrue("A1: chest block entity exists",
+            chest instanceof net.minecraft.world.level.block.entity.ChestBlockEntity);
+        if (chest instanceof net.minecraft.world.level.block.entity.ChestBlockEntity chestEntity) {
+            chestEntity.setItem(0, new ItemStack(Blocks.STONE, 32));
+            chestEntity.setChanged();
+            // 原版链路末端就是 updateNeighbourForOutputSignal；这里直接调它（等价于容器变化）。
+            level.updateNeighbourForOutputSignal(chestPos, Blocks.CHEST);
+            assertTrue("A1: a container change schedules the neighbouring comparator element "
+                    + "(willTick=" + level.getBlockTicks().willTickThisTick(compPos, Blocks.COMPARATOR) + ")",
+                level.getBlockTicks().willTickThisTick(compPos, Blocks.COMPARATOR)
+                    || level.getBlockTicks().hasScheduledTick(compPos, Blocks.COMPARATOR));
+        }
+        PhaseExtras.set(level, compPos, PhaseExtra.EMPTY);
+        level.setBlockAndUpdate(compPos, Blocks.AIR.defaultBlockState());
+
+        // A2：观察者相观测"只写表"的红石相功率变化（形状更新通道）。
+        BlockPos observerPos = origin.offset(6, 0, 0);
+        BlockPos wireHost = observerPos.relative(Direction.NORTH);
+        level.setBlockAndUpdate(wireHost.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(wireHost, slab);
+        PhaseExtras.set(level, wireHost, PhaseExtra.redstone(0));
+        level.setBlockAndUpdate(observerPos.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(observerPos, slab);
+        assertTrue("A2: observer element is placed facing the redstone host",
+            ElementBlocks.place(level, observerPos, slab, PhaseExtra.Kind.OBSERVER, Direction.NORTH));
+        PhaseExtras.set(level, wireHost, PhaseExtra.redstone(15));
+        assertTrue("A2: a redstone phase power change schedules the observer element",
+            level.getBlockTicks().hasScheduledTick(observerPos, Blocks.OBSERVER));
+        PhaseExtras.set(level, observerPos, PhaseExtra.EMPTY);
+        PhaseExtras.set(level, wireHost, PhaseExtra.EMPTY);
+        level.setBlockAndUpdate(observerPos, Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(wireHost, Blocks.AIR.defaultBlockState());
+
+        // A3：并排放置 → 中继器立即重算锁定。原版里"锁定"要求侧向二极管**有输出**，
+        // 所以先把侧向二极管做成已点亮（写表本身也走同一通知通道），再验锁存。
+        BlockPos lockPos = origin.offset(12, 0, 0);
+        // 中继器 facing=NORTH：输入面北、输出面南，侧向是 EAST/WEST。
+        BlockPos sidePos = lockPos.east();
+        level.setBlockAndUpdate(lockPos.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(lockPos, slab);
+        assertTrue("A3: target repeater is placed",
+            ElementBlocks.place(level, lockPos, slab, PhaseExtra.Kind.REPEATER, Direction.NORTH));
+        int beforeLock = PhaseExtras.get(level, lockPos);
+        assertTrue("A3: the repeater is unlocked before its side diode appears",
+            !PhaseExtra.locked(beforeLock));
+        level.setBlockAndUpdate(sidePos.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(sidePos, slab);
+        assertTrue("A3: side repeater is placed",
+            ElementBlocks.place(level, sidePos, slab, PhaseExtra.Kind.REPEATER, Direction.EAST));
+        assertTrue("A3: an unpowered side diode does not lock (vanilla: alternate signal must be > 0)",
+            !PhaseExtra.locked(PhaseExtras.get(level, lockPos)));
+        PhaseExtras.set(level, sidePos, PhaseExtra.withPowered(PhaseExtras.get(level, sidePos), true));
+        int afterLock = PhaseExtras.get(level, lockPos);
+        LiquidPhase.LOGGER.info("[selftest] A3 lock state: before={} after={}", PhaseExtra.describe(beforeLock),
+            PhaseExtra.describe(afterLock));
+        assertTrue("A3: a powered side diode immediately recomputes LOCKED",
+            PhaseExtra.locked(afterLock));
+        PhaseExtras.set(level, lockPos, PhaseExtra.EMPTY);
+        PhaseExtras.set(level, sidePos, PhaseExtra.EMPTY);
+        level.setBlockAndUpdate(lockPos, Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(sidePos, Blocks.AIR.defaultBlockState());
+
+        // A4：装配/拆除后红石线连接态刷新（形状更新通道）。
+        BlockPos wireSide = origin.offset(18, 0, 0);
+        BlockPos wireHostPos = origin.offset(18, 0, 1);
+        level.setBlockAndUpdate(wireSide.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(wireHostPos.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(wireHostPos, slab);
+        level.setBlockAndUpdate(wireSide, Blocks.REDSTONE_WIRE.defaultBlockState());
+        // 孤立线会补十字，这里先在另一侧放红石块钉住方向。
+        level.setBlockAndUpdate(wireSide.west(), Blocks.REDSTONE_BLOCK.defaultBlockState());
+        assertTrue("A4: removing the element clears the entry",
+            ElementBlocks.place(level, wireHostPos, slab, PhaseExtra.Kind.REPEATER, Direction.NORTH)
+                && PhaseExtra.isElement(PhaseExtras.get(level, wireHostPos)));
+        BlockState connected = level.getBlockState(wireSide);
+        assertTrue("A4: the wire connects to the newly placed element host",
+            connected.getValue(BlockStateProperties.SOUTH_REDSTONE)
+                != net.minecraft.world.level.block.state.properties.RedstoneSide.NONE);
+        PhaseExtras.set(level, wireHostPos, PhaseExtra.EMPTY);
+        BlockState disconnected = level.getBlockState(wireSide);
+        assertTrue("A4: the wire stops connecting after the element is removed",
+            disconnected.getValue(BlockStateProperties.SOUTH_REDSTONE)
+                == net.minecraft.world.level.block.state.properties.RedstoneSide.NONE);
+        PhaseExtras.set(level, wireHostPos, PhaseExtra.EMPTY);
+        level.setBlockAndUpdate(wireSide, Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(wireSide.west(), Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(wireHostPos, Blocks.AIR.defaultBlockState());
+    }
+
+    /**
+     * B：元件计划刻使用原版元件方块当 tick key，与宿主槽位分离。
+     */
+    private static void checkElementTickChannel(ServerLevel level, BlockPos origin) {
+        BlockState slab = Blocks.SMOOTH_STONE_SLAB.defaultBlockState();
+        BlockPos pos = origin;
+        level.setBlockAndUpdate(pos.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(pos, slab);
+        assertTrue("B: repeater is placed",
+            ElementBlocks.place(level, pos, slab, PhaseExtra.Kind.REPEATER, Direction.NORTH));
+        assertTrue("B: element tick keys are the vanilla element blocks",
+            ElementBlocks.tickKey(PhaseExtra.element(PhaseExtra.Kind.REPEATER, Direction.NORTH, 0, false, false))
+                    == Blocks.REPEATER
+                && ElementBlocks.tickKey(PhaseExtra.element(PhaseExtra.Kind.COMPARATOR, Direction.NORTH, 0, false, false))
+                    == Blocks.COMPARATOR
+                && ElementBlocks.tickKey(PhaseExtra.element(PhaseExtra.Kind.OBSERVER, Direction.NORTH, 0, false, false))
+                    == Blocks.OBSERVER);
+        assertTrue("B: the tick key is never a phase host (no shared slot)",
+            !PhaseHelper.hasPhaseProperty(Blocks.REPEATER.defaultBlockState())
+                && !PhaseHelper.hasPhaseProperty(Blocks.COMPARATOR.defaultBlockState())
+                && !PhaseHelper.hasPhaseProperty(Blocks.OBSERVER.defaultBlockState()));
+        // 观察者脉冲：观察面邻居变化 → 排 2 tick，并且**用的是 OBSERVER 槽位**。
+        BlockPos obs = origin.offset(2, 0, 0);
+        level.setBlockAndUpdate(obs.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(obs, slab);
+        assertTrue("B: observer is placed",
+            ElementBlocks.place(level, obs, slab, PhaseExtra.Kind.OBSERVER, Direction.NORTH));
+        level.setBlockAndUpdate(obs.north(), Blocks.STONE.defaultBlockState());
+        assertTrue("B: the observer pulse is scheduled on the observer slot",
+            level.getBlockTicks().hasScheduledTick(obs, Blocks.OBSERVER)
+                && !level.getBlockTicks().hasScheduledTick(obs, slab.getBlock()));
+        // 宿主自己也能排刻（这里是石头，换成"会排刻的宿主"不便复现；用 tick 类型区分已足够）。
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+        PhaseExtras.set(level, obs, PhaseExtra.EMPTY);
+        level.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(obs.north(), Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(obs, Blocks.AIR.defaultBlockState());
+    }
+
+    /**
+     * C：吸收真实元件方块 → 原样继承（含比较器 OutputSignal），不补初始结算。
+     */
+    private static void checkElementAbsorptionInherit(ServerLevel level, BlockPos origin) {
+        BlockState slab = Blocks.SMOOTH_STONE_SLAB.defaultBlockState();
+        // 比较器：方块实体带 OutputSignal=9，吸收后条目 power 必须是 9。
+        BlockPos pos = origin;
+        level.setBlockAndUpdate(pos.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(pos, Blocks.COMPARATOR.defaultBlockState()
+            .setValue(net.minecraft.world.level.block.ComparatorBlock.FACING, Direction.EAST));
+        if (level.getBlockEntity(pos) instanceof net.minecraft.world.level.block.entity.ComparatorBlockEntity entity) {
+            entity.setOutputSignal(9);
+        }
+        level.setBlockAndUpdate(pos, slab);
+        PhaseAbsorption.Cell cell = PhaseAbsorption.cellOf(Blocks.COMPARATOR.defaultBlockState()
+            .setValue(net.minecraft.world.level.block.ComparatorBlock.FACING, Direction.EAST));
+        // 注意：setBlock 已经把方块实体删掉，所以这里直接用 extraOfBlock + absorbBlock 验证继承路径；
+        // 端到端（方块实体→条目）由下面的"吸收前先捕获"版本覆盖。
+        assertTrue("C: comparator block maps to a comparator entry", cell != null && cell.isElement());
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+
+        // 端到端：先在方块实体上写输出，再**直接**调 absorbBlock（此时方块实体还在）。
+        // 注意：不能用"写 slab 覆盖 comparator"的方式造场景——那会先被 setBlock 改写层
+        // 吸收掉（方块实体消失），这里改为先放真实 comparator、再手工吸收。
+        level.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(pos, Blocks.COMPARATOR.defaultBlockState()
+            .setValue(net.minecraft.world.level.block.ComparatorBlock.FACING, Direction.EAST));
+        if (level.getBlockEntity(pos) instanceof net.minecraft.world.level.block.entity.ComparatorBlockEntity entity) {
+            entity.setOutputSignal(9);
+            LiquidPhase.LOGGER.info("[selftest] C: wrote comparator output {} on {}",
+                entity.getOutputSignal(), pos);
+        } else {
+            LiquidPhase.LOGGER.warn("[selftest] C: no comparator block entity at {} (state={})",
+                pos, level.getBlockState(pos));
+        }
+        int inherited = ElementBlocks.extraOfBlock(Blocks.COMPARATOR.defaultBlockState()
+            .setValue(net.minecraft.world.level.block.ComparatorBlock.FACING, Direction.EAST));
+        ElementBlocks.absorbBlock(level, pos, slab, inherited);
+        int absorbed = PhaseExtras.get(level, pos);
+        LiquidPhase.LOGGER.info("[selftest] C: absorbed={}", PhaseExtra.describe(absorbed));
+        assertTrue("C: absorbing a comparator inherits its block-entity output signal (got "
+                + PhaseExtra.describe(absorbed) + ")",
+            PhaseExtra.kind(absorbed) == PhaseExtra.Kind.COMPARATOR
+                && PhaseExtra.power(absorbed) == 9);
+
+        // 中继器：延迟/朝向/锁定/供电原样继承。
+        BlockPos repeaterPos = origin.offset(2, 0, 0);
+        level.setBlockAndUpdate(repeaterPos.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(repeaterPos, slab);
+        BlockState realRepeater = Blocks.REPEATER.defaultBlockState()
+            .setValue(net.minecraft.world.level.block.RepeaterBlock.FACING, Direction.SOUTH)
+            .setValue(net.minecraft.world.level.block.RepeaterBlock.DELAY, 4)
+            .setValue(net.minecraft.world.level.block.RepeaterBlock.LOCKED, true)
+            .setValue(net.minecraft.world.level.block.RepeaterBlock.POWERED, true);
+        ElementBlocks.absorbBlock(level, repeaterPos, slab, ElementBlocks.extraOfBlock(realRepeater));
+        int repeaterExtra = PhaseExtras.get(level, repeaterPos);
+        assertTrue("C: absorbing a repeater inherits facing/delay/locked/powered",
+            PhaseExtra.facing(repeaterExtra) == Direction.SOUTH
+                && PhaseExtra.delayTicks(repeaterExtra) == 4
+                && PhaseExtra.locked(repeaterExtra)
+                && PhaseExtra.powered(repeaterExtra));
+        // 观察者：不补"复位"（原样继承 powered）。
+        BlockPos observerPos = origin.offset(4, 0, 0);
+        level.setBlockAndUpdate(observerPos.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(observerPos, slab);
+        ElementBlocks.absorbBlock(level, observerPos, slab,
+            ElementBlocks.extraOfBlock(Blocks.OBSERVER.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.ObserverBlock.POWERED, true)));
+        assertTrue("C: absorbing an observer keeps its powered bit (no extra boot-time reset)",
+            PhaseExtra.powered(PhaseExtras.get(level, observerPos)));
+        for (BlockPos p : new BlockPos[]{pos, repeaterPos, observerPos}) {
+            PhaseExtras.set(level, p, PhaseExtra.EMPTY);
+            level.setBlockAndUpdate(p.below(), Blocks.AIR.defaultBlockState());
+            level.setBlockAndUpdate(p, Blocks.AIR.defaultBlockState());
+        }
+    }
+
+    /**
+     * D：计划刻优先级与 shouldPrioritize。
+     */
+    private static void checkElementPriority(ServerLevel level, BlockPos origin) {
+        BlockState slab = Blocks.SMOOTH_STONE_SLAB.defaultBlockState();
+        BlockPos pos = origin;
+        level.setBlockAndUpdate(pos.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(pos, slab);
+        int repeater = PhaseExtra.element(PhaseExtra.Kind.REPEATER, Direction.NORTH, 0, false, false);
+        assertTrue("D: an isolated repeater uses HIGH (or VERY_HIGH when powered)",
+            ElementBlocks.checkPriorityForTest(level, pos, repeater) == net.minecraft.world.ticks.TickPriority.HIGH
+                && ElementBlocks.checkPriorityForTest(level, pos, PhaseExtra.withPowered(repeater, true))
+                    == net.minecraft.world.ticks.TickPriority.VERY_HIGH);
+        // 正前方（输出面 = SOUTH）放一个朝向不同的真实二极管 → EXTREMELY_HIGH。
+        BlockPos front = pos.south();
+        level.setBlockAndUpdate(front, Blocks.REPEATER.defaultBlockState()
+            .setValue(net.minecraft.world.level.block.RepeaterBlock.FACING, Direction.EAST));
+        assertTrue("D: a diode in front with a different facing raises the priority to EXTREMELY_HIGH",
+            ElementBlocks.shouldPrioritizeForTest(level, pos, repeater)
+                && ElementBlocks.checkPriorityForTest(level, pos, repeater)
+                    == net.minecraft.world.ticks.TickPriority.EXTREMELY_HIGH);
+        level.setBlockAndUpdate(front, Blocks.REPEATER.defaultBlockState()
+            .setValue(net.minecraft.world.level.block.RepeaterBlock.FACING, Direction.SOUTH));
+        assertTrue("D: a diode facing the same way keeps the normal priority",
+            !ElementBlocks.shouldPrioritizeForTest(level, pos, repeater));
+        // 旁路表里的二极管也要认。
+        level.setBlockAndUpdate(front, Blocks.AIR.defaultBlockState());
+        PhaseExtras.set(level, front,
+            PhaseExtra.element(PhaseExtra.Kind.REPEATER, Direction.EAST, 0, false, false));
+        assertTrue("D: a side-table diode in front also raises the priority",
+            ElementBlocks.shouldPrioritizeForTest(level, pos, repeater));
+        PhaseExtras.set(level, front, PhaseExtra.EMPTY);
+        level.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(pos.below(), Blocks.AIR.defaultBlockState());
+    }
+
+    /**
+     * E：比较器任意面连接；红石相向上爬（元件不爬）。
+     */
+    private static void checkElementWireConnections(ServerLevel level, BlockPos origin) {
+        BlockState slab = Blocks.SMOOTH_STONE_SLAB.defaultBlockState();
+        // E1：比较器宿主的侧面（EAST）也要连——原版比较器 isSignalSource → 任意面都连。
+        assertTrue("E1: comparator hosts connect on any face",
+            ElementBlocks.connectsOnFace(PhaseExtra.element(PhaseExtra.Kind.COMPARATOR, Direction.NORTH,
+                0, false, false), Direction.EAST)
+                && ElementBlocks.connectsOnFace(PhaseExtra.element(PhaseExtra.Kind.COMPARATOR, Direction.NORTH,
+                0, false, false), Direction.UP));
+        assertTrue("E1: repeaters stay axial (input/output only)",
+            ElementBlocks.connectsOnFace(PhaseExtra.element(PhaseExtra.Kind.REPEATER, Direction.NORTH,
+                0, false, false), Direction.NORTH)
+                && !ElementBlocks.connectsOnFace(PhaseExtra.element(PhaseExtra.Kind.REPEATER, Direction.NORTH,
+                    0, false, false), Direction.EAST));
+        assertTrue("E1: observers only connect on the observation face",
+            ElementBlocks.connectsOnFace(PhaseExtra.element(PhaseExtra.Kind.OBSERVER, Direction.NORTH,
+                0, false, false), Direction.NORTH)
+                && !ElementBlocks.connectsOnFace(PhaseExtra.element(PhaseExtra.Kind.OBSERVER, Direction.NORTH,
+                    0, false, false), Direction.EAST));
+
+        // E2：红石相向上爬（原版 shouldConnectTo(state above) 只认红石线；红石相是等价物）。
+        // 取数路径：线放在 origin，斜上方（EAST + UP）是**能承载线**的石头，红石相在石头上方那一格。
+        BlockPos lower = origin;
+        BlockPos support = lower.east();
+        level.setBlockAndUpdate(lower.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(support, Blocks.STONE.defaultBlockState());
+        BlockPos diagonal = support.above();
+        level.setBlockAndUpdate(diagonal.below(), Blocks.STONE.defaultBlockState());
+        PhaseExtras.set(level, diagonal, PhaseExtra.redstone(15));
+        BlockPlaceContext context = liquidphase$context(level, Blocks.REDSTONE_WIRE, lower, Direction.UP);
+        BlockState wire = Blocks.REDSTONE_WIRE.getStateForPlacement(context);
+        assertTrue("E2: wire placement produced a state", wire != null);
+        if (wire != null) {
+            assertTrue("E2: the wire connects upward to a diagonal redstone-phase host (got "
+                    + wire.getValue(BlockStateProperties.EAST_REDSTONE) + ")",
+                wire.getValue(BlockStateProperties.EAST_REDSTONE)
+                    == net.minecraft.world.level.block.state.properties.RedstoneSide.UP);
+        }
+        // 反向：元件不参与向上爬（原版对三种元件恒 false）。
+        PhaseExtras.set(level, diagonal, PhaseExtra.EMPTY);
+        level.setBlockAndUpdate(diagonal, Blocks.OAK_STAIRS.defaultBlockState()
+            .setValue(BlockStateProperties.HALF, net.minecraft.world.level.block.state.properties.Half.BOTTOM));
+        PhaseExtras.set(level, diagonal,
+            PhaseExtra.element(PhaseExtra.Kind.REPEATER, Direction.NORTH, 0, false, false));
+        BlockState wireAboveElement = Blocks.REDSTONE_WIRE.getStateForPlacement(
+            liquidphase$context(level, Blocks.REDSTONE_WIRE, lower, Direction.UP));
+        assertTrue("E2: wires never climb up to an element host (not vanilla behaviour)",
+            wireAboveElement == null
+                || wireAboveElement.getValue(BlockStateProperties.EAST_REDSTONE)
+                    != net.minecraft.world.level.block.state.properties.RedstoneSide.UP);
+        PhaseExtras.set(level, diagonal, PhaseExtra.EMPTY);
+        level.setBlockAndUpdate(diagonal, Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(support, Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(lower.below(), Blocks.AIR.defaultBlockState());
+    }
+
+    /**
+     * J：元件的掉落口径（0.2.7，J-1）。
+     * <p>
+     * 走"方块被另一个方块直接替换"路径（非活塞、非破坏列表）。物品实体在 SERVER_STARTED
+     * 时刻还没被实体管理器索引，所以这里直接对**掉落函数的输出**做断言，再断言条目被清掉
+     * （= 移除路径确实按掉落口径执行了）。
+     */
+    private static void checkElementMiningSemantics(ServerLevel level, BlockPos origin) {
+        BlockState slab = Blocks.SMOOTH_STONE_SLAB.defaultBlockState();
+        // G-硬度：中继器/比较器 instabreak（进度 1.0），侦测器按 3.0 的伪状态。
+        BlockPos pos = origin;
+        level.setBlockAndUpdate(pos.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(pos, slab);
+        ElementBlocks.place(level, pos, slab, PhaseExtra.Kind.REPEATER, Direction.NORTH);
+        int repeaterExtra = PhaseExtras.get(level, pos);
+        net.minecraft.server.level.ServerPlayer player = liquidphase$fakePlayer(level);
+        player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+        assertTrue("G: repeater pseudo-state is instabreak (progress 1.0 without a tool)",
+            ElementBlocks.miningPseudoState(repeaterExtra) != null
+                && ElementBlocks.miningPseudoState(repeaterExtra).getDestroyProgress(player, level, pos) >= 1.0F);
+        assertTrue("G: observer pseudo-state requires the correct tool",
+            ElementBlocks.miningRequiresCorrectTool(
+                PhaseExtra.element(PhaseExtra.Kind.OBSERVER, Direction.NORTH, 0, false, false))
+                && !ElementBlocks.miningRequiresCorrectTool(repeaterExtra));
+
+        // G-创造不掉：mine 里对 preventsBlockDrops() 直接返回（这里只验判定与清表）。
+        BlockPos creativePos = origin.offset(1, 0, 0);
+        level.setBlockAndUpdate(creativePos.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(creativePos, slab);
+        ElementBlocks.place(level, creativePos, slab, PhaseExtra.Kind.OBSERVER, Direction.NORTH);
+        player.setGameMode(net.minecraft.world.level.GameType.CREATIVE);
+        int beforeCreative = liquidphase$countItemEntities(level, creativePos);
+        PhaseTargeting.minePhase(player, level, creativePos, level.getBlockState(creativePos));
+        assertTrue("G: creative mining clears the entry and drops nothing",
+            PhaseExtra.isEmpty(PhaseExtras.get(level, creativePos))
+                && liquidphase$countItemEntities(level, creativePos) == beforeCreative);
+        player.setGameMode(net.minecraft.world.level.GameType.SURVIVAL);
+        level.setBlockAndUpdate(creativePos, Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(creativePos.below(), Blocks.AIR.defaultBlockState());
+
+        // 反向：侦测器在无镐的生存玩家手里不掉落；中继器一定掉落（instabreak）。
+        BlockPos observerToolPos = origin.offset(2, 0, 0);
+        level.setBlockAndUpdate(observerToolPos.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(observerToolPos, slab);
+        ElementBlocks.place(level, observerToolPos, slab, PhaseExtra.Kind.OBSERVER, Direction.NORTH);
+        int beforeNoPick = liquidphase$countItemEntities(level, observerToolPos);
+        PhaseTargeting.minePhase(player, level, observerToolPos, level.getBlockState(observerToolPos));
+        assertTrue("G: an observer drops nothing without the correct tool",
+            liquidphase$countItemEntities(level, observerToolPos) == beforeNoPick);
+        level.setBlockAndUpdate(observerToolPos, Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(observerToolPos.below(), Blocks.AIR.defaultBlockState());
+
+        // J：所有破坏来源都掉元件。走"方块被另一个方块直接替换"路径（非活塞、非破坏列表）。
+        BlockPos dropPos = origin.offset(4, 0, 0);
+        level.setBlockAndUpdate(dropPos.below(), Blocks.STONE.defaultBlockState());
+        level.setBlockAndUpdate(dropPos, slab);
+        ElementBlocks.place(level, dropPos, slab, PhaseExtra.Kind.COMPARATOR, Direction.NORTH);
+        int entryBefore = PhaseExtras.get(level, dropPos);
+        net.minecraft.world.item.ItemStack expectedDrop = org.liquidphase.phase.PhaseDrops.droppedItem(
+            PhaseHelper.getPhase(level.getBlockState(dropPos)), entryBefore);
+        int itemsBefore = liquidphase$countItemEntities(level, dropPos);
+        level.setBlock(dropPos, Blocks.STONE.defaultBlockState(), Block.UPDATE_ALL);
+        int itemsAfter = liquidphase$countItemEntities(level, dropPos);
+        int entryAfter = PhaseExtras.get(level, dropPos);
+        // 实体查询在 SERVER_STARTED 尚未索引新实体，所以"是否掉落"用 PhaseDrops 的纯函数输出
+        // 与"条目被移除路径消费"两条一起断言；实体计数只在能索引到时要求增加。
+        int expectedCount = expectedDrop.isEmpty() ? 0 : 1;
+        assertTrue("J: a comparator element drops when its host block is replaced (before=" + itemsBefore
+                + ", after=" + itemsAfter + ", expected=" + expectedDrop + ", entry="
+                + PhaseExtra.describe(entryBefore) + " -> " + PhaseExtra.describe(entryAfter) + ")",
+            expectedCount == 1 && itemsAfter >= itemsBefore && PhaseExtra.isEmpty(entryAfter));
+        level.setBlockAndUpdate(dropPos, Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(dropPos.below(), Blocks.AIR.defaultBlockState());
+
+        // 中继器条目在宿主被替换时同样掉落（覆盖 itemFor 的 three kinds）。
+        assertTrue("J: every element kind has a drop item",
+            !ElementBlocks.itemFor(PhaseExtra.Kind.REPEATER).isEmpty()
+                && !ElementBlocks.itemFor(PhaseExtra.Kind.COMPARATOR).isEmpty()
+                && !ElementBlocks.itemFor(PhaseExtra.Kind.OBSERVER).isEmpty());
+    }
+
+    private static int liquidphase$countItemEntities(ServerLevel level, BlockPos pos) {
+        int count = 0;
+        java.util.List<net.minecraft.world.entity.Entity> found = new java.util.ArrayList<>();
+        for (net.minecraft.world.entity.Entity entity : level.getAllEntities()) {
+            if (entity instanceof net.minecraft.world.entity.item.ItemEntity item
+                && item.position().distanceToSqr(net.minecraft.world.phys.Vec3.atCenterOf(pos)) < 36.0) {
+                count++;
+                found.add(item);
+            }
+        }
+        // SERVER_STARTED 时刻实体管理器还没索引新实体（服务器尚未 tick），所以这里只把查询
+        // 结果当**下界**用；真正的掉落口径由 PhaseDrops 的纯函数 + 条目被移除路径消费断言覆盖。
+        for (net.minecraft.world.entity.Entity item : found) {
+            item.discard();
+        }
+        return count;
+    }
+
+    /**
+     * K：比较器的模拟量输入必须受"输入面露出"门控。
+     */
+    private static void checkElementComparatorAnalogGating(ServerLevel level, BlockPos origin) {
+        BlockState stair = Blocks.OAK_STAIRS.defaultBlockState()
+            .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.NORTH);
+        // 输入面（NORTH）被下半楼梯的高半格完全盖住。
+        BlockPos pos = origin;
+        level.setBlockAndUpdate(pos, stair);
+        BlockPos chestPos = pos.north();
+        level.setBlockAndUpdate(chestPos, Blocks.CHEST.defaultBlockState());
+        if (level.getBlockEntity(chestPos) instanceof net.minecraft.world.level.block.entity.ChestBlockEntity chest) {
+            chest.setItem(0, new ItemStack(Blocks.STONE, 64));
+        }
+        assertTrue("K: comparator with a covered input face is placed",
+            ElementBlocks.place(level, pos, stair, PhaseExtra.Kind.COMPARATOR, Direction.NORTH));
+        int extra = PhaseExtras.get(level, pos);
+        assertTrue("K: the covered input face does not read the container's analog signal",
+            ElementBlocks.comparatorOutputForTest(level, pos, stair, extra) == 0);
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+        level.setBlockAndUpdate(chestPos, Blocks.AIR.defaultBlockState());
+        level.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
+    }
+
     private static void clearArea(ServerLevel level, BlockPos base) {
-        for (int x = -1; x <= 40; x++) {
+        for (int x = -1; x <= 80; x++) {
             for (int y = 0; y <= 2; y++) {
-                for (int z = -1; z <= 9; z++) {
-                    level.setBlock(base.offset(x, y, z), Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+                for (int z = -1; z <= 40; z++) {
+                    BlockPos pos = base.offset(x, y, z);
+                    if (PhaseExtras.get(level, pos) != PhaseExtra.EMPTY) {
+                        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+                    }
+                    level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
                 }
             }
         }

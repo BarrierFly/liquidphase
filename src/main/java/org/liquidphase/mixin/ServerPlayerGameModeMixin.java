@@ -23,7 +23,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  *       （客户端经流体射线指到液体后按瞬挖流程发包，服务端在此收口）。</li>
  *   <li>直接挖相：破坏完成（destroyBlock）时若瞄准的是固相区域 → 只移除相、掉落相材料，
  *       宿主保留；挖掘速度已由 BlockStateBaseMixin 的 getDestroyProgress 按伪状态同步。</li>
+ *   <li>拆元件（0.2.7，G）：按"是否瞄准元件"决定拆元件还是拆宿主；元件按自身硬度/工具/创造口径
+ *       掉落（与 {@code ElementBlocks.mine} 同源）。</li>
  * </ul>
+ * <p>
+ * 元件与宿主同格：改写后的判定顺序是
+ * ① 瞄准元件（侦测器整格 / 中继器·比较器命中朝上的面）→ 拆元件、宿主保留；
+ * ② 否则瞄准确实是固相/红石相 → 挖相；
+ * ③ 都不是 → 原版破坏宿主（元件随宿主消失，按 J-1 掉落）。
  */
 @Mixin(ServerPlayerGameMode.class)
 public abstract class ServerPlayerGameModeMixin {
@@ -63,14 +70,19 @@ public abstract class ServerPlayerGameModeMixin {
     private void liquidphase$minePhase(BlockPos pos, CallbackInfoReturnable<Boolean> cir) {
         Level level = this.liquidphase$level();
         BlockState state = level.getBlockState(pos);
-        boolean element = PhaseTargeting.isElementMineable(level, pos);
-        if (!element && !PhaseTargeting.isPhaseMineable(level, pos, state)) {
+
+        // ① 瞄准元件 → 拆元件、宿主保留。遮挡判断用"元件是否被瞄准"而不是"格子里有没有元件"，
+        //    这样拆宿主不再需要点两次（G-瞄准 (c)）。
+        if (PhaseTargeting.isElementMineable(level, pos) && PhaseTargeting.isElementTarget(this.player, level, pos)) {
+            PhaseTargeting.minePhase(this.player, level, pos, state);
+            cir.setReturnValue(true);
             return;
         }
-        if (!element && !PhaseTargeting.isPhaseTarget(this.player, level, pos)) {
-            return;
+        // ② 瞄准固相/红石相区域 → 只挖相。
+        if (PhaseTargeting.isPhaseMineable(level, pos, state)
+            && PhaseTargeting.isPhaseTarget(this.player, level, pos)) {
+            PhaseTargeting.minePhase(this.player, level, pos, state);
+            cir.setReturnValue(true);
         }
-        PhaseTargeting.minePhase(this.player, level, pos, state);
-        cir.setReturnValue(true);
     }
 }

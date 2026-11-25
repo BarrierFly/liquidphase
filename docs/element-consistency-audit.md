@@ -1271,3 +1271,50 @@ E/G/H/I/J/K 属于**表现、手感与可放边界**。D 与 A 同属信号时�
 | §12.13 批次与开关 | 发布工程，与行为一致性无关；口径只能约束"开关默认值必须是 parity 那一档" |
 | §13.3 旧存档迁移 | B-1 引入的"旧宿主型 tick 失效"没有唯一正确答案（迁移扫描 vs 接受一次修复） |
 | §13.8 L-3 的掉落时机 | "回到原版状态"要求清除；但"何时掉、掉给谁"在区块加载时没有原版参照 |
+
+---
+
+## 14. 0.2.7 落地记录（用户裁定后的实际实现）
+
+> 本节记录"§13 的裁定"与"最终实现"的对应关系，以及**用户逐项确认后与原审计不同的地方**。
+> 未在此列出的项一律按 §13 裁定实现。
+
+### 14.1 用户确认的五处口径调整
+
+| 项 | §13 裁定 | 0.2.7 实际做法与理由 |
+| --- | --- | --- |
+| 根因 B 的 tick key | B-1：新增**专用哨兵方块** | 用户要求"**不新增新型计划刻**"，改为用**原版元件方块**（REPEATER/COMPARATOR/OBSERVER）当 tick key，`ServerLevel.tickBlock` HEAD 识别条目后执行元件 tick。同样与宿主分槽、不新增注册类型，且旧存档里真实元件方块排下的刻能继续执行（吸收时"填充形态直接照常继承"靠这一点） |
+| 根因 C 的初始态 | C-2：写 `power=0/powered=false` 再按 `shouldTurnOn` 排 1 tick | 用户口径是"**填充形态直接照常继承**"：原样继承全部状态，比较器额外把方块实体的 `OutputSignal` 读进 `power`；不补初始结算、不额外排刻 |
+| 根因 E 的范围 | E-3（只放宽比较器任意面） | 用户要求**连红石相的"向上爬"一起修**（§13.0 记录的真实缺口：原版 `shouldConnectTo(state above)` 只认红石线）。元件仍**不**爬（原版对元件恒 false） |
+| 根因 G 的瞄准几何 | 16×2 薄壳（逐列顶面 2px） | 用户口径"**瞄准宿主任意朝上的面**"：命中宿主形状且 `hit.getDirection() == UP` 即算元件；侦测器整格且始终优先。不设 2px 深度限制 |
+| 根因 H | R-3（`RIGID`）+ 侦测器另立规则 + L-3 | 用户口径"**H 不做拒绝和阈值**，允许同一部件错位，宿主相应位置轮廓为空处照常落在 0"：`hasCavity` 与 `columnTop` **未改**；只把"允许错位"写进文档 |
+| 根因 J | J-1 | 按用户口径"**都掉**"，包括"同格被另一个方块直接替换"这条原审计认为原版不掉的路径 |
+| 根因 I | I-2 碰撞 + PT-2 粒子 | 用户口径"**不加碰撞**（碰撞不算元件作为元件的行为）"：只补点亮的中继器粒子 |
+| 根因 K | K-2（模拟量不受门控） | 用户口径"**门控**（宿主面控制输入输出不在与独立行为同步的范围内）"：`exposed` 提到 `comparatorInput` 最外层 |
+| 根因 L | CL-1 | 与用户口径一致（客户端不写元件状态） |
+
+### 14.2 通知通道的最终形态（根因 A）
+
+- **统一出口**：`PhaseExtras.set(level, pos, extra, Notify)` → `PhaseNotifications.entryChanged`。
+  `Notify` 三个取值：`WORLD`（正常写表＝原版一次 `setBlock`）、`INSIDE_BLOCK_WRITE`
+  （那次 `setBlock` 自己会发基础通道，只补元件前方通知 / 红石相扇出）、`NONE`（静默）。
+- **逐事件对齐**（次数与顺序）：元件装配（`onPlace` 前方 → `updateNeighborsAt(pos, 旧方块)` → 形状）、
+  元件拆除（前方 → `updateNeighborsAt(pos, 元件方块)` → 形状）、中继器 POWERED/LOCKED
+  （前方 → 形状）、中继器 DELAY（前方 → `updateNeighborsAt` → 形状）、比较器 POWERED/MODE
+  （前方 → 形状 → 前方）、比较器 power（前方）、侦测器 POWERED（形状 → 前方）、
+  红石相放置（邻居 → 形状 → 上下邻居 → 邻线拐角 → `updatePowerStrength`）、
+  红石相功率（形状 → 本格与 6 邻居）、红石相移除（`updateNeighborsAt` → 形状 → 6 邻居 → 邻线拐角）。
+- **不做任何去重**：同值写入在 `PhaseExtras.set` 就被挡掉（与原版 `setBlockState` 对同一状态返回 null 同口径）。
+- **反向桥接**：`Level.updateNeighbourForOutputSignal` 的 TAIL（`LevelUpdateNeighbourForOutputSignalMixin`）
+  按原版同一套邻居扫描（四水平 + 隔一格导体再往里一格）找**有比较器条目**的格子，执行与
+  `ComparatorBlock.neighborChanged` 相同的 2 tick 重排（含 `willTickThisTick` 守卫与优先级）。
+- **模拟量通知（第③条）不需要补**：`Level.setBlock` 只在 `blockState.hasAnalogOutputSignal()` 时发；
+  元件/红石相都不报告模拟量输出。反方向由上面的桥接负责。
+
+### 14.3 仍然保留的差异（与 README/AGENTS 一致）
+
+1. **元件宿主的 `isSignalSource()` 仍为 false**：两个原版调用点按坐标补齐
+   （刷怪、铁轨），第三方 mod 直接调仍不可达。
+2. **元件不提供碰撞**（中继器/比较器/侦测器都不加）——表示法取舍。
+3. **放置边界未改**：80 种"碰撞为空"宿主仍可装配；细柱宿主上杆/红条仍可能被拆成两截。
+4. **元件仍只能放在有顶面空腔的宿主上**；中继器 `locked` 仍只做逻辑锁定（无锁形）。

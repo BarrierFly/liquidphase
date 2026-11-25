@@ -27,6 +27,10 @@
     "LevelChunkExtraMixin",
     "ElementShapeUpdateMixin",
     "ElementTuningMixin",
+    "LevelUpdateNeighbourForOutputSignalMixin",
+    "NaturalSpawnerElementMixin",
+    "RailBlockElementMixin",
+    "ServerLevelTickBlockMixin",
     "PhaseRenderShapeMixin",
     "PistonBaseBlockMixin",
     "PistonBaseBlockInvoker",
@@ -42,6 +46,7 @@
   "client": [
     "ClientLiquidMineMixin",
     "EntityPickMixin",
+    "client.PhaseElementParticleMixin",
     "client.PhaseLoaderMixin"
   ],
   "injectors": {

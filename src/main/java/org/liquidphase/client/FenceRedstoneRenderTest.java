@@ -126,7 +126,7 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
                 }
             }
 
-            String rebuildFailure = runSectionRebuildRegression(context, sp, bright.offset(0, 0, 2));
+            String rebuildFailure = runSectionRebuildRegression(context, sp, bright.offset(36, 0, 20));
             if (rebuildFailure != null) {
                 LiquidPhase.LOGGER.info("[gametest] {}", rebuildFailure);
                 failures.add(rebuildFailure);
@@ -600,18 +600,22 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
     }
 
     /**
-     * markDirty 回归：**只写旁路表、不动方块状态**的功率变化必须真的触发该 section 重画。
+     * markDirty 回归：**只写旁路表、不动方块状态**的写入必须真的触发该 section 重画。
      * <p>
      * 0.2.0 曾把标脏写成 {@code setBlockDirty(pos, state, state)}：原版
      * {@code ModelManager.requiresRender(old, new)} 对同一状态对象直接返回 {@code false}，
      * 调用静默失效（1.19.4–26.3 全版本都有这道门），表现为"红石相有时显示有时不显示"
      * ——只有恰逢同 section 其它方块状态变化（邻线功率、放/挖方块）或区块重载时才重画。
      * <p>
+     * 0.2.7 起"写表"也会按原版一次 {@code setBlock} 的通知口径走，所以用**红石功率**做观测对象
+     * 会被邻居重算回真实值（这正是 A 修好的行为）。这里改成写一个**不会被重算**的元件档位
+     * （中继器 DELAY 1 → 3）：它同样只改旁路表、不改方块状态，用来继续钉住"表写入必须重画"。
+     * <p>
      * 观测对象是该 section 已上传的 {@link SectionMesh} 引用：重画完成后引用必然被替换。
-     * 场景内没有其它重画源——元件场景放在 x+36（隔开两个 section，其侦测器脉冲的邻居
-     * 重画不会波及本格），观测窗内时间固定在正午、玩家静止、无方块更新。
+     * 场景内没有其它重画源——元件场景放在 x+36（隔开两个 section），观测窗内时间固定在正午、
+     * 玩家静止、无方块更新。
      *
-     * @return 失败描述；{@code null} = 通过（功率已恢复 15，不影响后续截图）
+     * @return 失败描述；{@code null} = 通过（档位已恢复，不影响后续截图）
      */
     private static String runSectionRebuildRegression(ClientGameTestContext context, TestSingleplayerContext sp,
             BlockPos pos) {
@@ -623,33 +627,40 @@ public final class FenceRedstoneRenderTest implements FabricClientGameTest {
         if (meshBefore == null) {
             return "rebuild FAIL target section not visible (pos=" + pos + ")";
         }
-        // 服务端只写旁路表：功率 15 → 7。不通知邻居、不改方块状态。
+        int before = sp.getServer().computeOnServer(server -> {
+            ServerLevel level = server.getLevel(Level.OVERWORLD);
+            return level == null ? PhaseExtra.EMPTY : PhaseExtras.get(level, pos);
+        });
+        if (!PhaseExtra.isElement(before)) {
+            return "rebuild FAIL no element entry at " + pos + " (got " + PhaseExtra.describe(before) + ")";
+        }
+        // 服务端只改旁路表里的元件档位（DELAY）：不改方块状态、不写死任何会被邻居重算的字段。
         sp.getServer().runOnServer(server -> {
             ServerLevel level = server.getLevel(Level.OVERWORLD);
             if (level != null) {
                 int extra = PhaseExtras.get(level, pos);
-                if (PhaseExtra.isRedstone(extra)) {
-                    PhaseExtras.set(level, pos, PhaseExtra.withPower(extra, 7));
+                if (PhaseExtra.kind(extra) == PhaseExtra.Kind.REPEATER) {
+                    PhaseExtras.set(level, pos, PhaseExtra.withDelay(extra, 2));
                 }
             }
         });
-        context.waitFor(client -> PhaseExtra.isRedstone(PhaseExtras.get(client.level, pos))
-            && PhaseExtra.power(PhaseExtras.get(client.level, pos)) == 7);
+        context.waitFor(client -> PhaseExtra.kind(PhaseExtras.get(client.level, pos)) == PhaseExtra.Kind.REPEATER
+            && PhaseExtra.delay(PhaseExtras.get(client.level, pos)) == 2);
         context.waitFor(client -> {
             SectionRenderDispatcher.RenderSection section = findSection(client, node);
             return section != null && section.getSectionMesh() != meshBefore;
         }, 100);
-        // 恢复 15（同样只走旁路表），等重画稳定后再进入截图环节。
+        // 恢复原档位（同样只走旁路表），等重画稳定后再进入截图环节。
         sp.getServer().runOnServer(server -> {
             ServerLevel level = server.getLevel(Level.OVERWORLD);
             if (level != null) {
                 int extra = PhaseExtras.get(level, pos);
-                if (PhaseExtra.isRedstone(extra)) {
-                    PhaseExtras.set(level, pos, PhaseExtra.withPower(extra, 15));
+                if (PhaseExtra.kind(extra) == PhaseExtra.Kind.REPEATER) {
+                    PhaseExtras.set(level, pos, PhaseExtra.withDelay(extra, PhaseExtra.delay(before)));
                 }
             }
         });
-        context.waitFor(client -> PhaseExtra.power(PhaseExtras.get(client.level, pos)) == 15);
+        context.waitFor(client -> PhaseExtra.delay(PhaseExtras.get(client.level, pos)) == PhaseExtra.delay(before));
         context.waitTicks(4);
         LiquidPhase.LOGGER.info("[gametest] table-only bypass write re-rendered its section (markDirty ok)");
         return null;

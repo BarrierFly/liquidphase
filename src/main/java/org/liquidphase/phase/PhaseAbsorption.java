@@ -143,9 +143,13 @@ public final class PhaseAbsorption {
      * <ul>
      *   <li>材料/熔岩：走 {@link PhaseHelper#fillWithPhase}（内部再走 canAcceptPhase）；</li>
      *   <li>红石：{@code redstonePower >= 0} = 吸收已存在的线（沿用原功率），
-     *       {@code < 0} = 新放置（初始 0，落地由 onPlace 立即重算）；</li>
-     *   <li>元件：{@code ElementBlocks.absorbBlock}（继承朝向/延迟/模式/锁定/供电）。</li>
+     *       {@code < 0} = 新放置（初始 0，落地立即按邻居重算）；</li>
+     *   <li>元件：{@code ElementBlocks.absorbBlock}（**原样继承**朝向/延迟/模式/锁定/供电，
+     *       比较器额外继承方块实体的输出值）。</li>
      * </ul>
+     * <p>
+     * 写入后的邻居通知一律由 {@code PhaseExtras.set} 的统一出口发出，这里不再自己调
+     * {@code updateNeighborsAt}（否则同一次写入会被通知两遍）。
      *
      * @param redstonePower 仅红石格有意义：{@code >= 0} 沿用该功率，{@code < 0} 按新放置处理
      * @return 是否真的写入了

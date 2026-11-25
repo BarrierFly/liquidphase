@@ -75,6 +75,17 @@ public abstract class BlockStateBaseMixin {
         if ((PhaseHelper.isSolidPhase(self) || redstone) && level instanceof net.minecraft.world.level.Level actualLevel
             && PhaseTargeting.isPhaseTarget(player, actualLevel, pos)) {
             cir.setReturnValue(PhaseTargeting.pseudoState(self, extra).getDestroyProgress(player, level, pos));
+            return;
+        }
+        // 元件（G-硬度 (b)）：按"原版元件方块自己"的硬度算——中继器/比较器 instabreak、
+        // 侦测器 strength(3.0)+requiresCorrectToolForDrops；与宿主是什么无关。
+        if (org.liquidphase.phase.PhaseExtra.isElement(extra)
+            && level instanceof net.minecraft.world.level.Level actualLevel
+            && PhaseTargeting.isElementTarget(player, actualLevel, pos)) {
+            BlockState pseudo = org.liquidphase.element.ElementBlocks.miningPseudoState(extra);
+            if (pseudo != null) {
+                cir.setReturnValue(pseudo.getDestroyProgress(player, level, pos));
+            }
         }
     }
 
@@ -131,12 +142,14 @@ public abstract class BlockStateBaseMixin {
         if (PhaseHelper.getPhase(self).isFrosted()) {
             PhaseHelper.frostedScheduledTick(level, pos, self, random);
         }
+        // 红石相的计划刻仍挂在宿主方块上（红石线本身也在宿主状态里体现，与元件不同）。
         int extra = org.liquidphase.phase.PhaseExtras.get(level, pos);
         if (org.liquidphase.phase.PhaseExtra.isRedstone(extra)) {
             org.liquidphase.redstone.RedstoneBlocks.tick(level, pos, self);
-        } else if (org.liquidphase.phase.PhaseExtra.isElement(extra)) {
-            org.liquidphase.element.ElementBlocks.tick(level, pos, self, extra);
         }
+        // 元件**不再**由宿主 tick 推进（0.2.7，根因 B）：元件计划刻的 tick key 是原版元件方块，
+        // 由 {@code ServerLevelTickBlockMixin} 执行。继续留在这里会让"宿主自己的计划刻"
+        // 顺带推进元件，等于仍然共用槽位。
     }
 
     @Inject(method = "onPlace", at = @At("HEAD"))
@@ -145,11 +158,11 @@ public abstract class BlockStateBaseMixin {
         PhaseHelper.scheduleFrostTickIfNeeded(level, pos, self);
         // 红石相落地（无论哪条组装路径、无论初始功率写的是 0 还是原线功率）一律立即
         // 按邻居重算——镜像原版红石线 onPlace → updatePowerStrength。
+        // 元件不在这里补任何东西：装配路径自己按原版口径排刻/补 locked（{@code ElementBlocks.place}），
+        // 吸收真实元件时状态在那个 tick 槽位里已经排好了。
         int extra = org.liquidphase.phase.PhaseExtras.get(level, pos);
         if (org.liquidphase.phase.PhaseExtra.isRedstone(extra)) {
             org.liquidphase.redstone.RedstoneBlocks.neighborChanged(level, pos, self);
-        } else if (org.liquidphase.phase.PhaseExtra.isElement(extra) && level instanceof ServerLevel serverLevel) {
-            org.liquidphase.element.ElementBlocks.refreshLock(serverLevel, pos, self, extra);
         }
     }
 
@@ -176,12 +189,13 @@ public abstract class BlockStateBaseMixin {
     // ------------------------------------------------------------------
     // 破坏保留（规划 §3.0.3）/活塞路径（0.2.3）：旧状态被移除时相的去向。
     // 四条路径（movedByPiston 与原格内容共同区分）：
-    //   ① 普通破坏（!moved、原格空气、非破坏列表）→ 破坏保留：相实体化留原格
-    //      （元件随宿主消失不掉落，维持 0.2.2 现状）。
+    //   ① 普通破坏（!moved、原格空气、非破坏列表）→ 破坏保留：相实体化留原格；
+    //      元件无法实体化 → 掉落对应物品（0.2.7，J-1：与原版"支撑消失时 dropResources"一致）。
     //   ② 活塞破坏列表摧毁（!moved + PistonPhaseOps 标记）→ 相弹出为物品。
     //   ③ 推动覆盖（moved、原格 = 移塞方块）→ 相弹出为物品（相不随方块移动）。
     //   ④ 拉动/剩余清理（moved、原格空气）→ 任意填充相实体化留在原位
     //      （元件无法实体化，掉落对应物品）。
+    //   ⑤ 方块被另一个方块直接替换（非活塞、非破坏列表、非"方块写入流程内部"）→ J-1 也掉。
     // 熔岩相经由 getFluidState 的 createLegacyBlock 在普通破坏时天然留下熔岩源，这里只补固体相。
     // ------------------------------------------------------------------
 
@@ -202,11 +216,14 @@ public abstract class BlockStateBaseMixin {
     /**
      * 方块被移除：按路径决定相的去向（见上），并清掉旁路条目。
      * <p>
-     * 旁路表条目在 {@code LevelChunkMixin} 里**不会**因为换成空气而提前清掉
-     * （否则这里读不到红石功率），所以本方法是红石/元件条目的正常清理点。
+     * 旁路表条目的清理点由移除路径与 {@code LevelChunkExtraMixin} 共同负责：
+     * 移除钩子会先读条目做实体化/掉落，随后按 {@link PhaseExtras.Notify#INSIDE_BLOCK_WRITE}
+     * 清表；如果某条路径的移除钩子没跑（例如不带 UPDATE_NEIGHBORS 的写入），
+     * {@code LevelChunkExtraMixin} 的 RETURN 兜底会补一次掉落 + 清表。
      * <p>
-     * 弹出口径（0.2.3，用户拍板）：固相掉对应物品（冰/霜冰无物品即消失、黑曜石掉黑曜石）；
-     * 熔岩相在"液体物品"功能开启时掉熔岩物品、关闭时消失；红石相掉红石粉；元件掉对应物品。
+     * 弹出口径（0.2.3，用户拍板 / 0.2.7 J-1）：固相掉对应物品（冰/霜冰无物品即消失、黑曜石掉黑曜石）；
+     * 熔岩相在"液体物品"功能开启时掉熔岩物品、关闭时消失；红石相掉红石粉；元件掉对应物品
+     * ——**所有破坏来源都掉**（玩家拆、爆炸、宿主被破坏、活塞、方块替换）。
      * 实体化口径：材料相实体化为真实方块（熔岩相 = 熔岩源），红石相留对应功率红石线；
      * 元件无法实体化，按弹出口径掉物品。
      */
@@ -226,9 +243,14 @@ public abstract class BlockStateBaseMixin {
             // ② 活塞破坏列表摧毁 → 弹出。
             popItems = true;
         } else if (!cellAir) {
-            // 方块被另一个方块替换（非活塞、非破坏列表）：相随状态一起消失（现状语义）。
+            // ⑤ 方块被另一个方块直接替换：J-1 也掉**元件**（原版元件方块被替换时会 dropResources）。
+            //    材料相仍按既有设计随状态一起消失，不在这里改成"掉材料"。
+            if (hasEntry && org.liquidphase.phase.PhaseExtra.isElement(extra)) {
+                liquidphase$popPhase(level, pos, self, extra);
+            }
             if (hasEntry) {
-                org.liquidphase.phase.PhaseExtras.set(level, pos, org.liquidphase.phase.PhaseExtra.EMPTY);
+                org.liquidphase.phase.PhaseExtras.set(level, pos, org.liquidphase.phase.PhaseExtra.EMPTY,
+                    org.liquidphase.phase.PhaseExtras.Notify.INSIDE_BLOCK_WRITE);
             }
             return;
         } else {
@@ -240,7 +262,9 @@ public abstract class BlockStateBaseMixin {
             liquidphase$materializePhase(level, pos, self, extra, movedByPiston);
         }
         if (hasEntry) {
-            org.liquidphase.phase.PhaseExtras.set(level, pos, org.liquidphase.phase.PhaseExtra.EMPTY);
+            // 这次移除本身就是一次方块写入流程：基础通道由它自己发。
+            org.liquidphase.phase.PhaseExtras.set(level, pos, org.liquidphase.phase.PhaseExtra.EMPTY,
+                org.liquidphase.phase.PhaseExtras.Notify.INSIDE_BLOCK_WRITE);
         }
     }
 
@@ -255,13 +279,12 @@ public abstract class BlockStateBaseMixin {
     /** 实体化到原格（普通破坏保留 / 活塞"留在原位"口径）。 */
     private void liquidphase$materializePhase(Level level, BlockPos pos, BlockState self, int extra, boolean movedByPiston) {
         if (org.liquidphase.phase.PhaseExtra.isElement(extra)) {
-            // 元件无法实体化成方块：活塞"留在原位"路径掉落对应物品；
-            // 普通破坏维持现状（随宿主消失、不掉落，README 已知限制）。
-            if (movedByPiston) {
-                ItemStack stack = org.liquidphase.element.ElementBlocks.itemFor(org.liquidphase.phase.PhaseExtra.kind(extra));
-                if (!stack.isEmpty()) {
-                    Block.popResource(level, pos, stack);
-                }
+            // 元件无法实体化成方块：**任何破坏来源都掉落对应物品**（0.2.7，J-1）。
+            // 原版依据：掉落表带 survives_explosion；DiodeBlock.neighborChanged 在 !canSurvive 时
+            // dropResources + removeBlock；活塞路径本来就掉。
+            ItemStack stack = org.liquidphase.element.ElementBlocks.itemFor(org.liquidphase.phase.PhaseExtra.kind(extra));
+            if (!stack.isEmpty()) {
+                Block.popResource(level, pos, stack);
             }
             return;
         }

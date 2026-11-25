@@ -639,32 +639,40 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 > 必须按 6 朝向预烘焙，否则区块网格会按旧朝向背面剔除（直发网格正常、实机不可见，
 > 0.2.4 实机排查过）。
 
-#### 3.3.3 元件相与原版独立方块的一致性（0.2.6 审计，未修）
+#### 3.3.3 元件相与原版独立方块的一致性（0.2.6 审计 → **0.2.7 已修**）
 
 `docs/element-consistency-audit.md` 逐函数对照了原版 `DiodeBlock` / `RepeaterBlock` /
-`ComparatorBlock` / `ObserverBlock` / `SignalGetter` / `RedStoneWireBlock` / `Level.setBlock`，
-结论是**旁路表方案与原版独立方块之间仍有多条功能差异**，按根因归类：
+`ComparatorBlock` / `ObserverBlock` / `SignalGetter` / `RedStoneWireBlock` / `Level.setBlock`。
+0.2.7 按该审计 §13 的裁定（口径：与"同一元件作为原版独立方块"一致）逐项修完，落地位置如下：
 
-| 根因 | 症状 | 修法方向 |
+| 根因 | 0.2.7 的做法 | 代码位置 |
 | --- | --- | --- |
-| **A. 写表只发 `updateNeighborsAt`** | 比较器相收不到 `updateNeighbourForOutputSignal`（容器内容变化不刷新）；观察者相观测不到红石相/元件相的只写表变化；并排放置不立即重算 `locked`；红线连接态不刷新 | 在 `PhaseExtras` 加"按 `Level.setBlock` 三条通道通知"的唯一出口（`updateNeighborsAt` + `updateNeighbourShapes` + `updateNeighbourForOutputSignal`），并在 `Level.updateNeighbourForOutputSignal` 上挂桥接，把相邻比较器相的 2 tick 重排接上 |
-| **B. 元件 tick 与宿主 tick 共用 `(pos, block)` 槽位** | 珊瑚/大垂滴叶/钟乳石尖/横向避雷针/干尸壳/探测铁轨等"自身会排刻且能放元件"的宿主上，侦测器脉冲被劫持、中继器延迟被压缩或宿主 tick 被推迟 | 改用**专用哨兵方块类型**做 tick key，`ServerLevel.tickBlock` HEAD 识别后直接跑元件 tick；`hasScheduledTick`/`willTickThisTick` 守卫同步改 |
-| **C. 吸收真实元件方块不补初始结算** | `extraOfBlock` 把比较器 `power` 写 0 → 吸收后输出恒 0；有输入的中继器不点亮；正在脉冲的侦测器永远亮着 | `absorbBlock` 末尾按 `place` 的口径补 `refreshLock` / `scheduleTick(1)` / 侦测器复位 |
-| **D. 无计划刻优先级** | 二极管链/环路的同 tick 结算顺序与原版不同（缺 `HIGH/VERY_HIGH/EXTREMELY_HIGH` 与 `shouldPrioritize`） | 补 `shouldPrioritize` 并按原版档位传 `scheduleTick(..., priority)` |
-| **E. 连接规则** | 比较器宿主只在轴向两面连接（原版任意面）；线不会向上爬到元件宿主 | `connectsOnFace` 对比较器放宽为任意非 null 方向；`getConnectingSide` 补 `canConnectUp` 分支（26.3 在 `shouldRedstoneWireConnectTo` 注入） |
-| **F. `isSignalSource()` 为 false** | 元件宿主格允许刷怪、铁轨朝向不更新、第三方 mod 判定不同 | 无坐标做不到；写进 README 已知限制 |
-| **G. 挖掘语义** | 拆元件按宿主硬度（原版中继器/比较器 `instabreak`）、不看瞄准、创造仍掉落 | 至少补 `!player.isCreative()`；瞄准/硬度是产品决策 |
-| **H. `hasCavity` 的空形状与无表面列** | 80 个宿主在 `CollisionContext.empty()` 下碰撞为空（告示牌 36、珊瑚 30、铁轨 4、传送门 3、多面体 3、垂滴叶茎等 4）却被放行，元件整根留在 y=0；细柱宿主上 `-∞ → 0` 把杆拆成两截 | `hasCavity` 对空形状退回 `getShape` 或拒绝；`columnTop` 用哨兵表示"该列没有表面"、不参与抬升 |
-| **K. 比较器模拟量绕过 I/O 门控** | 输入面被完全盖住时仍读容器/炼药锅/唱片机模拟量 | 把 `exposed` 判定提到 `comparatorInput` 最外层 |
-| **L. 客户端也写表** | `onUpdateShape` 的 `refreshLock` 没有 `!isClientSide` 守卫 | 包一层服务端判定，客户端 `locked` 只由网络包驱动 |
+| **A. 写表只发 `updateNeighborsAt`** | 写表后的通知收敛到**唯一出口**，按"原版一次 `setBlock` 在同一事件下会发的那一套"逐事件复刻（装配=flags 11、拆除=flags 3、状态变化=flags 2/3、红石相=线语义）；比较器相的**反向桥接**（容器内容变化 → 相邻比较器相 2 tick 重排，含"隔一格导体再往里看一格"）挂在 `Level.updateNeighbourForOutputSignal` 的 TAIL | `phase/PhaseNotifications.java`、`PhaseExtras.set(..., Notify)`、`mixin/LevelUpdateNeighbourForOutputSignalMixin.java` |
+| **B. 元件 tick 与宿主 tick 共用槽位** | 元件计划刻的 tick key 改成**原版元件方块**（REPEATER/COMPARATOR/OBSERVER），`ServerLevel.tickBlock` 的 HEAD 识别"该格条目 kind 与该 tick 类型匹配"后执行元件 tick 并取消原版调用；`hasScheduledTick`/`willTickThisTick` 守卫全部改成元件类型；删掉 `BlockStateBaseMixin.tick` 里"宿主 tick 顺带推进元件"的钩子。不新增方块类型，旧存档里真实元件方块排下的刻会继续执行 | `element/ElementBlocks.java`（`tickKey`）、`mixin/ServerLevelTickBlockMixin.java` |
+| **C. 吸收真实元件方块不补初始结算** | 吸收时**原样继承**（朝向/延迟/模式/锁定/供电），比较器额外把方块实体的 `OutputSignal` 读进条目 `power`；不补初始结算、不额外排刻（已排的刻因为 tick key 相同会继续执行）。通知用 `Notify.NONE`——"填充形态直接照常继承" | `ElementBlocks.absorbBlock` |
+| **D. 无计划刻优先级** | 补 `shouldPrioritize`（正前方是朝向不同的二极管，**同时认真实方块与旁路表条目**）与 `HIGH/VERY_HIGH/EXTREMELY_HIGH`（中继器）、`HIGH/NORMAL`（比较器） | `ElementBlocks.neighborChanged` / `checkPriority` |
+| **E. 连接规则** | 比较器宿主放宽为任意非空面（原版 `isSignalSource() && direction != null`）；**红石相可以向上爬**（原版 `canConnectUp` 走无方向重载，只认红石线——红石相是等价物）；元件**不爬**（原版对三种元件恒 false） | `ElementBlocks.connectsOnFace`、`mixin/RedStoneWireBlockMixin.java` |
+| **F. `isSignalSource()` 为 false** | 两个原版调用点按坐标补：`NaturalSpawner.isValidEmptySpawnBlock`（元件格禁止刷怪）、`RailBlock.updateState`（先按原版"恰好 3 个潜在连接"筛，再认相邻元件宿主）。第三方 mod 直接调 `isSignalSource()` 仍不可达 → README | `mixin/NaturalSpawnerElementMixin.java`、`mixin/RailBlockElementMixin.java` |
+| **G. 挖掘语义** | 掉落补创造守卫（1.19.4–1.21.1 用 `isCreative()`、其余 `preventsBlockDrops()`）；硬度按条目对应的原版元件方块（中继器/比较器 instabreak、侦测器 3.0+正确工具）；瞄准 = **侦测器整格且始终优先，中继器/比较器命中宿主任意朝上的面**（`getDirection() == UP`），其余算宿主 | `ElementBlocks.mine` / `miningPseudoState` / `isTargeted`、`mixin/ServerPlayerGameModeMixin.java`、`BlockStateBaseMixin.getDestroyProgress` |
+| **H. `hasCavity` 空形状与无表面列** | **按用户口径不动**：不新增拒绝、不设阈值、无表面列照旧落 0（同一根杆/红条允许被拆成两截） | `ElementBlocks.hasCavity` / `ElementRenderSupport.columnTop` 未改 |
+| **I. 碰撞与粒子** | 不加碰撞（碰撞不算元件作为元件的行为）；补**点亮中继器**的红石粒子（原版唯一有粒子的元件），注入 `ClientLevel.doAnimateTick` 的 TAIL（与宿主 `animateTick` 同一节奏/随机源） | `ElementBlocks.animateTick`、`mixin/client/PhaseElementParticleMixin.java` |
+| **J. 非玩家破坏不掉元件** | **所有破坏来源都掉**：玩家拆、爆炸、宿主被替换、活塞、冲水；`LevelChunkExtraMixin` 改成"HEAD 记旧条目、RETURN 时若未被移除钩子消费才按替换口径补掉落+清表"（不再提前清表，避免吃掉吸收/破坏保留） | `BlockStateBaseMixin.liquidphase$removed` / `materializePhase`、`mixin/LevelChunkExtraMixin.java` |
+| **K. 比较器模拟量绕过 I/O 门控** | `exposed` 提到 `comparatorInput` 最外层：输入面被宿主完整盖住时，容器/炼药锅/唱片机/展示框/探测铁轨的模拟量也不再读 | `ElementBlocks.comparatorInput` |
+| **L. 客户端也写表** | 中继器锁存重算只在 `!level.isClientSide()` 时写表；客户端 `locked` 只由 `extra_update` 驱动 | `ElementBlocks.onUpdateShape` |
 
 > ⚠️ 这些都是"元件作为填充相"与原版独立方块的差异，**不是**红石相/材料相的问题；
 > 修的时候不要改 `filling` 取值域，也不要重新引入"元件参数进状态"的方案（见 §7 第 3 条）。
 
+> ⚠️ **`PhaseExtras.set` 的第三个参数（`Notify`）决定补哪些通道**，取值只有三个：
+> `WORLD`（正常写表＝原版一次 `setBlock`）、`INSIDE_BLOCK_WRITE`（那次 `setBlock` 自己会发
+> 邻居变化与形状更新，只补元件特有的前方通知/红石相扇出）、`NONE`（静默：
+> 存档加载、网络应用、吸收真实元件块）。加新的写表路径时必须选对，否则会出现
+> "重复通知"或"通知缺失"。
+
 > ⚠️ 复现时注意两条容易搞错的点：①**开箱本身不触发** `updateNeighbourForOutputSignal`，
 > 触发的是容器**内容量**变化（玩家存取、漏斗进出、唱片机换碟、讲台翻页、展示框转动）；
 > ②**脚手架/树叶/整格方块放不上元件**（顶面是完整 16×16 且到顶，`hasCavity` 会拒），
-> 所以"树叶上中继器延迟变成 1 tick"这种说法是错的——B 的影响面是 §8.1/§8.2 那批宿主。
+> 所以"树叶上中继器延迟变成 1 tick"这种说法是错的。
 
 ### 3.7 资源包兼容合并（0.1.17）
 
@@ -779,12 +787,18 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 
 `-Dliquidphase.selftest=true`（或环境变量 `LIQUIDPHASE_SELFTEST=true`）启动服务端会在
 `ServerLifecycleEvents.SERVER_STARTED` 跑 `selftest/PhaseSelfTest`，断言数为
-**约 519（0.2.6；实测 1.19.4/1.20.1/1.21.1 = 519、1.21.10 = 520、1.21.11 = 519、26.3 = 518，全部 0 failed）**。
+**约 561（0.2.7；实测 1.19.4/1.20.1/1.21.1 = 561、1.21.10 = 562、1.21.11 = 561、26.3 = 560，全部 0 failed）**。
 含 0.1.20 的分派识别回归、0.1.22 的组装初始状态与组合碰撞断言、0.2.0 的旁路表读写/
-红石 updatePower/元件放置空腔/dynamic part 断言，以及 0.2.4 新增的**元件 I/O 露出门控**
+红石 updatePower/元件放置空腔/dynamic part 断言，0.2.4 新增的**元件 I/O 露出门控**
 （下半楼梯南/北脸：输入、输出、观察面、比较器 alternate、中继器锁存、红石线连接）
 与**元件资源形状**（33 个模型/7 份贴图；红条 16 像素格；侦测器 6 朝向 × on/off 各只有
-五官/输出口两平面且位于正确边界外侧）。
+五官/输出口两平面且位于正确边界外侧），以及 0.2.7 新增的**元件一致性回归**：
+`checkElementNotifications`（A：容器变化→比较器相排刻、红石相功率→观察者、并排二极管→锁存、
+装配/拆除→线连接态）、`checkElementTickChannel`（B：tick key 是原版元件方块、不与宿主共槽）、
+`checkElementAbsorptionInherit`（C：原样继承含比较器 OutputSignal）、`checkElementPriority`
+（D：`shouldPrioritize` + 三档优先级）、`checkElementWireConnections`（E：比较器任意面、
+红石相向上爬、元件不爬）、`checkElementMiningSemantics`（G 硬度/瞄准/创造 + J 掉落）、
+`checkElementComparatorAnalogGating`（K）、`checkElementClientLockMirror`（L）。
 各版本已经收敛到几乎相同，因为断言改成**全量扫描**而不是写死几个代表方块：
 凡是"原生 RenderShape 不是 MODEL 的 phase 宿主"都会被逐个验证，各版本有几个就查几个
 （实测 1.20.1 有 **51** 个，1.21.11 只有 **2** 个（1.21.11 起是 `barrier`/`light`；1.19.4/1.20.1
@@ -959,12 +973,14 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    1.19.4–1.21.11 由 `PhaseRenderLayerMixin` 直接注入 `ItemBlockRenderTypes`；
    26.3 没有该类，按贴图透明度自动推导。
    注意 1.21.11 的原版 blockstate/模型 JSON **不支持** `render_type`。
-3. **元件相（中继器/比较器/侦测器）已实现**（0.2.0 起，0.2.4 按规划重做渲染与 I/O）：
+3. **元件相（中继器/比较器/侦测器）已实现**（0.2.0 起；0.2.4 按规划重做渲染与 I/O；
+   0.2.7 按一致性审计修完行为，详见 §3.3.3）：
    **普通右键**宿主上表面装配（潜行右键保留原版放在上面一格）。放置前提是足迹内存在
-   顶面空腔（`top < 1`）：下半砖/下半楼梯可以，整格方块/上半砖拒绝。
+   顶面空腔（`top < 1`）：下半砖/下半楼梯可以，整格方块/上半砖拒绝（0.2.7 未改放置边界）。
    中继器/比较器只渲染杆与红条（1/16 像素列逐列贴在宿主顶面）；侦测器只渲染 16×16
    五官/输出口（6 朝向预烘焙、固定在方块内、在宿主相应表面外侧 0.01）。
    输入/输出/观察面/侧向 alternate/锁存/红石线连接都按宿主相应面露出判定。
+   计划刻的 tick key 是**原版元件方块**（不与宿主共槽）；写表通知统一走 `PhaseNotifications`。
    信号语义、几何与宿主形状采样见 `docs/plan-c-elements.md`；状态预算与旧方案
    （`docs/state-budget-analysis.md`、`docs/milestone-2.5-repeater-proposal.md`）只作历史记录。
    > ⚠️ **不要重新引入"每个元件参数一个属性"或"元件参数并进 `filling` 取值域"的方案。**
@@ -995,9 +1011,14 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    - 写旁路条目走 `canAcceptExtra`：条目必须为空，且 `filling == none` 或可替换（水/熔岩），
      写入时把 `filling` 清回 `none`、并清掉含水（0.2.3 清含水，一格只表达一个被含相）；
      `canAcceptPhase` 反向也检查条目为空；
-   - 方块被换成**另一个方块**时由 `LevelChunkExtraMixin` 清条目；换成空气留给
-     `onRemove` 读取红石功率以留下红石线；
-   - 元件几何/信号/连接判定一律按坐标查表，不能只看 `BlockState`（状态里没有元件信息）。
+   - 方块被换成**另一个方块**时由 `LevelChunkExtraMixin` 在**方块写入流程内部**清条目
+     （`Notify.INSIDE_BLOCK_WRITE`，只补元件前方通知；基础通道由那次 `setBlock` 自己发），
+     并且优先让移除钩子（`onRemove`/`affectNeighborsAfterRemoval`）先读条目做实体化/掉落，
+     只有移除钩子没跑时才由 mixin 的 RETURN 兜底补一次；换成空气留给 `onRemove` 读取红石功率
+     以留下红石线；
+   - 元件几何/信号/连接判定一律按坐标查表，不能只看 `BlockState`（状态里没有元件信息）；
+   - 元件计划刻的 tick key 是**原版元件方块**（见 §3.3.3 B），不是宿主方块；
+   - 写表后的邻居通知只走 `PhaseNotifications`，不要在调用点手写 `updateNeighborsAt`。
    > ⚠️ `Phase.isFrosted()` / `isSolid()` 仍必须用**显式区间**，不要用无上界的
    > `ordinal()` 相对序关系。红石/元件已不在枚举里，但霜冰取值仍排在中间。
 7. **`Unknown property 'filling'`（已修复）**：1.21.10+ 的多面体家族
@@ -1050,8 +1071,8 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    - **Sodium/光影**：渲染走 Fabric Rendering API（Indigo），未承诺 Sodium 兼容。
    - **`getRenderShape` 对全部相宿主状态强制 `MODEL`**：红石/元件存在性在状态里看不出来；
      隐形宿主（barrier/light/告示牌）的 blockstate 模型本身没有 `elements`，不会凭空多出几何。
-   - 红石相没有弱充能方块能力；**普通**破坏宿主时元件随宿主消失、不额外掉落
-     （活塞路径按 0.2.3 口径弹出）。
+   - 红石相没有弱充能方块能力；**任何破坏来源都会掉元件**（玩家拆、爆炸、宿主被替换、
+     活塞、冲水；创造模式与"侦测器没带正确工具"不掉，0.2.7 J-1）。
    - **中继器/比较器只渲染杆与红条**：原版 2px 平滑石底板、锁存条不画；杆/红条按
      1/16 像素列贴宿主顶面，楼梯高半格那侧的杆会升到方块顶面之上（"每像素搭最高处"
      的直接结果）。
@@ -1062,21 +1083,12 @@ mixin **只能注入目标类自己声明的方法**。每次升版本必须重�
    - **右键调档只对没有使用键交互的宿主生效**（0.2.5）：箱子/告示牌/活板门/光源方块等
      保持原版交互；只有中继器与比较器可调，侦测器没有参数。
 
-10. **元件相与原版独立方块的功能差异（0.2.6 审计，未修）**：逐条清单与修法见
-    [`docs/element-consistency-audit.md`](docs/element-consistency-audit.md)，
-    根因归纳入 AGENTS §3.3.3。要点（都会与原版行为不一致）：
-    - 比较器相**收不到容器内容变化通知**（`updateNeighbourForOutputSignal` 只认 `Blocks.COMPARATOR`）；
-    - 观察者相**观测不到**红石相 / 元件相的只写表变化；
-    - 并排放置的二极管**不会**立即锁定旁边的中继器；装配/拆除后红石线连接态不刷新；
-    - 元件计划刻与宿主自身的 tick **共用 `(pos, Block)` 槽位**（珊瑚/大垂滴叶/钟乳石尖/
-      横向避雷针/干尸壳/探测铁轨等宿主上会互相吞刻）；
-    - 吸收真实元件方块**不补初始结算**（比较器输出恒 0、中继器不点亮、侦测器永远亮）；
-    - 计划刻**没有优先级**，也没有 `shouldPrioritize`；
-    - 红石线对比较器宿主**只在轴向两面连接**，且**不会向上爬**到元件宿主；
-    - **80 个宿主**在 `CollisionContext.empty()` 下碰撞为空（告示牌 36、珊瑚 30、铁轨 4、
-      传送门 3、多面体 3、垂滴叶茎等 4），元件仍能放上去并整根留在 y=0；
-    - 细柱宿主（铁链、朝上的避雷针、钟乳石尖、蜡烛、海泡菜）上，杆/红条被 `-∞ → 0`
-      拆成两截；
-    - 拆元件按宿主硬度、不看瞄准、创造模式也掉物品；
-    - 比较器的模拟量输入**不遵守**"输入面被完全盖住就不输入"的门控；
-    - 元件宿主的 `isSignalSource()` 为 false（格内刷怪判定、铁轨朝向更新与第三方 mod 不同）。
+10. **元件相与原版独立方块的功能差异（0.2.7 已按审计裁定修完）**：逐条实现位置见
+    AGENTS §3.3.3 与 [`docs/element-consistency-audit.md`](docs/element-consistency-audit.md)。
+    仍保留的结构性差异只有：
+    - 元件宿主格的 `isSignalSource()` 仍为 false：两个原版调用点（刷怪、铁轨）已按坐标补，
+      但第三方 mod 直接调 `isSignalSource()` 的那条不可达；
+    - 元件不提供碰撞（中继器/比较器/侦测器都不加），这是"元件贴在宿主表面"表示法的取舍；
+    - 放置边界按用户口径**未改**：碰撞为空的 80 种宿主仍可装配、细柱宿主上杆/红条仍可能
+      被拆成两截（无表面列落 0）；
+    - 元件仍只能放在有顶面空腔的宿主上；中继器 `locked` 仍只做逻辑锁定（无锁形）。

@@ -17,12 +17,12 @@
 | 0.2.4 | 同上 | **元件按规划重做渲染与 I/O**：中继器/比较器只渲染杆和红条（逐 1/16 像素列搭在宿主顶面，无 2px 底板/锁存条）；侦测器只渲染 16×16 五官/输出口（六朝向预烘焙、固定在方块内、画在宿主相应表面外侧一层）；输入/输出/比较器侧向输入/中继器锁存/侦测器观察面都按宿主相应面是否露出判定；红石线可连到元件宿主；中继器短脉冲按原版 tick 语义；侦测器允许上下朝向 |
 | 0.2.5 | 同上 | **坐标换算修正**：元件逐列抬升取宿主顶面高度时，`VoxelShape.max(axis, a, b)` 的坐标参数实际是 (z, x)，此前按 (x, z) 传，导致 x/z 不对称宿主（栅栏柱、台阶、楼梯、墙）上的杆/红条错位；**两相透明度分开**：材料相覆盖层改由动态模型发射，每个 quad 各自选图层（冰/霜冰→TRANSLUCENT、黑曜石→CUTOUT），不再一刀切整块状态，半透明冰不再被画成死白、玻璃宿主上的黑曜石不再被拖进排序层；**右键调档**：宿主没有使用键交互时，右键可调所含中继器延迟（1→2→3→4→1）/比较器模式（比较↔减法）；**充水冲落**：水把可冲落的填充相（红石相/元件，判定为实时类型判断）冲落成对应物品后正常充水 |
 | 0.2.6 | 同上 | **相材料格判定收敛为一份**（`PhaseAbsorption.cellOf` / `canAbsorbCell` / `absorbCell`）：以前"红石线 / 材料相 / 真实元件方块"三分支在交互层、改写层、下落方块、接受层各写一遍，加一种填充要改四处，元件（0.2.3 后加）只被逐点打补丁——这是"冰/黑曜石好了、中继器·比较器·侦测器组装仍不全"的根因；现在四条路径全部委托同一份判定，新增种类只需改一处。**元件装配补齐两处不对称**：①不再要求有玩家（发射器/命令/其它 mod 放下元件物品时也能装配，潜行无从判断时按普通右键处理）；②也认落点格（点旁边的方块让元件"落进"宿主格，与材料吸收同构）。回归：自检新增 `checkAssemblyPathConsistency` |
+| 0.2.7 | 同上 | **元件相与原版独立方块的行为一致性修复**（逐项落地 `docs/element-consistency-audit.md` §13 的裁定）：①**A** 旁路表写入按原版一次 `setBlock` 的三条通道统一通知（`PhaseNotifications`）；比较器相接上容器变化的反向桥接；观察者相能观测红石相/元件相的只写表变化；并排二极管立即重算锁存；装配/拆除后红石线连接态刷新。②**B** 元件计划刻改用**原版元件方块**当 tick key（`ServerLevel.tickBlock` 注入执行），与宿主 tick 彻底分槽。③**C** 吸收真实元件块**原样继承**（含比较器方块实体的 `OutputSignal`），不补初始结算/不额外排刻。④**D** 补 `shouldPrioritize` 与 `HIGH/VERY_HIGH/EXTREMELY_HIGH` 优先级。⑤**E** 比较器宿主任意非空面都连；红石相可以"向上爬"（元件不爬，原版即如此）。⑥**F** 元件格禁止刷怪、铁轨朝向按信号源判定。⑦**G** 拆元件按瞄准（侦测器整格优先、中继器/比较器命中朝上的面）、按元件自身硬度、创造不掉。⑧**H/I/J/K/L** 不改放置规则、不加碰撞、补点亮中继器粒子、所有破坏来源都掉元件、比较器模拟量纳入 I/O 露出门控、客户端不写元件状态 |
 
-> **元件相与原版独立方块的差异**（0.2.6 审计）：逐函数对照后确认仍有多条功能差异
-> （比较器收不到容器通知、观察者看不到填充相变化、计划刻与宿主 tick 互相吞、吸收方块不补初始结算、
-> 无优先级、比较器连接面偏窄、80 种"碰撞为空"宿主也能装配、拆元件不瞬挖/创造仍掉落等）。
-> 完整清单、根因与修法见 [`docs/element-consistency-audit.md`](docs/element-consistency-audit.md)，
-> 摘要见"已知限制"第 14 条。**这些尚未修复**，不要当成已实现的一致性承诺。
+> **元件相与原版独立方块的差异**（0.2.6 审计 → **0.2.7 已修**）：审计列出的 A–L 各条已在 0.2.7
+> 按"把元件当成原版独立方块"的口径逐项修完（见上表 0.2.7 行）。
+> 完整清单、根因与修法见 [`docs/element-consistency-audit.md`](docs/element-consistency-audit.md)。
+> 仍保留的差异只有几处**结构上不可达或有意的取舍**，集中在"已知限制"第 14 条。
 
 ---
 
@@ -232,7 +232,7 @@
   （`Unsupported class file major version 69`），这不是本 mod 的问题。用 JDK 25 时请把 loader
   升到较新版本，或改用 JDK 17/21 启动。
 
-### 已知限制（0.2.6）
+### 已知限制（0.2.7）
 
 1. **旧存档不兼容**：`filling` 的取值域已变更（8 个材料类别），旧状态无法映射。
 2. **元件只能放在有顶面空腔的宿主**：下半砖/下半楼梯等可以（足迹内存在 `top < 1` 的列），
@@ -250,7 +250,9 @@
 7. **Sodium/光影**：渲染走 Fabric Rendering API（Indigo），未承诺 Sodium 兼容。
 8. **`getRenderShape` 对全部相宿主状态强制 `MODEL`**：红石/元件存在性在状态里看不出来。
    隐形宿主（barrier/light/告示牌）的 blockstate 模型本身没有 `elements`，不会凭空多出几何。
-9. 红石相没有弱充能方块能力；破坏宿主时元件随宿主一起消失，不额外掉落。
+9. 红石相没有弱充能方块能力。**破坏宿主时元件按原版口径掉落**（0.2.7）：玩家拆除、爆炸、
+   宿主被其它方块替换、活塞、冲水都会掉对应元件物品；只有创造模式（以及侦测器没有正确工具时）
+   不掉。
 10. **中继器/比较器只渲染杆与红条**：原版的 2px 平滑石底板、锁存条都不画。杆/红条按
     1/16 像素列各自贴在宿主顶面；在楼梯上，高半格那一侧的杆会随顶面升到方块顶面之上
     （这就是"每像素搭在相应最高处"的直接结果）。
@@ -262,24 +264,18 @@
 13. **右键调档只对"没有使用键交互"的宿主生效**：箱子/告示牌/活板门/光源方块等自带交互的
     宿主右键仍是原版行为（要给这些宿主调档，请先拆下元件再装回去）。
     调档只作用于中继器和比较器；侦测器没有可调参数。
-14. **元件相与原版独立方块仍有多条功能差异**（0.2.6 审计，详见
-    `docs/element-consistency-audit.md`），已知的会与原版不同：
-    - 比较器相**感知不到容器内容变化**（开箱本身原版也不触发，但玩家存取、漏斗进出、
-      唱片机换碟、讲台翻页、展示框转动都不会刷新比较器输出）；
-    - **观察者相看不到**红石相 / 元件相的变化；
-    - 并排放的二极管**不会立即**锁住中继器；装配/拆除后红石线连接态不刷新；
-    - 宿主自己也会排刻时（珊瑚、大垂滴叶、钟乳石尖、横向避雷针、干尸壳、探测铁轨），
-      元件与宿主会**互相吞掉对方的 tick**（侦测器可能不脉冲、中继器延迟可能被压缩）；
-    - 把真实中继器/比较器/侦测器方块**吸收**进宿主后，比较器输出为 0、有输入的中继器不点亮、
-      正在脉冲的侦测器会一直亮着，直到旁边有方块变化；
-    - 元件计划刻**不分优先级**；红石线对比较器宿主只在轴向两面连接、也不会向上爬到元件宿主；
-    - 告示牌、珊瑚、铁轨、传送门、垂滴叶茎等 **80 种宿主**在服务端"碰撞为空"口径下也会接受
-      元件，元件贴在其底部（y=0）而不是表面；铁链/避雷针/钟乳石尖/蜡烛/海泡菜这类细柱宿主
-      上，杆与红条会被拆成两截高度；
-    - 拆元件按**宿主硬度**计算（原版中继器/比较器是瞬挖）、**不看瞄准**（点宿主任意位置都先拆
-      元件，要拆宿主得点两次）、**创造模式也会掉物品**。
-    - 比较器的模拟量输入**不受**"输入面被完全盖住就不输入"的限制。
-    - 元件宿主格**不允许刷怪**这条原版语义没有（`isSignalSource()` 无坐标，改不了）。
+14. **元件相与原版独立方块的行为差异（0.2.7 已按审计裁定修完，只剩下列结构性不可达项）**，
+    详见 `docs/element-consistency-audit.md`：
+    - **元件宿主格的 `isSignalSource()` 仍是 false**：无坐标的状态级判定做不到按格等价。
+      两个原版调用点已按坐标补齐（元件格**禁止刷怪**——半砖上的元件会让整格禁止刷怪，
+      与原版元件所在格一致；铁轨朝向按"恰好 3 个潜在连接 + 旁边是元件宿主"更新）；
+      **任意第三方 mod 直接调 `isSignalSource()`** 的那条做不到，仍需视为差异。
+    - **侦测器不提供碰撞**（原版是整格碰撞），这是"元件贴在宿主表面"表示法的有意取舍；
+      中继器/比较器同样不加碰撞。
+    - **放置边界不变**（0.2.7 按你的口径不动 H）：没有新增拒绝、没有覆盖率阈值，
+      "80 个碰撞为空宿主也能装配""细柱宿主上杆/红条被拆成两截（无表面列落 0）"仍然存在。
+    - **元件仍然只能放在有顶面空腔的宿主**（下半砖/下半楼梯等；整格方块/上半砖拒绝）。
+    - **中继器 `locked` 只做逻辑锁定**，不显示原版锁形（见第 4 条）。
 
 ## English
 
@@ -298,6 +294,7 @@ One block = solid phase (the block itself) + at most one contained phase.
 | 0.2.4 | same | **Elements re-done per the spec (rendering + I/O)**: repeaters/comparators draw only rods and the red bar (per 1/16-pixel column on the host top; no 2px base or lock bar); observers draw only the 16×16 face/port cutouts (six facings pre-baked, fixed in the block, drawn on the outer layer of the host surface); input/output, comparator side inputs, repeater locking and the observer detection face are gated by host-face exposure; redstone wire connects to element hosts; repeater short pulses follow vanilla tick semantics; observers allow up/down facings |
 | 0.2.5 | same | **Coordinate fix**: lifting rods/bars onto the host surface sampled `VoxelShape.max(axis, a, b)` with `(x, z)`, but its two coordinates are actually `(z, x)`, so on x/z-asymmetric hosts (fence posts, slabs, stairs, walls) the element geometry was misplaced; **per-phase transparency**: the material-phase overlay is now emitted by the dynamic model, each quad picking its own layer (ice/frosted ice → TRANSLUCENT, obsidian → CUTOUT) instead of one layer for the whole state, so translucent ice is no longer drawn opaque-white and obsidian on a translucent host is no longer dragged into the sorted layer; **right-click tuning**: hosts without their own use-key interaction cycle the contained repeater's delay (1→2→3→4→1) or the comparator's mode (compare↔subtract) on right-click; **water flushing**: water flushes a washable filling (redstone/element, judged live by entry kind) into its item and then waterlogs normally |
 | 0.2.6 | same | **One single source of truth for phase-material cells** (`PhaseAbsorption.cellOf` / `canAbsorbCell` / `absorbCell`): the old "wire / material / real element block" three-way branch was duplicated in the interaction layer, the rewrite layer, the falling-block path and the acceptance layer, so adding a filling kind meant editing four places — and elements (added in 0.2.3) had only been patched per call site. That is the root cause of "ice/obsidian work but repeater/comparator/observer assembly is still incomplete". All four paths now delegate to the same predicate, so a new kind only needs one edit. **Two element-assembly gaps closed**: (a) it no longer requires a player (dispensers, commands and other mods placing element items now assemble too; with no player to detect sneaking it behaves like a plain right-click), and (b) it also honours the *landing* cell (clicking a neighbouring block so the element lands in the host cell, matching material absorption). Regression: new selftest `checkAssemblyPathConsistency` |
+| 0.2.7 | same | **Element phases now behave like vanilla element blocks** (the audit's §13 rulings, implemented): (A) side-table writes notify through the same three channels as one vanilla `setBlock` (`PhaseNotifications`); a bridge feeds container changes to neighbouring comparator elements; observers see redstone/element table-only changes; side-by-side diodes recompute `locked` immediately; wires refresh their connections on assembly/removal. (B) Element scheduled ticks use **the vanilla element block** as tick key (executed from a `ServerLevel.tickBlock` injection), fully separating them from host ticks. (C) Absorbing a real element block **inherits its state verbatim** (including the comparator's block-entity `OutputSignal`), no boot-time re-settlement and no extra scheduling. (D) `shouldPrioritize` and `HIGH/VERY_HIGH/EXTREMELY_HIGH` priorities. (E) Comparator hosts connect on any non-null face; redstone phases can be climbed up to (elements cannot, matching vanilla). (F) Element cells block natural spawns and drive rail direction. (G) Mining respects aiming (observers whole-cell and always first; repeaters/comparators hit any upward face), element hardness, and creative-mode no-drops. (H/I/J/K/L) Placement rules untouched, no collision, lit repeaters emit particles, every destruction source drops the element, comparator analog input respects the I/O exposure gate, and the client never writes element state |
 
 ### Feature 1 — more logged blocks (required on both sides)
 
@@ -467,7 +464,7 @@ Dependency floors follow each version's real minimum (`fabricloader` 0.15.0 / 0.
 `statement` remain required. Note: loader 0.15.x/0.16.x bundle an old Mixin that cannot read JDK 25 class
 files (`Unsupported class file major version 69`) — use a newer loader or JDK 17/21 in that case.
 
-### Known limitations (0.2.6)
+### Known limitations (0.2.7)
 
 1. **Old worlds are incompatible**: the `filling` value domain changed (8 material classes); old states cannot be mapped.
 2. **Elements only fit hosts with top-face cavity**: bottom slabs / bottom stairs work (some column has `top < 1`);
@@ -487,7 +484,9 @@ files (`Unsupported class file major version 69`) — use a newer loader or JDK 
 8. **`getRenderShape` is forced to `MODEL` for every state of every phase host**: redstone/element presence is not visible
    in the state. Invisible hosts (barrier/light/signs) have no `elements` in their blockstate model, so no host geometry
    appears out of nowhere.
-9. The redstone phase has no weak-charging capability; breaking the host removes its element without an extra drop.
+9. The redstone phase has no weak-charging capability. **Breaking the host drops the element the vanilla way** (0.2.7):
+   player mining, explosions, the host being replaced by another block, pistons and water flushing all drop the
+   element item; only creative mode (and an observer broken without the correct tool) drops nothing.
 10. **Repeaters/comparators draw only rods and the red bar**: the vanilla 2px smooth-stone base and the lock bar are
     not drawn. Rods/bar are seated per 1/16-pixel column; on stairs the high-step side follows the surface and can
     rise above the block top (a direct consequence of "every pixel rests on its own highest point").
@@ -499,6 +498,20 @@ files (`Unsupported class file major version 69`) — use a newer loader or JDK 
 13. **Right-click tuning only applies to hosts without a use-key interaction**: chests/signs/trapdoors/light blocks
     keep their vanilla click (remove and re-attach the element to retune those). Only repeaters and comparators are
     tunable; observers have no parameter.
+14. **Element-phase behaviour differences that remain after 0.2.7** (the audit's A–L items were fixed; only these
+    structurally unreachable items remain — see `docs/element-consistency-audit.md`):
+    - **`isSignalSource()` on an element host is still false**: it is a position-less state predicate. The two
+      vanilla call sites are covered positionally (element cells block natural spawns — an element on a slab blocks
+      spawns for the whole cell, exactly like a vanilla element block; rails update their direction when a
+      neighbouring element host is involved and the rail has exactly 3 potential connections). A **third-party mod
+      calling `isSignalSource()` directly** still sees a difference.
+    - **Observers provide no collision** (vanilla is a full cube) — an intentional trade-off of the
+      "element drawn on the host surface" representation; repeaters/comparators add no collision either.
+    - **Placement bounds are unchanged** (H intentionally untouched in 0.2.7): no new rejections, no coverage
+      threshold; the "80 collision-empty hosts still accept elements" and "rods/bars split into two levels on thin
+      hosts (empty columns fall back to 0)" behaviours remain.
+    - **Elements still require a top-face cavity** in the host (bottom slabs/stairs yes; full blocks/top slabs no).
+    - **Repeater `locked` remains logic-only**, without the vanilla lock-bar visual (item 4).
 
 ### Licence
 

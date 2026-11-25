@@ -86,7 +86,9 @@ public final class PhaseHelper {
      */
     public static BlockState setPhase(LevelAccessor level, BlockPos pos, BlockState state, Phase phase, int flags) {
         if (phase != Phase.NONE) {
-            PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+            // 这次 setBlock 随后就会把这一格换状态：条目清理按"方块写入流程内部"处理，
+            // 原版的邻居变化与形状更新由那次 setBlock 自己发（含 affectNeighborsAfterRemoval）。
+            PhaseExtras.set(level, pos, PhaseExtra.EMPTY, PhaseExtras.Notify.INSIDE_BLOCK_WRITE);
         }
         BlockState target = withPhase(state, phase);
         level.setBlock(pos, target, flags);
@@ -201,15 +203,11 @@ public final class PhaseHelper {
             return false;
         }
         ItemStack drop = PhaseDrops.droppedItem(getPhase(level.getBlockState(pos)), extra);
-        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
-        if (level instanceof ServerLevel serverLevel) {
-            if (!drop.isEmpty()) {
-                Block.popResource(serverLevel, pos, drop);
-            }
-            // 元件被冲走后按"元件消失"处理：通知前方面重算，否则输出面会挂着一个已经不存在的信号。
-            net.minecraft.core.Direction output = PhaseExtra.facing(extra).getOpposite();
-            serverLevel.updateNeighborsAt(pos, level.getBlockState(pos).getBlock());
-            serverLevel.updateNeighborsAt(pos.relative(output), level.getBlockState(pos).getBlock());
+        // 水马上要占住这一格（调用方紧接着 setBlock）：邻居变化与形状更新由那次写入自己发，
+        // 条目清理只补元件特有的前方通知。
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY, PhaseExtras.Notify.INSIDE_BLOCK_WRITE);
+        if (level instanceof ServerLevel serverLevel && !drop.isEmpty()) {
+            Block.popResource(serverLevel, pos, drop);
         }
         return true;
     }
@@ -391,7 +389,8 @@ public final class PhaseHelper {
     /** 融化为水相（下界/蒸发维度直接消失，规划 §3.0.6）。 */
     public static void melt(ServerLevel level, BlockPos pos, BlockState state) {
         boolean evaporates = waterEvaporates(level, pos);
-        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+        // 下面的 setBlock 会自己发邻居变化与形状更新。
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY, PhaseExtras.Notify.INSIDE_BLOCK_WRITE);
         level.setBlock(pos, meltedState(state, evaporates), Block.UPDATE_ALL);
         if (!evaporates) {
             // 对齐原版 IceBlock.melt 的邻居通知（1.21.10+ 第三参为 Orientation，旧版为 fromPos）。

@@ -179,7 +179,8 @@ public final class PhaseExtra {
             case REPEATER -> "repeater(facing=" + facing(extra) + ",delay=" + delayTicks(extra)
                 + ",powered=" + powered(extra) + ",locked=" + locked(extra) + ")";
             case COMPARATOR -> "comparator(facing=" + facing(extra) + ",mode="
-                + (subtractMode(extra) ? "subtract" : "compare") + ",powered=" + powered(extra) + ")";
+                + (subtractMode(extra) ? "subtract" : "compare") + ",power=" + power(extra)
+                + ",powered=" + powered(extra) + ")";
             case OBSERVER -> "observer(facing=" + facing(extra) + ",powered=" + powered(extra) + ")";
             default -> "-";
         };

@@ -128,6 +128,26 @@ public final class PhaseTargeting {
         return org.liquidphase.phase.PhaseExtra.isElement(org.liquidphase.phase.PhaseExtras.get(level, pos));
     }
 
+    /**
+     * {@return 玩家是否正瞄准该格的**元件**（G-瞄准 (c)，用户口径：宿主任意朝上的面都算元件）}
+     * <p>
+     * 规则（见 {@code ElementBlocks#isTargeted}）：
+     * <ul>
+     *   <li>侦测器：整格命中即算（原版侦测器轮廓就是整格），**始终先被瞄准**；</li>
+     *   <li>中继器/比较器：命中宿主形状且命中面朝上才算；侧面/底面算宿主。</li>
+     * </ul>
+     * 与 {@link #isPhaseTarget} 互斥：元件比固相/红石相更"外层"，所以先判元件。
+     */
+    public static boolean isElementTarget(Player player, Level level, BlockPos pos) {
+        BlockState state = level.getBlockState(pos);
+        int extra = org.liquidphase.phase.PhaseExtras.get(level, pos);
+        if (!org.liquidphase.phase.PhaseExtra.isElement(extra)) {
+            return false;
+        }
+        // 元件总是"从上方看"，与固相/红石相的观察者视角口径一致；射线端点用同一交互距离。
+        return org.liquidphase.element.ElementBlocks.isTargeted(player, level, pos, state, extra);
+    }
+
     /** {@return 相对应的伪状态（用于挖掘速度与掉落判定）} */
     public static BlockState pseudoState(BlockState state, int extra) {
         if (org.liquidphase.phase.PhaseExtra.isRedstone(extra)) {
@@ -164,13 +184,13 @@ public final class PhaseTargeting {
         int extra = org.liquidphase.phase.PhaseExtras.get(level, pos);
         if (org.liquidphase.phase.PhaseExtra.isElement(extra)) {
             if (level instanceof net.minecraft.server.level.ServerLevel serverLevel) {
-                org.liquidphase.element.ElementBlocks.mine(serverLevel, pos, state, extra);
+                org.liquidphase.element.ElementBlocks.mine(serverLevel, pos, state, extra, player);
             }
             return;
         }
         if (org.liquidphase.phase.PhaseExtra.isRedstone(extra)) {
             if (level instanceof net.minecraft.server.level.ServerLevel serverLevel) {
-                org.liquidphase.redstone.RedstoneBlocks.mineRedstonePhase(serverLevel, pos, state);
+                org.liquidphase.redstone.RedstoneBlocks.mineRedstonePhase(serverLevel, pos, state, player);
             }
             return;
         }

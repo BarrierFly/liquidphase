@@ -5,6 +5,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.Level;
@@ -37,6 +38,9 @@ import org.liquidphase.phase.PhaseHelper;
  *       {@code level.getSignal} 指向暴露面时供电；邻居变化 → 立即重算。</li>
  *   <li>破坏保留：破坏含红石相的宿主 → 掉宿主战利品 + 原格留下对应功率的原版红石线。</li>
  * </ul>
+ * <b>0.2.7</b>：写表后的邻居通知统一由 {@code PhaseNotifications} 按"原版一次 setBlock"口径发出
+ * （放置 = {@code onPlace} + 形状；功率变化 = 形状 + 本格与 6 邻居；拆除 = 移除路径），
+ * 本类不再自己调 {@code updateNeighborsAt}。
  */
 public final class RedstoneBlocks {
 
@@ -125,8 +129,9 @@ public final class RedstoneBlocks {
      * 邻居变化 → 立即重算本格功率。
      * <p>
      * 与原版 {@code DefaultRedstoneWireEvaluator.updatePowerStrength} 同一手法：
-     * 只有功率真的变了才写回，写回后 `updateNeighborsAt` 让邻居重新结算，递归自然终止。
-     * 现在功率在旁路表里，写回不改变方块状态，所以必须显式通知邻居。
+     * 只有功率真的变了才写回；写回的通知（形状 + 本格与 6 邻居）由 {@code PhaseExtras.set}
+     * 的统一出口发出，于是递归自然终止。（原版的 {@code setBlock(..., 2)} 之后也是同样的
+     * 6 邻居扇出，所以这里不需要额外调用。）
      */
     public static void neighborChanged(Level level, BlockPos pos, BlockState state) {
         if (level instanceof ServerLevel serverLevel) {
@@ -145,7 +150,6 @@ public final class RedstoneBlocks {
             return false;
         }
         PhaseExtras.set(level, pos, PhaseExtra.withPower(extra, newPower));
-        level.updateNeighborsAt(pos, state.getBlock());
         return true;
     }
 
@@ -183,7 +187,7 @@ public final class RedstoneBlocks {
      * 把该格写成含红石相的宿主（**新放置**路径：红石粉点相容宿主）。
      * <p>
      * 方块本身不变，只写旁路条目；初始功率一律为 0——与"单独放置一根红石粉"一致，
-     * 落地后由 {@code BlockStateBaseMixin} 在 onPlace 里立即按邻居重算出真实功率。
+     * 落地后立即按邻居重算出真实功率（原版 {@code onPlace → updatePowerStrength}）。
      * 写入条目时宿主状态剥掉材料填充相与含水标志（0.2.3 清含水：一格只表达一个被含相，
      * 熔岩相被红石粉覆盖时清回 none，含水宿主上的水一并清掉）。
      * <p>
@@ -198,9 +202,9 @@ public final class RedstoneBlocks {
         if (stripped != state) {
             level.setBlock(pos, stripped, Block.UPDATE_ALL);
         }
+        // 方块状态没变时 onPlace 不会触发：这次写表本身就是"放置"，统一出口会发原版
+        // setBlock(..., 11) 的两条通道；随后那次 updatePower 各自成一次写入。
         PhaseExtras.set(level, pos, PhaseExtra.redstone(0));
-        // 状态没变（只写了旁路表），onPlace 不会触发：这里显式结算一次，
-        // 镜像原版"放置红石粉 → onPlace → updatePowerStrength"。
         if (level instanceof ServerLevel serverLevel) {
             updatePower(serverLevel, pos, serverLevel.getBlockState(pos));
         }
@@ -212,6 +216,9 @@ public final class RedstoneBlocks {
      * <p>
      * 落位的宿主状态若带含水标志（如带水下落的相容宿主落进线格），先剥掉水（清含水）——
      * 条目本身就是一个被含相，水不能同时留在格内。
+     * <p>
+     * 这条路径发生在"宿主刚被写进线格"之后：那次 {@code setBlock} 已经发过邻居变化与形状更新，
+     * 所以条目写入只发元件/红石相特有的部分（这里红石相没有额外通道，功率重算独立成一次写入）。
      */
     public static void setRedstonePhase(LevelAccessor level, BlockPos pos, int power) {
         BlockState state = level.getBlockState(pos);
@@ -219,18 +226,36 @@ public final class RedstoneBlocks {
             && state.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)) {
             level.setBlock(pos, state.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED, false), Block.UPDATE_ALL);
         }
-        PhaseExtras.set(level, pos, PhaseExtra.redstone(power));
+        PhaseExtras.set(level, pos, PhaseExtra.redstone(power), PhaseExtras.Notify.INSIDE_BLOCK_WRITE);
         if (level instanceof ServerLevel serverLevel) {
             updatePower(serverLevel, pos, serverLevel.getBlockState(pos));
         }
     }
 
-    /** 直接挖红石相（D8）：掉红石粉、相清空、宿主保留。 */
-    public static void mineRedstonePhase(ServerLevel level, BlockPos pos, BlockState state) {
-        Block.popResource(level, pos, new ItemStack(Items.REDSTONE));
-        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+    /** 自检用：按本格状态现算目标功率（不写表）。 */
+    public static int computeTargetPowerForTest(ServerLevel level, BlockPos pos) {
+        return computeTargetPower(level, pos, level.getBlockState(pos));
     }
 
+    /**
+     * 直接挖红石相（D8）：掉红石粉、相清空、宿主保留。
+     * <p>
+     * 与元件同口径：创造模式不掉落（原版 {@code destroyBlock} 里 {@code preventsBlockDrops()} 直接返回）；
+     * 红石粉没有"需要正确工具"约束（原版 {@code redstone_wire} 掉落恒可用）。
+     */
+    public static void mineRedstonePhase(ServerLevel level, BlockPos pos, BlockState state, Player player) {
+        PhaseExtras.set(level, pos, PhaseExtra.EMPTY);
+        //? if 1.19.4 || 1.20.1 || 1.21.1 {
+        /*if (player != null && player.isCreative()) {
+            return;
+        }
+         *///?} else {
+        if (player != null && player.preventsBlockDrops()) {
+            return;
+        }
+        //?}
+        Block.popResource(level, pos, new ItemStack(Items.REDSTONE));
+    }
     /** 破坏保留：含红石相的宿主被破坏 → 原格留下对应功率的原版红石线。 */
     public static void materializeWire(Level level, BlockPos pos, int power) {
         if (!(level instanceof ServerLevel serverLevel)) {

@@ -98,12 +98,9 @@ public abstract class FillingPlacementMixin {
             // 改写为"宿主 + 填充相"：一次 setBlock 到位（目标不是材料格，不会递归）。
             return writeState.apply(PhaseHelper.withPhase(current, cell.filling()));
         }
-        // 红石线按"新放置"口径（初始 0，落地由 onPlace 按邻居重算；来料状态自带的 POWER
-        // 不作为初始状态，见 AGENTS §3.3）；元件方块继承它自己的状态。两条都只写旁路表。
-        if (!PhaseAbsorption.absorbCell(level, pos, current, cell, -1)) {
-            return null;
-        }
-        level.updateNeighborsAt(pos, current.getBlock());
-        return true;
+        // 红石线按"新放置"口径（初始 0，落地立即按邻居重算；来料状态自带的 POWER
+        // 不作为初始状态，见 AGENTS §3.3）；元件方块继承它自己的状态（原样继承）。
+        // 两条都只写旁路表；通知由 PhaseExtras.set 的统一出口按原版一次 setBlock 发出。
+        return PhaseAbsorption.absorbCell(level, pos, current, cell, -1);
     }
 }
