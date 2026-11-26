@@ -741,7 +741,7 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 - 代码：`src/main/java/org/liquidphase/client/FenceRedstoneRenderTest.java`（`fabric-client-gametest`
   入口，由 `build.gradle.kts` 的 `extra_gametest_entrypoint` 只对 1.21.11 注入 `fabric.mod.json`；
   0.2.2 起同一入口还挂了 `AssemblyInteractionTest`——真实玩家点击链路的组装回归，见 §3.3 的警告；
-  0.2.8 起再挂 `ElementTimingTest`——元件时序与原版独立方块逐 tick 对照，见本节末尾）。
+  0.2.7 起再挂 `ElementTimingTest`——元件时序与原版独立方块逐 tick 对照，见本节末尾）。
 - run config：`build.gradle.kts` 的 `loom.runs.create("clientGameTest")`，运行目录
   **`versions/1.21.11/run-clientgametest/`**（刻意与 `run/` 分开：新目录里没有 `resourcepacks/`，
   等于"无资源包"的干净客户端）。日志与截图都在该目录下，已加进 `.gitignore`。
@@ -776,27 +776,41 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
   整块状态只有一个图层，这条断言必失败。
 - 每次会落截图到 `screenshots/`：栅栏斜视/近垂直俯视/0 档对比，以及元件斜视/俯视、
   侦测器东侧五官/西侧输出口、下半楼梯逐像素落差。
-- 场景五（0.2.8，元件时序）：`ElementTimingTest` 把"元件相（下半砖/下半楼梯宿主）"与
+- 场景五（0.2.7，元件时序）：`ElementTimingTest` 把"元件相（下半砖/下半楼梯宿主）"与
   "同一元件作为**原版独立方块**（放石头）"放进几何对应的两个电路，**逐 tick 采样输出并
-  要求波形完全一致**。33 组场景 / 42 条波形：观察者（单脉冲、A→B 接力、反馈时钟、观察中继器/比较器/红石相/
-  **真实原版红石线**、竖直朝上、**六朝向中的 5 个**、随机模糊 80 tick、**1 tick 脉冲的
+  要求波形完全一致**。32 组场景 / 32 条波形：观察者（单脉冲、A→B 接力、反馈时钟、观察中继器/比较器/红石相/
+  **真实原版红石线**、竖直朝上、**六朝向中的 5 个**、随机模糊、**1 tick 脉冲的
   2/3/4/5 tick 周期列车**、脉冲期内再触发、**宿主自己排刻**、**驱动原版灯 / 原版中继器 /
   原版红石线**、**元件相→原版观察者** 与 **原版中继器→原版观察者** 两种混合链、
   **比较器数值变化不该触发观察者**、**中继器 locked 翻转应当触发观察者**）、
   中继器（延迟 1/4、短脉冲、双段链、随机输入模糊）、比较器（容器变化、减法模式、连续增量）。
+  所有场景**一次性搭好**，由一次服务端调用内的循环推进 60 tick，**整个时序测试耗时不到 1 秒**
+  （`./gradlew :1.21.11:runClientGameTest` 的其余时间都是启动/建世界/关服）。
   对照组设置完先核对"确实还是原版方块"，并断言每个场景至少出现过一次脉冲——否则
   「两边都恒 0」会被误判成通过。
+  > ⚠️ **推进 tick 必须调用真实的 `ServerLevel.tickBlock`**（经 `ServerLevelTickBlockInvoker`
+  > 这个只在 1.21.11 gametest 里声明的 `@Invoker`）：元件的计划刻由
+  > `ServerLevelTickBlockMixin` 注入 `tickBlock` 执行，测试若自己写"取状态 → `state.tick`"就
+  > 绕过了注入点，元件永远不 tick，表现为"元件侧波形全 0、原版侧正常"。同时 `LevelTicks`
+  > 只执行 `triggerTick <= gameTime`，循环里必须显式 `ServerLevelData.setGameTime` 推进时间。
   > ⚠️ **对照组不能先垫下半砖再写真实元件方块 / 真实红石线**：那会被 `PhaseAbsorption`
   > 的"元件方块作相材料格 / 红石线→红石相"吸收成"宿主 + 旁路条目"，原版侧永远读不到
   > `POWERED` / `POWER`。本回归在 relay / clock / sees-repeater / sees-comparator /
   > sees-vanilla-wire / wire-power 六处都踩过，表现为"波形恒 0 却通过"或"只在个别场景失败"。
   >
   > ⚠️ 另几处**场景本身写错**同样会得到恒 0 波形：观察者时钟两个朝向必须**互相看着对方**
-  > （B 在 A 南侧时 A=FACING SOUTH、B=FACING NORTH）；中继器 `FACING` 是**输入面**，
+  > （A 在东、B 在西时 A=FACING EAST、B=FACING WEST）；中继器 `FACING` 是**输入面**，
   > 电源要放在 `facing` 那一侧；**触发格必须显式清成空气**（否则地形残留会让"写石头"
-  > 变成同一状态的 no-op，观察者不起振——p=5 列车用例踩过，重跑才通过）；
-  > **用例场地不得重叠**（单条最多占 `origin` 到 `origin+(9,0,9)`，`fuzzRepeaterInputs`
-  > 与 `compareObserverByRedstonePhase` 曾因此在 x=30 处互相覆盖）。
+  > 变成同一状态的 no-op，观察者不起振——p=5 列车用例踩过）；
+  > **用例场地不得重叠**（单条最多占 `origin` 到 `origin+(9,0,9)`，本轮又踩到
+  > `compareObserverAllFacings` 的 5 个朝向按 z 排会压住 `observerPulseTrain` 的第 4/5 组）。
+  > 现在 `buildAll` 用**自增场地游标**（`plot()` / `plotWide(n)`）分配坐标，新增用例不要再手写
+  > 偏移。
+  >
+  > ⚠️ **中继器锁存的侧向输入只认二极管**（原版 `sideInputDiodesOnly = true` →
+  > `SignalGetter.getControlInputSignal` 的 `bl` 分支只走 `DiodeBlock.isDiode`），红石块/红石线
+  > **不算**。曾经用"侧向红石块"造锁存场景，结果两侧 LOCKED 都不翻转——那是场景写错，不是缺陷；
+  > 现在侧向放的是朝 EAST 的中继器，只翻它的 `POWERED`。
   >
   > ⚠️ **朝下的侦测器不在对照内**：原版朝下侦测器观察的正是自己脚下的支撑方块，而
   > `ObserverBlock.canSurvive` 要求那一格必须存在（RIGID），所以原版永远无法起振；元件相朝下

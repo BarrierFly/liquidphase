@@ -13,7 +13,7 @@
     "client": ["org.liquidphase.client.LiquidPhaseClient"]${extra_gametest_entrypoint}
   },
   "mixins": [
-    "liquidphase.mixins.json"${extra_mixins}${extra_mixins_wire}${extra_mixins_layer}${extra_mixins_26}
+    "liquidphase.mixins.json"${extra_mixins}${extra_mixins_wire}${extra_mixins_layer}${extra_mixins_26}${extra_mixins_gametest}
   ],
   "depends": {
     "fabricloader": ">=${fabric_loader_version}",

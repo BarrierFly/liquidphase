@@ -76,6 +76,9 @@ tasks.named<ProcessResources>("processResources") {
     val extraMixinsWire = if (unobfuscatedEra) "" else ",\"liquidphase.wire.mixins.json\""
     // 渲染层 mixin 只在 1.19.4–1.21.11 需要（26.3 由贴图透明度自动推导图层）。
     val extraMixinsLayer = if (unobfuscatedEra) "" else ",\"liquidphase.layer.mixins.json\""
+    // 只在 1.21.11 的 client gametest 里需要（把 ServerLevel.tickBlock 暴露给时序测试）。
+    // 其它版本不声明：ServerLevelTickBlockInvoker 只写在 1.21.11 分支里。
+    val extraMixinsGametest = if (mcVersion == "1.21.11") ",\"liquidphase.gametest.mixins.json\"" else ""
     // 客户端渲染回归（fabric-client-gametest）只在 1.21.11 有实现：
     // 它用到的 BakedQuad.position 是 1.21.11 才有的 API（1.21.10 顶点还打包在 int[] 里）。
     val gametestEntrypoint = if (mcVersion == "1.21.11") {
@@ -100,6 +103,7 @@ tasks.named<ProcessResources>("processResources") {
             .replace("\${extra_mixins_26}", extraMixins26)
             .replace("\${extra_mixins_wire}", extraMixinsWire)
             .replace("\${extra_mixins_layer}", extraMixinsLayer)
+            .replace("\${extra_mixins_gametest}", extraMixinsGametest)
             .replace("\${extra_gametest_entrypoint}", gametestEntrypoint)
         }
     }

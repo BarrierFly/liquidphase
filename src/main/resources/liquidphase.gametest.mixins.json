@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "package": "org.liquidphase.mixin.gametest",
+  "compatibilityLevel": "JAVA_21",
+  "minVersion": "0.8",
+  "mixins": [
+    "ServerLevelTickBlockInvoker"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
