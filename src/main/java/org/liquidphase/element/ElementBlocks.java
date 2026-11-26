@@ -53,6 +53,9 @@ import org.liquidphase.redstone.RedstoneBlocks;
  */
 public final class ElementBlocks {
 
+    /** 诊断开关：-Dliquidphase.debug.elements=true 时把元件刻/形状更新打一行日志。 */
+    public static final boolean DEBUG = Boolean.getBoolean("liquidphase.debug.elements");
+
     /** 元件几何的最小"空腔"判据：足迹内至少有一列顶面低于整格。 */
     private static final double MIN_CAVITY = 1.0;
 
@@ -443,6 +446,11 @@ public final class ElementBlocks {
     /** 状态级 {@code updateShape}：侦测器观察面邻居变化 → 2 tick 后翻起；中继器侧向变化 → 重算锁存。 */
     public static void onUpdateShape(LevelAccessor level, BlockPos pos, BlockState host, int extra, Direction changedDirection) {
         PhaseExtra.Kind kind = PhaseExtra.kind(extra);
+        if (DEBUG) {
+            org.liquidphase.LiquidPhase.LOGGER.info("[debug][shape] {} {} changed={} facing={} powered={} client={}",
+                pos, kind, changedDirection, PhaseExtra.facing(extra), PhaseExtra.powered(extra),
+                level.isClientSide());
+        }
         if (kind == PhaseExtra.Kind.REPEATER
             && changedDirection.getAxis() != PhaseExtra.facing(extra).getAxis()) {
             // 原版 RepeaterBlock.updateShape 的写回被 !levelReader.isClientSide() 挡住：
@@ -466,7 +474,12 @@ public final class ElementBlocks {
             return;
         }
         // 原版 ObserverBlock.startSignal：!hasScheduledTick(pos, this) 时排 2 tick。
-        if (!hasScheduledTick(serverLevel, pos, extra)) {
+        boolean scheduled = hasScheduledTick(serverLevel, pos, extra);
+        if (DEBUG) {
+            org.liquidphase.LiquidPhase.LOGGER.info("[debug][collector] {} observer startSignal hasTick={}",
+                pos, scheduled);
+        }
+        if (!scheduled) {
             serverLevel.scheduleTick(pos, tickKey(extra), 2);
         }
     }
@@ -536,6 +549,9 @@ public final class ElementBlocks {
     public static void tick(ServerLevel level, BlockPos pos, BlockState host, int extra) {
         PhaseExtra.Kind kind = PhaseExtra.kind(extra);
         Block key = tickKey(extra);
+        if (DEBUG) {
+            org.liquidphase.LiquidPhase.LOGGER.info("[debug][tick] {} {} gameTime={}", pos, kind, level.getGameTime());
+        }
         switch (kind) {
             case REPEATER -> {
                 if (PhaseExtra.locked(extra)) {
@@ -577,6 +593,9 @@ public final class ElementBlocks {
                 if (powered) {
                     // 脉冲持续 1 redstone tick，再排一次刻复位。
                     level.scheduleTick(pos, key, 2);
+                }
+                if (DEBUG) {
+                    org.liquidphase.LiquidPhase.LOGGER.info("[debug][tick] {} observer -> powered={}", pos, powered);
                 }
             }
             default -> {

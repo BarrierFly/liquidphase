@@ -740,7 +740,8 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
 
 - 代码：`src/main/java/org/liquidphase/client/FenceRedstoneRenderTest.java`（`fabric-client-gametest`
   入口，由 `build.gradle.kts` 的 `extra_gametest_entrypoint` 只对 1.21.11 注入 `fabric.mod.json`；
-  0.2.2 起同一入口还挂了 `AssemblyInteractionTest`——真实玩家点击链路的组装回归，见 §3.3 的警告）。
+  0.2.2 起同一入口还挂了 `AssemblyInteractionTest`——真实玩家点击链路的组装回归，见 §3.3 的警告；
+  0.2.8 起再挂 `ElementTimingTest`——元件时序与原版独立方块逐 tick 对照，见本节末尾）。
 - run config：`build.gradle.kts` 的 `loom.runs.create("clientGameTest")`，运行目录
   **`versions/1.21.11/run-clientgametest/`**（刻意与 `run/` 分开：新目录里没有 `resourcepacks/`，
   等于"无资源包"的干净客户端）。日志与截图都在该目录下，已加进 `.gitignore`。
@@ -775,6 +776,23 @@ setPlacedBy →` 音效/统计/扣物品；朝向、半砖、连接态、含水�
   整块状态只有一个图层，这条断言必失败。
 - 每次会落截图到 `screenshots/`：栅栏斜视/近垂直俯视/0 档对比，以及元件斜视/俯视、
   侦测器东侧五官/西侧输出口、下半楼梯逐像素落差。
+- 场景五（0.2.8，元件时序）：`ElementTimingTest` 把"元件相（下半砖/下半楼梯宿主）"与
+  "同一元件作为**原版独立方块**（放石头）"放进几何对应的两个电路，**逐 tick 采样输出并
+  要求波形完全一致**。19 组：观察者（单脉冲、A→B 接力、反馈时钟、观察中继器/比较器/红石相、
+  随机模糊 80 tick）、中继器（延迟 1/4、短脉冲、双段链、随机输入模糊）、比较器（容器变化、
+  减法模式、连续增量）。对照组设置完先核对"确实还是原版方块"，并断言每个场景至少出现过
+  一次脉冲——否则「两边都恒 0」会被误判成通过。
+  > ⚠️ **对照组不能先垫下半砖再写真实元件方块**：那会被 `<PhaseAbsorption>` 的
+  > "元件方块作相材料格"吸收成"宿主 + 旁路条目"，原版侧永远读不到 `POWERED`。
+  > 本回归第一版在 relay / clock / sees-repeater / sees-comparator 四处都踩了，
+  > 表现为"波形恒 0 却通过"或"只在个别场景失败"。
+  >
+  > ⚠️ 另两处**场景本身写错**同样会得到恒 0 波形：观察者时钟两个朝向必须**互相看着对方**
+  > （B 在 A 南侧时 A=FACING SOUTH、B=FACING NORTH）；中继器 `FACING` 是**输入面**，
+  > 电源要放在 `facing` 那一侧。
+  >
+  > 诊断开关：`./gradlew :1.21.11:runClientGameTest -PdebugElements=true` 打开元件刻/
+  > 形状更新的逐行日志（`ElementBlocks.DEBUG`）。
 
 > ⚠️ 只在 **1.21.11** 接线：`BakedQuad.position(int)` 是这一版才有的 API（1.21.10 的顶点还打包在
 > `int[] vertices` 里），其余版本的渲染覆盖仍靠服务端自检 + `tools/verify_jars.py`。

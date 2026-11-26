@@ -51,6 +51,10 @@ tasks.named<ProcessResources>("processResources") {
     inputs.property("fabricLoaderMin", project.findProperty("fabric_loader_min") ?: project.property("fabric_loader_version"))
     inputs.property("statementEra", statementEra)
     inputs.property("unobfuscatedEra", unobfuscatedEra)
+    // gametest 入口列表同样参与生成：0.2.8 加 ElementTimingTest 时踩过一次——
+    // 只改脚本不声明输入，processResources 判 UP-TO-DATE，新入口没进 fabric.mod.json，
+    // 表现为"构建成功但新测试根本没跑"。
+    inputs.property("gametestEntrypoints", mcVersion == "1.21.11")
     filteringCharset = "UTF-8"
     // 只做占位符替换。不要用 Gradle expand：它会把 JSON 字符串里的 \n 解释成真实换行，
     // 造成源文件合法、最终 JAR 里的 fabric.mod.json 却损坏。
@@ -76,7 +80,8 @@ tasks.named<ProcessResources>("processResources") {
     // 它用到的 BakedQuad.position 是 1.21.11 才有的 API（1.21.10 顶点还打包在 int[] 里）。
     val gametestEntrypoint = if (mcVersion == "1.21.11") {
         (",\"fabric-client-gametest\": [\"org.liquidphase.client.FenceRedstoneRenderTest\","
-            + " \"org.liquidphase.client.AssemblyInteractionTest\"]")
+            + " \"org.liquidphase.client.AssemblyInteractionTest\","
+            + " \"org.liquidphase.client.ElementTimingTest\"]")
     } else {
         ""
     }
@@ -184,6 +189,11 @@ loom {
             runDir = "run-clientgametest"
             property("fabric.client.gametest", "true")
             property("fabric.client.gametest.disableNetworkSynchronizer", "true")
+            // 诊断开关：`./gradlew :1.21.11:runClientGameTest -PdebugElements=true` 时会打开
+            // 元件刻/形状更新的逐行日志（排查时序问题用，默认关闭）。
+            if (project.hasProperty("debugElements")) {
+                property("liquidphase.debug.elements", "true")
+            }
         }
     }
 }
