@@ -2,28 +2,13 @@
 
 **中文** | [English](#english)
 
+中文部分约 4660 字，英文部分约 2271 词，各需要 10~15 分钟阅读。LICENSE 71 词，阅读需 1 分钟以内。
+
 让"可含水方块"（楼梯、台阶、墙、栅栏、告示牌、箱子、树叶、蜡、锁链……）能额外持有一个**填充相**：
 熔岩、黑曜石、冰、霜冰，以及在宿主表面工作的红石线 / 中继器 / 比较器 / 侦测器。
 一格 = 固相（方块本身）+ 至多一个被含相。
 
 支持 **Fabric** 1.19.4 / 1.20.1 / 1.21.1 / 1.21.10 / 1.21.11 / 26.3。
-
-| 版本 | Minecraft | 说明 |
-| --- | --- | --- |
-| 0.2.0 | 1.19.4 / 1.20.1 / 1.21.1 / 1.21.10 / 1.21.11 / 26.3 | 方案 C：`filling` 只保留 8 个材料类别，红石功率与元件参数进旁路表；**旧存档不兼容**（属性取值域变更） |
-| 0.2.1 | 同上 | 修复：红石相/元件相"有时显示有时不显示"——旁路表变化后客户端 section 未重画（`markDirty` 走了 `setBlockDirty` 的 `requiresRender` 门，同状态对象恒 false，静默 no-op） |
-| 0.2.2 | 同上 | 修复：**潜行右键宿主放中继器/比较器/侦测器从未生效**——装配取宿主用了 `getClickedPos()`，而原版对不可替换方块把它指向宿主旁的空气格（真实点击回归 `AssemblyInteractionTest` 抓到） |
-| 0.2.3 | 同上 | **元件装配改为普通右键**（潜行右键回归原版"放在宿主上面一格"）；**真实元件方块是相材料格**（宿主放进/写进/落进元件方块格 → 吸收成元件相并继承朝向/延迟/模式/锁定/供电）；**清含水**：往含水宿主写红石/元件条目时水被清掉（一格只表达一个被含相）；**装配门控合一**：元件与红石相共用同一条可写入判定（熔岩相宿主可以贴元件），写条目清熔岩相；**吸收统一**：宿主放进任何相材料格（线/冰/霜冰/黑曜石/熔岩源）都走"可替换 + placeBlock 捕获"一条路径（删 `PlacementMixin` 与落点拦截）；**活塞**：黑曜石填充相一律推不动，相一律不随活塞移动——推动覆盖/破坏列表摧毁时弹出物品（固相掉对应物品、冰/霜冰无物品即消失、熔岩相按液体物品开关掉熔岩物品或消失、红石相掉红石粉、元件掉物品），粘性拉动/剩余清格时任意填充相实体化留在原位 |
-| 0.2.4 | 同上 | **元件按规划重做渲染与 I/O**：中继器/比较器只渲染杆和红条（逐 1/16 像素列搭在宿主顶面，无 2px 底板/锁存条）；侦测器只渲染 16×16 五官/输出口（六朝向预烘焙、固定在方块内、画在宿主相应表面外侧一层）；输入/输出/比较器侧向输入/中继器锁存/侦测器观察面都按宿主相应面是否露出判定；红石线可连到元件宿主；中继器短脉冲按原版 tick 语义；侦测器允许上下朝向 |
-| 0.2.5 | 同上 | **坐标换算修正**：元件逐列抬升取宿主顶面高度时，`VoxelShape.max(axis, a, b)` 的坐标参数实际是 (z, x)，此前按 (x, z) 传，导致 x/z 不对称宿主（栅栏柱、台阶、楼梯、墙）上的杆/红条错位；**两相透明度分开**：材料相覆盖层改由动态模型发射，每个 quad 各自选图层（冰/霜冰→TRANSLUCENT、黑曜石→CUTOUT），不再一刀切整块状态，半透明冰不再被画成死白、玻璃宿主上的黑曜石不再被拖进排序层；**右键调档**：宿主没有使用键交互时，右键可调所含中继器延迟（1→2→3→4→1）/比较器模式（比较↔减法）；**充水冲落**：水把可冲落的填充相（红石相/元件，判定为实时类型判断）冲落成对应物品后正常充水 |
-| 0.2.6 | 同上 | **相材料格判定收敛为一份**（`PhaseAbsorption.cellOf` / `canAbsorbCell` / `absorbCell`）：以前"红石线 / 材料相 / 真实元件方块"三分支在交互层、改写层、下落方块、接受层各写一遍，加一种填充要改四处，元件（0.2.3 后加）只被逐点打补丁——这是"冰/黑曜石好了、中继器·比较器·侦测器组装仍不全"的根因；现在四条路径全部委托同一份判定，新增种类只需改一处。**元件装配补齐两处不对称**：①不再要求有玩家（发射器/命令/其它 mod 放下元件物品时也能装配，潜行无从判断时按普通右键处理）；②也认落点格（点旁边的方块让元件"落进"宿主格，与材料吸收同构）。回归：自检新增 `checkAssemblyPathConsistency` |
-| 0.2.7 | 同上 | **元件相与原版独立方块的行为一致性修复**（逐项落地 `docs/element-consistency-audit.md` §13 的裁定）：①**A** 旁路表写入按原版一次 `setBlock` 的三条通道统一通知（`PhaseNotifications`）；比较器相接上容器变化的反向桥接；观察者相能观测红石相/元件相的只写表变化；并排二极管立即重算锁存；装配/拆除后红石线连接态刷新。②**B** 元件计划刻改用**原版元件方块**当 tick key（`ServerLevel.tickBlock` 注入执行），与宿主 tick 彻底分槽。③**C** 吸收真实元件块**原样继承**（含比较器方块实体的 `OutputSignal`），不补初始结算/不额外排刻。④**D** 补 `shouldPrioritize` 与 `HIGH/VERY_HIGH/EXTREMELY_HIGH` 优先级。⑤**E** 比较器宿主任意非空面都连；红石相可以"向上爬"（元件不爬，原版即如此）。⑥**F** 元件格禁止刷怪、铁轨朝向按信号源判定。⑦**G** 拆元件按瞄准（侦测器整格优先、中继器/比较器命中朝上的面）、按元件自身硬度、创造不掉。⑧**H/I/J/K/L** 不改放置规则、不加碰撞、补点亮中继器粒子、所有破坏来源都掉元件、比较器模拟量纳入 I/O 露出门控、客户端不写元件状态 |
-| 0.2.7 | 同上 | **元件时序对照回归**（`ElementTimingTest`，1.21.11 客户端 GameTest）：把"元件相"和"同一元件作为原版独立方块"放进两个几何对应的电路，**逐 tick 采样输出波形并要求完全一致**。覆盖观察者（单脉冲、接力、反馈时钟、观察中继器/比较器/红石相/**真实原版红石线**、竖直朝上、**六朝向中的 5 个**、随机模糊 80 tick、**1 tick 脉冲的 2/3/4/5 tick 周期列车**、脉冲期内再触发、**宿主自己排刻**、**驱动原版灯/原版中继器/原版红石线**、**元件相→原版观察者** 与 **原版中继器→原版观察者** 混合链、**比较器数值变化不该触发观察者**、**中继器 `locked` 翻转应当触发观察者**）、中继器（1/4 档延迟、短脉冲、双段链、随机输入模糊）、比较器（容器容量变化、减法模式、连续增量）。**32 组场景 / 32 条波形全部与原版一致**；整个时序测试在服务端**一次调用内**跑完，耗时不到 1 秒 |
-
-> **元件相与原版独立方块的差异**（0.2.6 审计 → **0.2.7 已修**）：审计列出的 A–L 各条已在 0.2.7
-> 按"把元件当成原版独立方块"的口径逐项修完（见上表 0.2.7 行）。
-> 完整清单、根因与修法见 [`docs/element-consistency-audit.md`](docs/element-consistency-audit.md)。
-> 仍保留的差异只有几处**结构上不可达或有意的取舍**，集中在"已知限制"第 14 条。
 
 ---
 
@@ -37,15 +22,15 @@
   
   > 台阶/蜡烛/营火/干化恶魂等自己覆写了 `placeLiquid` 的宿主由专门 mixin 接管熔岩分支：
   > 熔岩桶右键、相邻熔岩按形状灌入、放置吸收都可用。见 `docs/host-coverage-audit.md` §4.3。
-- **充水冲落**（0.2.5）：水会冲掉宿主里的**可冲落填充相**——红石相掉红石粉、元件掉对应元件物品
+- **充水冲落**：水会冲掉宿主里的**可冲落填充相**——红石相掉红石粉、元件掉对应元件物品
   ——然后照常含水，对齐原版"水冲掉红石粉/红石火把"。是否可冲落是按条目种类**实时判断**的
   （`PhaseExtra.isWashable`），以后新增可冲落种类不用改水的判定。材料相（冰/霜冰/黑曜石/熔岩）
   不受影响：仍按"水不能直接替换材料相"的既有规则处理。
-- **右键调档**（0.2.5）：宿主自己没有使用键交互时，右键它就能调所含元件档位——
+- **右键调档**：宿主自己没有使用键交互时，右键它就能调所含元件档位——
   中继器延迟 1→2→3→4→1、比较器在比较/减法之间切换。宿主自带使用键交互的（箱子、告示牌、
   活板门、光源方块……）保持原版行为；手持方块右键仍是放置、手持元件右键仍是装配。
   **潜行右键**不受影响。
-- **凝固**：含熔岩方块旁边出现水 → 相变为**含黑曜石**，伴随嘶声粒子。
+- **凝固**：含熔岩方块旁边出现水 → 含熔岩变为**含黑曜石**，伴随嘶声粒子。
 - **含冰 / 含霜冰**：雨天低温下"含水的方块"会冻结成含冰相（原版只会冻水源方块，本 mod 把判定扩展到宿主）；
   冰相在光照足够时融化回水相；下界/水蒸发维度融化时直接消失。
   霜冰相按原版 AGE 0–3 的裂纹推进与相邻融化规则演化（`frosted_0`…`frosted_3`）。
@@ -56,29 +41,17 @@
   > `small_dripleaf`、26.3 的 `sulfur_spike`）例外：破坏时**不留下相**。
 - **收走相**：功能三开启时空桶左键；关闭时空桶右键。固体相（冰/霜冰/黑曜石）不响应右键收取。
 - **放置吸收**：拿冰/黑曜石物品指向可含水方块 → 写入该格；把可含水方块放进冰/黑曜石/熔岩源所在的格子 → 吸收该相。
-- **碰撞**：固相（冰/黑曜石）的组合碰撞 = **宿主碰撞 ∪ 整格实心**——栅栏/墙这类碰撞柱
-  延伸到方块外（高 1.5 格）的宿主，方块外的部分照常保留（0.1.21 及以前被整格覆盖丢失）；
-  熔岩相不额外加碰撞（内部是流体）；红石相不加碰撞。
-  对所有宿主一致（状态级注入），包括自己覆写碰撞形状的栅栏/玻璃板/铁栏杆、墙、
-  墙悬挂告示牌、脚手架、`sculk_shrieker`、`big_dripleaf`。
+- **碰撞**：宿主相和填充相独立生效；红石相不加碰撞。
 - **直接挖相**：准星指向相露出的部分时，挖掘速度与掉落按相材质计算（黑曜石需钻石镐；冰/霜冰不精准采集则化水，霜冰无物品）。
 - **所有宿主的相都是"内缩叠加层"**：宿主模型始终照常渲染，相材质是一层比方块小 0.25px 的立方体。
-  覆盖层由动态模型按状态发射，**每个面各自选渲染图层**（0.2.5）：冰/霜冰走半透明层、
-  黑曜石走 cutout 层，所以"一相有透明度、一相不透明"能同时正确显示。
-- **红石相 / 元件相**：红石相在宿主表面显示一层按功率着色的红石外壳；**普通右键**宿主
-  （不再需要潜行；潜行右键保留原版"放在宿主上面一格"），手持中继器 / 比较器 / 侦测器
-  可把元件贴到宿主表面。真实元件方块本身也是"相材料格"：把宿主放进元件所在格、
-  setBlock 把元件写进宿主格、下落宿主落进元件格，都会吸收成元件相并继承该方块的
-  朝向/延迟/模式/锁定/供电。两者都不占用 `filling` 取值，
-  参数存在旁路表里（见下文"方案 C"）。写条目时宿主上的水/熔岩相被清掉（清含水，一格只表达
-  一个被含相）；元件与红石粉共用同一条可写入判定（含熔岩相的宿主也可以贴元件；
-  冰/霜冰/黑曜石相不可覆盖）。
-  **渲染按规划收窄**：中继器/比较器只显示杆（红石火把，含点亮光晕）和红条，按
-  1/16 像素列逐列搭在宿主顶面（台阶上会有逐像素落差，不再画 2px 平滑石底板/锁存条）；
-  侦测器只显示 16×16 的"五官"和"输出口"两块裁切平面（六朝向预烘焙、固定在方块内、
-  画在宿主相应表面外侧一层），不显示侧面/顶面/底面。
-  **输入/输出按宿主相应面露出判定**：中继器/比较器的输入/输出、比较器的侧向输入、
-  中继器的锁存、侦测器的观察面/输出面都受宿主对应面控制；红石线也能连接到元件宿主
+  覆盖层由动态模型按状态发射，每个面各自选渲染图层：冰/霜冰走半透明层、
+  黑曜石走 cutout 层。
+- **渲染**：中继器/比较器只显示杆（红石火把，含点亮光晕）和红条，按
+  1/16 像素列逐列搭在宿主顶面（台阶上会有逐像素落差），不再画 2px 平滑石底板/锁存条；
+  侦测器只显示"脸部"和输出口两块裁切平面（六朝向预烘焙、固定在方块内、
+  画在宿主相应表面外侧一层），不显示任何完整表面。
+  **输入/输出按宿主相应面露出判定**：红石/中继器/比较器的输入/输出、中继器/比较器的侧向输入、
+  比较器的容量检测、侦测器的观察面/输出面都会被宿主相相应方向的完整表面拦截；红石线也能连接到元件宿主
   （中继器/比较器的输入与输出面、侦测器的输出面）。
 
 ### 功能二：炼药锅（仅服务端，原版方块可表达的部分）
@@ -144,41 +117,11 @@
 
 ---
 
-## 方案 C（0.2.0）
-
-`filling` 只保留 8 个**材料类别**：`none`、`lava`、`obsidian`、`ice`、`frosted_0..3`。
-红石功率（0–15）与元件相的全部参数（kind/power/facing/delay/mode/locked/powered）
-压在每格一条旁路表记录的 `PhaseExtra` 里，不新增方块、不新增属性，宿主方块本身不变。
-
-- **存储**：每个 `Level` 一张按区块分组的稀疏表（`chunkPos -> (BlockPos -> int)`），
-  内层表不可变、渲染线程无锁读；服务端持久化到 `world/data/liquidphase_<dimension>.dat`
-  （NBT，30 s 自动保存 + 关服保存），客户端由网络包镜像。
-- **同步**：客户端在区块加载 / 握手 / 更换 `Level` 时发 `extra_request`，服务端回
-  `extra_chunk`（合并语义）；服务端每次写表把 `extra_update` 发给该维度**全部**玩家，
-  避免"开始追踪前写入丢失"。客户端应用数据后把所在 section（含邻居）标脏重画——
-  旁路表变化不伴随方块状态变化，必须绕过 `setBlockDirty` 的 `requiresRender` 门
-  （同状态对象直接返回 false），直接走 `setSectionDirtyWithNeighbors`。
-- **红石线连接**：`isSignalSource()` 没有坐标，不再对红石相返回 true；红石线改在
-  `getConnectingSide`（26.3 是 `shouldRedstoneWireConnectTo`）按坐标判断"该格有红石/
-  元件条目、该面露出且元件允许在该面连接"（中继器/比较器输入+输出面，侦测器输出面）。
-- **渲染**：每个宿主 blockstate 只追加一条**无条件** part `liquidphase:block/dynamic`。
-  ≤1.21.1 由 `PhaseDynamicModelLegacy` 接管该模型 id，1.21.10+ 由
-  `PhaseDynamicModelModern` 包装宿主 `BlockStateModel`；两者都按坐标查旁路表发射几何。
-  红石外壳 16 份子模型保留；元件子模型由 `tools/gen_element_models.py` 从客户端 jar 生成
-  （16 中继器 + 4 比较器 + 12 侦测器 + `dynamic.json`，另有 7 份裁切贴图）。
-- **元件**：中继器/比较器子模型只含杆与红条（1/16 像素列切分，运行时按列取宿主顶面高度
-  整面平移）；侦测器六朝向预烘焙、只含五官/输出口两块 16×16 裁切平面，固定在方块内、
-  画在宿主相应表面外侧 0.01，不做抬升。
-
-完整口径、位布局、信号语义与取舍见 [`docs/plan-c-elements.md`](docs/plan-c-elements.md)。
-
----
-
 ## 兼容性注意
 
 - **移除本 mod 会丢失所有填充相**（含熔岩/冰/黑曜石/红石相）与旁路表里的元件；
   `world/data/liquidphase_<dimension>.dat` 也不会再被读取。
-- 本 mod 独占"填充相"语义，**不兼容 Fluidlogged 这类通用 fluidlogged mod 互通**。
+- 本 mod 独占"填充相"语义，**不兼容 Fluidlogged 这类通用 fluidlogged mod **。
 - **与第三方资源包自动兼容**：资源包覆盖宿主 blockstate
   （`assets/minecraft/blockstates/<宿主>.json`——栅栏/树叶/告示牌类包很常见）时，
   客户端会把相部件**合并进包的定义**，包只生效于宿主 part、相照常显示，
@@ -238,7 +181,7 @@
 1. **旧存档不兼容**：`filling` 的取值域已变更（8 个材料类别），旧状态无法映射。
 2. **元件只能放在有顶面空腔的宿主**：下半砖/下半楼梯等可以（足迹内存在 `top < 1` 的列），
    整格方块、上半砖拒绝。
-3. **相一律不随活塞移动（0.2.3）**：黑曜石填充相一律推不动；其余填充相被推/拉走时
+3. **填充相一律不随活塞移动**：黑曜石填充相一律推不动；其余填充相被推/拉走时
    留在原格（被覆盖/摧毁 → 弹出物品；被清空 → 实体化留原位），红石/元件条目同样不随动
    （覆盖/摧毁弹出物品，拉动清格时红石相留对应功率红石线、元件掉物品）。
 4. **中继器 `locked` 只做逻辑锁定**，不显示原版的锁形。
@@ -251,9 +194,7 @@
 7. **Sodium/光影**：渲染走 Fabric Rendering API（Indigo），未承诺 Sodium 兼容。
 8. **`getRenderShape` 对全部相宿主状态强制 `MODEL`**：红石/元件存在性在状态里看不出来。
    隐形宿主（barrier/light/告示牌）的 blockstate 模型本身没有 `elements`，不会凭空多出几何。
-9. 红石相没有弱充能方块能力。**破坏宿主时元件按原版口径掉落**（0.2.7）：玩家拆除、爆炸、
-   宿主被其它方块替换、活塞、冲水都会掉对应元件物品；只有创造模式（以及侦测器没有正确工具时）
-   不掉。
+9. 红石相没有弱充能方块能力。
 10. **中继器/比较器只渲染杆与红条**：原版的 2px 平滑石底板、锁存条都不画。杆/红条按
     1/16 像素列各自贴在宿主顶面；在楼梯上，高半格那一侧的杆会随顶面升到方块顶面之上
     （这就是"每像素搭在相应最高处"的直接结果）。
@@ -262,25 +203,15 @@
     与宿主露出的侧脸重叠（被遮住的部分本来就不可见）。
 12. **元件 I/O 的"露出"是整面判定**：`Block.isFaceFull` 为 false 即视为露出（与红石相
     同一口径）；部分被宿主覆盖的面仍可作为输入/输出面。
-13. **右键调档只对"没有使用键交互"的宿主生效**：箱子/告示牌/活板门/光源方块等自带交互的
-    宿主右键仍是原版行为（要给这些宿主调档，请先拆下元件再装回去）。
-    调档只作用于中继器和比较器；侦测器没有可调参数。
-14. **元件相与原版独立方块的行为差异（0.2.7 已按审计裁定修完，只剩下列结构性不可达项）**，
-    详见 `docs/element-consistency-audit.md`：
+14. **元件相与原版独立方块的行为差异（详见 `docs/element-consistency-audit.md`）：
     - **元件宿主格的 `isSignalSource()` 仍是 false**：无坐标的状态级判定做不到按格等价。
       两个原版调用点已按坐标补齐（元件格**禁止刷怪**——半砖上的元件会让整格禁止刷怪，
       与原版元件所在格一致；铁轨朝向按"恰好 3 个潜在连接 + 旁边是元件宿主"更新）；
       **任意第三方 mod 直接调 `isSignalSource()`** 的那条做不到，仍需视为差异。
     - **侦测器不提供碰撞**（原版是整格碰撞），这是"元件贴在宿主表面"表示法的有意取舍；
       中继器/比较器同样不加碰撞。
-    - **放置边界不变**（0.2.7 按你的口径不动 H）：没有新增拒绝、没有覆盖率阈值，
-      "80 个碰撞为空宿主也能装配""细柱宿主上杆/红条被拆成两截（无表面列落 0）"仍然存在。
     - **元件仍然只能放在有顶面空腔的宿主**（下半砖/下半楼梯等；整格方块/上半砖拒绝）。
     - **中继器 `locked` 只做逻辑锁定**，不显示原版锁形（见第 4 条）。
-    - **朝下的侦测器能触发，而原版朝下侦测器不能**：原版朝下侦测器观察的正是自己脚下的支撑方块，
-      而 `ObserverBlock.canSurvive` 要求那一格必须存在（RIGID），所以原版永远无法起振；元件相朝下
-      观察的是宿主底面下方那格（无需存在），因此能触发。这是"元件贴在宿主表面"表示法的结果，
-      不是 I/O 时序差异；六朝向时序对照因此把它排除在外。
 
 ## English
 
@@ -289,18 +220,6 @@ lava, obsidian, ice, frosted ice, and redstone wire / repeaters / comparators / 
 One block = solid phase (the block itself) + at most one contained phase.
 
 **Supported:** Fabric 1.19.4 / 1.20.1 / 1.21.1 / 1.21.10 / 1.21.11 / 26.3.
-
-| Version | Minecraft | Notes |
-| --- | --- | --- |
-| 0.2.0 | 1.19.4 / 1.20.1 / 1.21.1 / 1.21.10 / 1.21.11 / 26.3 | Plan C: `filling` keeps only 8 material classes; redstone power and element parameters live in the side table; **old worlds are incompatible** (property value domain changed) |
-| 0.2.1 | same | Fix: redstone/element phase sometimes invisible — a table-only change never re-rendered its section (`markDirty` went through `setBlockDirty`'s `requiresRender` gate, which returns false for an identical state object) |
-| 0.2.2 | same | Fix: **sneak-placing repeaters/comparators/observers into hosts never fired** — assembly looked the host up via `getClickedPos()`, which vanilla points at the air cell next to a non-replaceable host (caught by the new real-click regression `AssemblyInteractionTest`) |
-| 0.2.3 | same | **Element assembly is now a plain right-click** (sneak-click restores vanilla "place on top of the host"); **real element blocks are phase-material cells** (host placed into / setBlock'd into / falling into a repeater-comparator-observer cell absorbs it with facing/delay/mode/locked/powered); **water clearing**: writing a redstone/element entry onto a waterlogged host removes the water (one contained phase per cell); **unified assembly gate**: elements share the same acceptability check as dust (lava-filled hosts accept elements), writing an entry clears a lava phase; **unified absorption**: placing a host into any phase-material cell (wire/ice/frosted ice/obsidian/lava source) goes through one replaceable-cell + placeBlock-capture path (`PlacementMixin` and the place-time intercept removed); **pistons**: obsidian-filled hosts are always unpushable, phases never travel with pistons — pushed-over/destroyed cells pop the phase as an item (obsidian drops obsidian, ice/frosted ice vanish, lava drops its liquid item with feature 3 on or vanishes, redstone pops dust, elements drop their item), sticky-pull/clearing materializes any filling in place |
-| 0.2.4 | same | **Elements re-done per the spec (rendering + I/O)**: repeaters/comparators draw only rods and the red bar (per 1/16-pixel column on the host top; no 2px base or lock bar); observers draw only the 16×16 face/port cutouts (six facings pre-baked, fixed in the block, drawn on the outer layer of the host surface); input/output, comparator side inputs, repeater locking and the observer detection face are gated by host-face exposure; redstone wire connects to element hosts; repeater short pulses follow vanilla tick semantics; observers allow up/down facings |
-| 0.2.5 | same | **Coordinate fix**: lifting rods/bars onto the host surface sampled `VoxelShape.max(axis, a, b)` with `(x, z)`, but its two coordinates are actually `(z, x)`, so on x/z-asymmetric hosts (fence posts, slabs, stairs, walls) the element geometry was misplaced; **per-phase transparency**: the material-phase overlay is now emitted by the dynamic model, each quad picking its own layer (ice/frosted ice → TRANSLUCENT, obsidian → CUTOUT) instead of one layer for the whole state, so translucent ice is no longer drawn opaque-white and obsidian on a translucent host is no longer dragged into the sorted layer; **right-click tuning**: hosts without their own use-key interaction cycle the contained repeater's delay (1→2→3→4→1) or the comparator's mode (compare↔subtract) on right-click; **water flushing**: water flushes a washable filling (redstone/element, judged live by entry kind) into its item and then waterlogs normally |
-| 0.2.6 | same | **One single source of truth for phase-material cells** (`PhaseAbsorption.cellOf` / `canAbsorbCell` / `absorbCell`): the old "wire / material / real element block" three-way branch was duplicated in the interaction layer, the rewrite layer, the falling-block path and the acceptance layer, so adding a filling kind meant editing four places — and elements (added in 0.2.3) had only been patched per call site. That is the root cause of "ice/obsidian work but repeater/comparator/observer assembly is still incomplete". All four paths now delegate to the same predicate, so a new kind only needs one edit. **Two element-assembly gaps closed**: (a) it no longer requires a player (dispensers, commands and other mods placing element items now assemble too; with no player to detect sneaking it behaves like a plain right-click), and (b) it also honours the *landing* cell (clicking a neighbouring block so the element lands in the host cell, matching material absorption). Regression: new selftest `checkAssemblyPathConsistency` |
-| 0.2.7 | same | **Element phases now behave like vanilla element blocks** (the audit's §13 rulings, implemented): (A) side-table writes notify through the same three channels as one vanilla `setBlock` (`PhaseNotifications`); a bridge feeds container changes to neighbouring comparator elements; observers see redstone/element table-only changes; side-by-side diodes recompute `locked` immediately; wires refresh their connections on assembly/removal. (B) Element scheduled ticks use **the vanilla element block** as tick key (executed from a `ServerLevel.tickBlock` injection), fully separating them from host ticks. (C) Absorbing a real element block **inherits its state verbatim** (including the comparator's block-entity `OutputSignal`), no boot-time re-settlement and no extra scheduling. (D) `shouldPrioritize` and `HIGH/VERY_HIGH/EXTREMELY_HIGH` priorities. (E) Comparator hosts connect on any non-null face; redstone phases can be climbed up to (elements cannot, matching vanilla). (F) Element cells block natural spawns and drive rail direction. (G) Mining respects aiming (observers whole-cell and always first; repeaters/comparators hit any upward face), element hardness, and creative-mode no-drops. (H/I/J/K/L) Placement rules untouched, no collision, lit repeaters emit particles, every destruction source drops the element, comparator analog input respects the I/O exposure gate, and the client never writes element state |
-| 0.2.7 | same | **Element tick-timing regression** (`ElementTimingTest`, 1.21.11 client gametest): puts an element phase and the same element as a vanilla block into two geometrically matching circuits and samples their output **every tick**, requiring identical waveforms. Covers observers (single pulse, relay, feedback clock, observing a repeater/comparator/redstone phase/real redstone wire, vertical facing, five of six facings, 80-tick random fuzz, 1-tick pulse trains at periods 2/3/4/5, re-triggering inside the pulse, a host that schedules its own tick, driving a vanilla lamp / repeater / wire, element-to-vanilla-observer and vanilla-repeater-to-vanilla-observer mixed chains, comparator value changes *not* pulsing an observer, repeater `locked` flips *pulsing* one), repeaters (delay 1/4, short pulse, two-stage chain, random input fuzz) and comparators (container fill, subtract mode, incremental fill). All 32 scenes / 32 waveforms match vanilla, and the whole timing suite runs inside a single server call (well under a second) |
 
 ### Feature 1 — more logged blocks (required on both sides)
 
@@ -322,21 +241,11 @@ One block = solid phase (the block itself) + at most one contained phase.
   keep the part outside the block; lava adds no collision (it is a fluid) and the redstone phase adds none either.
 - **Mining the phase directly**: when the crosshair points at an exposed phase, mining speed and drops follow the phase material
   (obsidian needs a diamond pickaxe; ice melts to water without silk touch; frosted ice has no item).
-- **Redstone / elements**: the redstone phase draws a power-tinted redstone shell on the host surface; **plain right-click**
-  the host with a repeater / comparator / observer to attach the element to the host (sneak right-click keeps the vanilla
-  placement above the host). Clicking a **neighbouring** block so the element lands in the host cell works as well (the same
-  gesture ice/obsidian/dust already had), and dispensers / commands / other mods placing an element item also assemble —
-  no player is required. Real element blocks are phase-material cells too: placing a host into a repeater/comparator/
-  observer tile, a setBlock into the host cell, or a falling host landing there absorbs the element with its
-  facing/delay/mode/locked/powered. Neither occupies a `filling`
-  value; their parameters live in the side table (see "Plan C"). Writing an entry clears the host's water/lava phase
-  (water clearing, one contained phase per cell); elements share the same acceptability check as dust (lava-filled
-  hosts accept elements; ice/frosted ice/obsidian phases cannot be overwritten).
-  **Water flushing (0.2.5)**: water flushes a **washable** filling — the redstone phase drops redstone dust and an element
+  **Water flushing**: water flushes a **washable** filling — the redstone phase drops redstone dust and an element
   drops its item — and then waterlogs the cell, matching vanilla "water washes away dust/torches". Washability is judged
   **live by entry kind** (`PhaseExtra.isWashable`), so future washable kinds need no change here. Material fillings
   (ice/frosted ice/obsidian/lava) are unaffected.
-  **Right-click tuning (0.2.5)**: when the host has no use-key interaction of its own, right-clicking it cycles the
+  **Right-click tuning**: when the host has no use-key interaction of its own, right-clicking it cycles the
   contained repeater's delay (1→2→3→4→1) or the comparator's mode (compare↔subtract). Hosts that consume the click
   (chests, signs, trapdoors, light blocks…) keep vanilla behaviour; a block in hand still places and an element in hand
   still assembles. Sneak right-click is unaffected.
@@ -381,34 +290,6 @@ crosshair while holding an empty bucket. Creative mode keeps bucket-only mining 
 Turn the two-sided features off for vanilla clients via `config/liquidphase.json` (`phaseEnabled`, `liquidInteraction` = `false`).
 Existing phases in old worlds are then **lost permanently** (vanilla drops unknown states).
 
-### Plan C (0.2.0)
-
-`filling` keeps only eight **material classes**: `none`, `lava`, `obsidian`, `ice`, `frosted_0..3`.
-Redstone power (0–15) and every element parameter (kind/power/facing/delay/mode/locked/powered) live in one
-side-table entry per position (`PhaseExtra`); no new blocks, no new properties, and the host block itself is unchanged.
-
-- **Storage**: one sparse, chunk-grouped table per `Level` (`chunkPos -> (BlockPos -> int)`); inner tables are
-  immutable and read lock-free by the render thread. The server persists it to
-  `world/data/liquidphase_<dimension>.dat` (NBT, 30 s autosave + save on shutdown); the client mirrors it from packets.
-- **Sync**: the client sends `extra_request` on chunk load / handshake / `Level` change and the server answers
-  `extra_chunk` (merge semantics); every server-side table write broadcasts `extra_update` to **all** players in
-  that dimension, so writes made before tracking starts are not lost.
-- **Wire connection**: `isSignalSource()` has no position, so it no longer returns true for the redstone phase;
-  wire connection is decided per position in `getConnectingSide` (26.3: `shouldRedstoneWireConnectTo`):
-  "this cell has a redstone/element entry, that face is exposed, and the element allows a connection there"
-  (both faces of a repeater/comparator, the output face of an observer).
-- **Rendering**: every host blockstate gets one **unconditional** part, `liquidphase:block/dynamic`.
-  On ≤1.21.1 `PhaseDynamicModelLegacy` takes over that model id; on 1.21.10+ `PhaseDynamicModelModern` wraps the
-  host `BlockStateModel`; both emit geometry by looking up the side table at the position. The 16 redstone-shell
-  sub-models are kept; element sub-models are generated from the client jar by `tools/gen_element_models.py`
-  (16 repeaters + 4 comparators + 12 observers + `dynamic.json`, plus 7 cutout textures).
-- **Elements**: repeater/comparator sub-models contain only rods and the red bar (split per 1/16-pixel column, each
-  column rigidly translated to its host-top height). Observer sub-models are pre-baked for six facings and contain
-  only the 16×16 face/port cutout planes, fixed in the block and drawn 0.01 outside the host's corresponding surface
-  (no lift).
-
-Full details: [`docs/plan-c-elements.md`](docs/plan-c-elements.md).
-
 ### Compatibility notes
 
 Removing this mod loses every phase and every side-table element; `world/data/liquidphase_<dimension>.dat` is no
@@ -433,7 +314,7 @@ wire's current power as its initial state — and the block then settles against
 like a freshly placed vanilla wire. Signals decay by 1 into neighbouring wires but stay at full power for lamps,
 pistons and other components.
 Every host keeps rendering its own model while phased; the solid phase is a 0.25px-inset cube of the phase material.
-The solid-phase combined collision (host ∪ full cube) applies to **every** host (state-level, including fences, panes,
+The host-filling combined collision (host ∪ full cube) applies to **every** host (state-level, including fences, panes,
 bars, walls, wall hanging signs and scaffolding that override the block-level shape — the fence/wall collision columns
 that stick out above the block are kept); mining is two-lane: aim at the exposed host and it mines at host speed, aim
 at the exposed phase and it mines as the phase material (obsidian still needs a diamond pickaxe).
@@ -470,12 +351,12 @@ Dependency floors follow each version's real minimum (`fabricloader` 0.15.0 / 0.
 `statement` remain required. Note: loader 0.15.x/0.16.x bundle an old Mixin that cannot read JDK 25 class
 files (`Unsupported class file major version 69`) — use a newer loader or JDK 17/21 in that case.
 
-### Known limitations (0.2.7)
+### Known limitations
 
 1. **Old worlds are incompatible**: the `filling` value domain changed (8 material classes); old states cannot be mapped.
 2. **Elements only fit hosts with top-face cavity**: bottom slabs / bottom stairs work (some column has `top < 1`);
    full blocks and top slabs are refused.
-3. **Phases never travel with pistons (0.2.3)**: obsidian-filled hosts are unpushable; other fillings stay at the
+3. **Phases never travel with pistons**: obsidian-filled hosts are unpushable; other fillings stay at the
    origin cell when the host is pushed/pulled (popped as items when covered/destroyed, materialized in place when
    the origin is cleared), and redstone/element entries likewise (popped as items on the pop paths; on the pull path
    redstone leaves a wire at its power and elements drop their item).
@@ -490,9 +371,7 @@ files (`Unsupported class file major version 69`) — use a newer loader or JDK 
 8. **`getRenderShape` is forced to `MODEL` for every state of every phase host**: redstone/element presence is not visible
    in the state. Invisible hosts (barrier/light/signs) have no `elements` in their blockstate model, so no host geometry
    appears out of nowhere.
-9. The redstone phase has no weak-charging capability. **Breaking the host drops the element the vanilla way** (0.2.7):
-   player mining, explosions, the host being replaced by another block, pistons and water flushing all drop the
-   element item; only creative mode (and an observer broken without the correct tool) drops nothing.
+9. The redstone phase has no weak-charging capability.
 10. **Repeaters/comparators draw only rods and the red bar**: the vanilla 2px smooth-stone base and the lock bar are
     not drawn. Rods/bar are seated per 1/16-pixel column; on stairs the high-step side follows the surface and can
     rise above the block top (a direct consequence of "every pixel rests on its own highest point").
@@ -501,11 +380,7 @@ files (`Unsupported class file major version 69`) — use a newer loader or JDK 
     the planes may overlap the host's exposed side (the covered part is invisible by definition).
 12. **Element I/O exposure is face-level**: `Block.isFaceFull == false` counts as exposed (the same rule as the
     redstone phase); a partially covered face can still act as an input/output face.
-13. **Right-click tuning only applies to hosts without a use-key interaction**: chests/signs/trapdoors/light blocks
-    keep their vanilla click (remove and re-attach the element to retune those). Only repeaters and comparators are
-    tunable; observers have no parameter.
-14. **Element-phase behaviour differences that remain after 0.2.7** (the audit's A–L items were fixed; only these
-    structurally unreachable items remain — see `docs/element-consistency-audit.md`):
+14. **Element-phase behaviour differences that remain after 0.2.7** (see `docs/element-consistency-audit.md`):
     - **`isSignalSource()` on an element host is still false**: it is a position-less state predicate. The two
       vanilla call sites are covered positionally (element cells block natural spawns — an element on a slab blocks
       spawns for the whole cell, exactly like a vanilla element block; rails update their direction when a
@@ -513,16 +388,8 @@ files (`Unsupported class file major version 69`) — use a newer loader or JDK 
       calling `isSignalSource()` directly** still sees a difference.
     - **Observers provide no collision** (vanilla is a full cube) — an intentional trade-off of the
       "element drawn on the host surface" representation; repeaters/comparators add no collision either.
-    - **Placement bounds are unchanged** (H intentionally untouched in 0.2.7): no new rejections, no coverage
-      threshold; the "80 collision-empty hosts still accept elements" and "rods/bars split into two levels on thin
-      hosts (empty columns fall back to 0)" behaviours remain.
     - **Elements still require a top-face cavity** in the host (bottom slabs/stairs yes; full blocks/top slabs no).
     - **Repeater `locked` remains logic-only**, without the vanilla lock-bar visual (item 4).
-    - **A downward-facing observer can be triggered where the vanilla block cannot**: vanilla observers look at the
-      block under themselves, and `ObserverBlock.canSurvive` requires that cell to exist, so a vanilla down-facing
-      observer can never fire. An element observer facing DOWN watches the cell below the host's bottom face (which
-      need not exist) and therefore can. This is a consequence of the "element sits on the host surface"
-      representation, not an I/O timing difference; it is excluded from the six-facing timing regression.
 
 ### Licence
 
